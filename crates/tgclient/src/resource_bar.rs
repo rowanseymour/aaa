@@ -28,6 +28,22 @@ pub enum Previewed {
     Build(tgmap::Id),
 }
 
+/// The same preview: a commission by its template alone, as that's all it
+/// shows.
+impl PartialEq for Previewed {
+    fn eq(&self, other: &Previewed) -> bool {
+        match (self, other) {
+            (Previewed::Commission(at, a), Previewed::Commission(by, b)) => {
+                at == by && a.template == b.template
+            }
+            (Previewed::Research(a), Previewed::Research(b)) => a == b,
+            (Previewed::Unpack(a), Previewed::Unpack(b)) => a == b,
+            (Previewed::Build(a), Previewed::Build(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 /// Whether the preview bar has something to show: a [`Preview`] that
 /// still applies, as [`show`] last found.
 #[derive(Resource, Default)]
@@ -141,10 +157,7 @@ pub fn show(
         let changed =
             !cell.preview || parts != cell_parts(&cell.resource, cell.stockpiled, now.0, &now.1);
         if let Ok(mut visibility) = holders.get_mut(holder.parent()) {
-            visibility.set_if_neq(match changed {
-                true => Visibility::Inherited,
-                false => Visibility::Hidden,
-            });
+            visibility.set_if_neq(crate::ui::visible(changed));
         }
         // Only what's hovered is said.
         if let Some((mut hint, about, hovered)) = hint

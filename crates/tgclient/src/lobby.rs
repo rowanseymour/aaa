@@ -9,12 +9,11 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use tgdata::{Faction, Handicap, Id, Nation, RuleValues};
 use tgmap::{Brief, Player};
-use tgrender::textures;
 
-use crate::actions::GLYPH_DIR;
 use crate::lan::Staged;
 use crate::menu::{MenuPage, open};
 use crate::presets::Preset;
+use crate::ui::GLYPH_DIR;
 use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Shown, Surface, button, called, card, clickable, dropdown,
     inert, label, opener, padded, panel, slug, switch, text,
@@ -416,10 +415,8 @@ fn load_pictures(
         return;
     }
     let random = data.0.random_flag();
-    let mut load = |path: &str| {
-        let bytes = data.0.read(path)?;
-        textures::decode(&bytes, path, formats.0, true).map(|i| images.add(i))
-    };
+    let mut load =
+        |path: &str| crate::ui::read_image(&data.0, path, formats.0).map(|i| images.add(i));
     let nations = (all.0.iter())
         .filter_map(|n| Some((n.id.clone(), load(n.flag.as_deref()?)?)))
         .collect();

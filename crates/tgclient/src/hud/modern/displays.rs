@@ -8,10 +8,10 @@ use bevy::ui_widgets::Button;
 
 use super::minimap;
 use crate::Loaded;
-use crate::actions::Blocks;
 use crate::displays::{Displays, Icons, PANELS, Panel, icon};
 use crate::intent::Asks;
 use crate::keys::Bindings;
+use crate::ui::Blocks;
 use crate::ui::{self, Click, Edge, Hint, Ink, Marked, Surface, Theme};
 
 /// A glyph's size on its button.

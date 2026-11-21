@@ -18,11 +18,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::{ComputedStackIndex, RelativeCursorPosition};
 use bevy::ui_widgets::Activate;
 use tgdata::{GameData, Id};
 use tgmap::Organization;
-use tgrender::textures;
 use tgsim::{Lacking, Researchable};
 
 use crate::control_groups::{self, ControlGroups};
@@ -30,7 +28,7 @@ use crate::intent::{Asked, Intent};
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
 use crate::resource_bar::{Preview, Previewed};
-use crate::ui::{Hint, Marked};
+use crate::ui::{Hint, Marked, glyphs};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 pub const COLUMNS: usize = 4;
@@ -91,33 +89,6 @@ const MENU_CANCEL: usize = 11;
 /// The command whose look the cancel button borrows, as the game gives
 /// none of its own for backing out of an order or a menu.
 const CANCEL_LOOK: &str = "construction_cancel";
-/// Where the game's font keeps the images of the glyphs it draws
-/// resources with.
-pub(crate) const GLYPH_DIR: &str = "Fonts/medium/1280";
-
-/// Each resource's glyph, by the resource's id.
-pub(crate) fn glyphs(
-    game: &GameData,
-    images: &mut Assets<Image>,
-    formats: bevy::image::CompressedImageFormats,
-) -> HashMap<Id, Handle<Image>> {
-    // Resources often share a glyph, such as a limit and what provides it.
-    let mut decoded: HashMap<String, Option<Handle<Image>>> = HashMap::new();
-    let mut out = HashMap::new();
-    for r in game.resources().iter() {
-        let Some(name) = &r.glyph else { continue };
-        let handle = decoded.entry(name.clone()).or_insert_with(|| {
-            let path = format!("{GLYPH_DIR}/{name}.png");
-            let image = textures::decode(&game.read(&path)?, &path, formats, true)?;
-            Some(images.add(image))
-        });
-        if let Some(h) = handle {
-            out.insert(r.id.clone(), h.clone());
-        }
-    }
-    out
-}
-
 /// What an order does once its button is pressed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Give {
@@ -478,10 +449,7 @@ pub fn show_card_buttons(
 ) {
     for (button, mut shown, mut hint, mut name) in &mut buttons {
         let order = card_order(&sim.0, local.0, button.0);
-        shown.set_if_neq(match order {
-            Some(_) => Visibility::Inherited,
-            None => Visibility::Hidden,
-        });
+        shown.set_if_neq(crate::ui::visible(order.is_some()));
         let Some(order) = order else {
             continue;
         };
@@ -839,44 +807,6 @@ impl Quantity {
     }
 }
 
-/// Part of the interface that takes clicks, so they don't go to the map
-/// under it.
-#[derive(Component)]
-pub struct Blocks;
-
-/// Part of the interface whose clicks are the map's, even drawn over a
-/// panel that [`Blocks`] them, such as the minimap.
-#[derive(Component)]
-pub struct OfMap;
-
-/// What's under the cursor of what takes clicks from the map and what
-/// gives them back.
-#[derive(SystemParam)]
-pub struct Panels<'w, 's> {
-    blocking: Query<'w, 's, Pointed, With<Blocks>>,
-    giving: Query<'w, 's, Pointed, With<OfMap>>,
-}
-
-type Pointed = (
-    &'static RelativeCursorPosition,
-    &'static InheritedVisibility,
-    &'static ComputedStackIndex,
-);
-
-impl Panels<'_, '_> {
-    /// Whether the cursor is on a panel, with nothing of the map's drawn
-    /// over it there.
-    pub fn under_cursor(&self) -> bool {
-        fn top<F: bevy::ecs::query::QueryFilter>(q: &Query<Pointed, F>) -> Option<u32> {
-            (q.iter())
-                .filter(|(p, shown, _)| shown.get() && p.cursor_over)
-                .map(|(.., stack)| stack.0)
-                .max()
-        }
-        top(&self.blocking) > top(&self.giving)
-    }
-}
-
 impl Looks {
     /// Every icon a button can show.
     pub fn icons(&self) -> impl Iterator<Item = &Handle<Image>> {
@@ -950,7 +880,7 @@ pub fn setup(
     let glyphs = glyphs(game, &mut images, formats.0);
     let mut sources = HashMap::new();
     let mut image = |game: &GameData, path: &str| {
-        let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
+        let image = crate::ui::read_image(game, path, formats.0)?;
         let handle = images.add(image);
         sources.insert(handle.id(), path.to_string());
         Some(handle)
@@ -1213,11 +1143,6 @@ pub fn setup(
     commands.insert_resource(Page::Orders);
 }
 
-/// Whether the cursor is off the grid, so clicks go to the map.
-pub fn pointer_away(panels: Panels) -> bool {
-    !panels.under_cursor()
-}
-
 pub fn aiming(page: Res<Page>) -> bool {
     matches!(
         *page,
@@ -1476,16 +1401,7 @@ pub fn hover(
         true => previewed(*page, &sim.0, &looks, &shown, &selected.0, building, &slots),
         false => None,
     };
-    let changed = match (&preview.0, &previewed) {
-        (None, None) => false,
-        (Some(Previewed::Unpack(a)), Some(Previewed::Unpack(b))) => a != b,
-        (Some(Previewed::Commission(at, a)), Some(Previewed::Commission(by, b))) => {
-            at != by || a.template != b.template
-        }
-        (Some(Previewed::Research(a)), Some(Previewed::Research(b))) => a != b,
-        _ => true,
-    };
-    if changed {
+    if preview.0 != previewed {
         preview.0 = previewed;
     }
 }
@@ -2176,12 +2092,10 @@ enum Struck {
 }
 
 fn attack_at(sim: &tgsim::World, player: u32, focus: crate::Focus) -> Struck {
-    let owner = match focus {
-        crate::Focus::Nothing => None,
-        crate::Focus::Organization(r) => Some(sim.organizations[r].owner),
-        crate::Focus::Building(b) => Some(sim.buildings[b].owner),
-    };
-    struck(focus, owner.map(|o| sim.sides.relation(player, o)))
+    let relation = focus
+        .piece()
+        .map(|p| sim.sides.relation(player, sim.piece_owner(p)));
+    struck(focus, relation)
 }
 
 /// What an attack strikes at `focus`, toward whose owner `player` stands
@@ -2204,12 +2118,9 @@ fn struck(focus: crate::Focus, toward: Option<tgsim::Relation>) -> Struck {
 
 /// The enemy's organization or building at `focus`, which Guard refuses.
 fn enemy_at(sim: &tgsim::World, player: u32, focus: crate::Focus) -> Option<About> {
-    let (about, owner) = match focus {
-        crate::Focus::Nothing => return None,
-        crate::Focus::Organization(r) => (About::Organization(r), sim.organizations[r].owner),
-        crate::Focus::Building(b) => (About::Building(b), sim.buildings[b].owner),
-    };
-    (sim.sides.relation(player, owner) == tgsim::Relation::Enemy).then_some(about)
+    let piece = focus.piece()?;
+    (sim.sides.relation(player, sim.piece_owner(piece)) == tgsim::Relation::Enemy)
+        .then(|| About::from(piece))
 }
 
 /// What a guard aimed at `focus` is posted beside: an organization or building
@@ -2221,15 +2132,10 @@ fn guard_at(
     selected: &[usize],
     focus: crate::Focus,
 ) -> Option<tgsim::Piece> {
-    let (thing, owner) = match focus {
-        crate::Focus::Nothing => return None,
-        crate::Focus::Organization(r) if selected.contains(&r) => return None,
-        crate::Focus::Organization(r) => {
-            (tgsim::Piece::Organization(r), sim.organizations[r].owner)
-        }
-        crate::Focus::Building(b) => (tgsim::Piece::Building(b), sim.buildings[b].owner),
-    };
-    (sim.sides.relation(player, owner) != tgsim::Relation::Enemy).then_some(thing)
+    let piece = focus.piece()?;
+    let own = matches!(piece, tgsim::Piece::Organization(r) if selected.contains(&r));
+    (!own && sim.sides.relation(player, sim.piece_owner(piece)) != tgsim::Relation::Enemy)
+        .then_some(piece)
 }
 
 /// While an order is aimed, a left click on the map or minimap gives it
@@ -2353,30 +2259,21 @@ pub fn aim(
     }
     if aim == Aim::Repair {
         *page = Page::Orders;
-        let piece = match focus {
-            crate::Focus::Organization(r) => tgsim::Piece::Organization(r),
-            crate::Focus::Building(b) => tgsim::Piece::Building(b),
-            crate::Focus::Nothing => {
-                let text = fill(&menus.no_target, &[menus.order(aim)]);
-                failed.write(Failed { text, about: None });
-                return;
-            }
+        let Some(piece) = focus.piece() else {
+            let text = fill(&menus.no_target, &[menus.order(aim)]);
+            failed.write(Failed { text, about: None });
+            return;
         };
-        let repair = |organization| tgsim::Command::Repair {
-            organization,
-            piece,
-        };
-        let organizations: Vec<(usize, [f32; 2])> = (given.iter())
-            .filter(|&&r| orders.give(&sim.0, player, repair(r)).is_ok())
-            .map(|&r| (r, point))
-            .collect();
+        let (organizations, _) =
+            crate::give_each(&sim.0, &mut orders, player, &given, point, |r| {
+                tgsim::Command::Repair {
+                    organization: r,
+                    piece,
+                }
+            });
         if organizations.is_empty() {
-            let about = match piece {
-                tgsim::Piece::Organization(r) => About::Organization(r),
-                tgsim::Piece::Building(b) => About::Building(b),
-            };
             refused.write(Refused {
-                about,
+                about: About::from(piece),
                 by: Some(aim),
             });
             return;
@@ -2456,14 +2353,13 @@ pub fn aim(
     if aim == Aim::Guard
         && let Some(piece) = guard_at(&sim.0, player, &given, focus)
     {
-        let guard = |organization| tgsim::Command::GuardPiece {
-            organization,
-            piece,
-        };
-        let organizations: Vec<(usize, [f32; 2])> = (given.iter())
-            .filter(|&&r| orders.give(&sim.0, player, guard(r)).is_ok())
-            .map(|&r| (r, point))
-            .collect();
+        let (organizations, _) =
+            crate::give_each(&sim.0, &mut orders, player, &given, point, |r| {
+                tgsim::Command::GuardPiece {
+                    organization: r,
+                    piece,
+                }
+            });
         if organizations.is_empty() {
             return;
         }
@@ -2518,7 +2414,6 @@ pub fn aim(
 
 #[cfg(test)]
 mod tests {
-    use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
 
@@ -2580,38 +2475,6 @@ mod tests {
             .release(MouseButton::Right);
         app.update();
         assert_eq!(activate(&mut app), [format!("{CARD_BUTTON} {id}")]);
-    }
-
-    /// Spawns a node the cursor is on, `stack` deep in the UI.
-    fn pointed(world: &mut World, stack: u32, marker: impl Bundle) {
-        let cursor = RelativeCursorPosition {
-            cursor_over: true,
-            normalized: Some(Vec2::ZERO),
-        };
-        world.spawn((
-            cursor,
-            InheritedVisibility::VISIBLE,
-            ComputedStackIndex(stack),
-            marker,
-        ));
-    }
-
-    fn on_panel(world: &mut World) -> bool {
-        world
-            .run_system_once(|panels: Panels| panels.under_cursor())
-            .unwrap()
-    }
-
-    #[test]
-    fn the_map_over_a_panel_takes_the_click() {
-        let mut world = World::new();
-        assert!(!on_panel(&mut world));
-        pointed(&mut world, 3, Blocks);
-        assert!(on_panel(&mut world));
-        pointed(&mut world, 5, OfMap);
-        assert!(!on_panel(&mut world));
-        pointed(&mut world, 7, Blocks);
-        assert!(on_panel(&mut world));
     }
 
     const fn at(slot: usize) -> Option<Place> {

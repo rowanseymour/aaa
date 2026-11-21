@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::audio::Volume;
 use bevy::prelude::*;
@@ -14,6 +13,7 @@ use tgrender::camera::RtsCamera;
 use tgrender::terrain::map_point;
 use tgsim::Relation;
 
+use crate::random::Random;
 use crate::{Data, Loaded, Local, Sim};
 
 #[derive(Resource)]
@@ -29,7 +29,7 @@ pub struct Sounds {
     next: HashMap<Id, usize>,
     /// Cues waiting to play, with when.
     queued: Vec<(f64, Request)>,
-    rng: u64,
+    rng: Random,
     /// Which sounds the options have on.
     pub switches: SoundSwitches,
 }
@@ -139,14 +139,6 @@ struct Playing {
     loudness: f32,
 }
 
-/// Where the random picks start: somewhere new each launch, as the game's
-/// are once everything else drawing on its numbers has had its turn.
-fn seed() -> u64 {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH);
-    // Never zero, which xorshift stays at.
-    now.map_or(0, |d| d.as_nanos() as u64) | 1 << 63
-}
-
 impl Sounds {
     /// With the files of the `ready` audio read ahead. Objects' audio is
     /// left to [`Sounds::load_objects`], for a match.
@@ -166,7 +158,7 @@ impl Sounds {
             read,
             next: HashMap::new(),
             queued: Vec::new(),
-            rng: seed(),
+            rng: Random::of_launch(),
             switches: game.sound_switches(),
         }
     }
@@ -184,7 +176,7 @@ impl Sounds {
                 .collect(),
             next: HashMap::new(),
             queued: Vec::new(),
-            rng: seed(),
+            rng: Random::of_launch(),
             switches: SoundSwitches {
                 replies: true,
                 chat: true,
@@ -296,11 +288,7 @@ impl Sounds {
 
     /// A number in `0..1`.
     pub fn random(&mut self) -> f32 {
-        // xorshift64
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 7;
-        self.rng ^= self.rng << 17;
-        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+        self.rng.next()
     }
 
     fn between(&mut self, [a, b]: [f32; 2]) -> f32 {
@@ -404,13 +392,10 @@ fn play(
     playing: Query<(Entity, &Playing)>,
 ) {
     let now = time.elapsed_secs_f64();
-    if sounds.queued.iter().all(|(due, _)| *due > now) {
+    let due = take_due(&mut sounds.queued, now);
+    if due.is_empty() {
         return;
     }
-    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut sounds.queued)
-        .into_iter()
-        .partition(|(due, _)| *due <= now);
-    sounds.queued = waiting;
     let listener = cameras.single().ok().map(|c| map_point(c.focus));
     let mut counts: HashMap<Id, Vec<(f64, Entity)>> = HashMap::new();
     for (e, p) in &playing {
@@ -501,6 +486,19 @@ fn follow_volumes(volumes: Res<Volumes>, mut playing: Query<(&Playing, &mut Audi
     for (p, mut sink) in &mut playing {
         sink.set_volume(Volume::Linear(p.loudness * volumes.of(p.category)));
     }
+}
+
+/// Takes what of `queued` is due by `now` out of it, leaving the rest in
+/// their order.
+pub(crate) fn take_due<T>(queued: &mut Vec<(f64, T)>, now: f64) -> Vec<(f64, T)> {
+    if queued.iter().all(|(due, _)| *due > now) {
+        return Vec::new();
+    }
+    let (due, waiting) = std::mem::take(queued)
+        .into_iter()
+        .partition(|(due, _)| *due <= now);
+    *queued = waiting;
+    due
 }
 
 #[cfg(test)]

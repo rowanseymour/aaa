@@ -5,7 +5,6 @@
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
-use tgrender::textures;
 use tgsim::{Objective, Standing};
 
 use crate::displays::{self, Displays, Panel, Window};
@@ -68,8 +67,7 @@ fn spawn(
     ]
     .map(|look| {
         let path = look.icon.as_deref();
-        let image =
-            path.and_then(|path| textures::decode(&game.read(path)?, path, formats.0, true));
+        let image = path.and_then(|path| crate::ui::read_image(game, path, formats.0));
         let [r, g, b] = look.colour;
         (
             Color::srgb(r, g, b),

@@ -5,7 +5,6 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
-use tgrender::textures;
 
 use crate::resource_bar::{Cell, Previewing, stockpile};
 use crate::ui::{Font, Hint, Ink, Surface, backed, label};
@@ -39,15 +38,12 @@ pub fn spawn(
     let game = &loaded.game;
     let strings = game.strings();
     let said = crate::ui::said(&strings);
-    let shortage = game
-        .read(SHORTAGE_ICON)
-        .and_then(|bytes| textures::decode(&bytes, SHORTAGE_ICON, formats.0, true))
-        .map(|i| images.add(i));
+    let shortage = crate::ui::read_image(game, SHORTAGE_ICON, formats.0).map(|i| images.add(i));
     let shortage_tip = said(
         "game_interface_UpkeepShortageIcon_ToolTip",
         "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
     );
-    let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
+    let glyphs = crate::ui::glyphs(game, &mut images, formats.0);
     let stockpile = stockpile(game);
     let cells = game.economy_bar();
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
@@ -151,19 +147,10 @@ pub fn show(
     mut icons: Query<&mut Node, With<ShortageIcon>>,
 ) {
     let short = local.0.is_some_and(|p| sim.0.short(p).is_some());
-    let display = |shown| match shown {
-        true => Display::Flex,
-        false => Display::None,
-    };
     for mut node in &mut icons {
-        if node.display != display(short) {
-            node.display = display(short);
-        }
+        crate::ui::show(&mut node, short);
     }
     for (bar, mut node) in &mut bars {
-        let shown = display(local.0.is_some() && (previewing.0 || !bar.0));
-        if node.display != shown {
-            node.display = shown;
-        }
+        crate::ui::show(&mut node, local.0.is_some() && (previewing.0 || !bar.0));
     }
 }

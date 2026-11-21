@@ -9,8 +9,8 @@ use tgdata::{Id, widgets::Widget};
 
 use super::lettering::{Letters, Measured, PLAIN};
 use super::{Drawer, Step, on_screen, placed, point2, reach};
-use crate::actions::Blocks;
 use crate::resource_bar::{Cell, Colours, Previewing};
+use crate::ui::Blocks;
 
 /// The bars, under the one that slides away from them first.
 pub const BARS: [&str; 2] = ["EconomicImpact", "EconomyBar"];
@@ -132,10 +132,7 @@ impl Bar {
                 },
                 self.slide,
                 Pickable::IGNORE,
-                match preview {
-                    true => Visibility::Hidden,
-                    false => Visibility::Inherited,
-                },
+                crate::ui::visible(!preview),
             ))
             .with_children(|bar| {
                 for (chain, image) in self.pictures {
@@ -222,10 +219,7 @@ pub fn slide(
             node.top = top;
         }
         if slide.preview {
-            visibility.set_if_neq(match previewing {
-                true => Visibility::Inherited,
-                false => Visibility::Hidden,
-            });
+            visibility.set_if_neq(crate::ui::visible(previewing));
         }
     }
 }

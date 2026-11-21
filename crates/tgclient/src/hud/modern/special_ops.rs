@@ -9,10 +9,8 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::Button;
 use tgdata::SpecialOperation;
-use tgrender::textures;
 
 use super::actions::{BUTTON, GAP, PAD};
-use crate::actions::{Blocks, GLYPH_DIR};
 use crate::intent::Asks;
 use crate::keys::Bindings;
 use crate::special_ops::{Panel, action, offered, probe};
@@ -20,6 +18,7 @@ use crate::ui::{
     self, Click, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel,
     tooltip,
 };
+use crate::ui::{Blocks, GLYPH_DIR};
 use crate::{Leaders, Loaded, Local, Sim};
 
 /// An icon's size within its button, which is the action palette's, and
@@ -100,7 +99,7 @@ pub fn spawn(
     let mut image = |game: &tgdata::GameData, path: &str| {
         (cache.entry(path.to_string()))
             .or_insert_with(|| {
-                let decoded = textures::decode(&game.read(path)?, path, formats.0, true)?;
+                let decoded = crate::ui::read_image(game, path, formats.0)?;
                 Some(images.add(decoded))
             })
             .clone()
@@ -338,14 +337,8 @@ fn pane(
 /// Shows the tooltip of the operation under the pointer, and only that.
 pub fn tips(buttons: Query<(&OperationButton, &Hovered)>, mut nodes: Query<&mut Node>) {
     for (button, hovered) in &buttons {
-        let display = match hovered.get() {
-            true => Display::Flex,
-            false => Display::None,
-        };
-        if let Ok(mut node) = nodes.get_mut(button.tip)
-            && node.display != display
-        {
-            node.display = display;
+        if let Ok(mut node) = nodes.get_mut(button.tip) {
+            crate::ui::show(&mut node, hovered.get());
         }
     }
 }
@@ -400,13 +393,7 @@ pub fn refresh(
         }
         if let Ok((mut t, mut node)) = lines.get_mut(button.recharge_line) {
             let left = op.map_or(0.0, |o| o.left);
-            let display = match left > 0.0 {
-                true => Display::Flex,
-                false => Display::None,
-            };
-            if node.display != display {
-                node.display = display;
-            }
+            crate::ui::show(&mut node, left > 0.0);
             if left > 0.0 {
                 let said = recharging(&panel.words.recharging, left);
                 if t.0 != said {

@@ -1541,10 +1541,8 @@ impl Draw<'_, '_> {
         let at = button.bounds(at);
         let faces = self.faces(button, at);
         // Shown at once, so it's there to press as soon as the card is.
-        let shown = match crate::actions::card_order(self.sim, self.local, r) {
-            Some(_) => Visibility::Inherited,
-            None => Visibility::Hidden,
-        };
+        let shown =
+            crate::ui::visible(crate::actions::card_order(self.sim, self.local, r).is_some());
         let id = format!(
             "object.organization.{}.retreat",
             self.sim.organizations[r].id

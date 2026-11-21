@@ -8,8 +8,9 @@ use bevy::ui_widgets::Activate;
 use tgserver::{Choice, NotJoined, Refusal, Told};
 
 use crate::fields::{Entered, Field, field};
-use crate::lan::{Hosting, Notice, Staged, fill};
+use crate::lan::{Hosting, Notice, Staged};
 use crate::lobby::Lobby;
+use crate::messages::filled;
 use crate::ui::{self, Font, Ink, Surface, button, called, label, panel, text};
 use crate::{Data, HostedAt, Pending, Screen, confirm};
 
@@ -242,7 +243,7 @@ fn follow(
     let host = staged.entry.staging().guest(me).is_some_and(|g| g.host);
     for told in staged.entry.take_told() {
         let line = match told {
-            Told::Joined(name) => fill(&words.joined, &[&name]),
+            Told::Joined(name) => filled(&words.joined, &[&name]),
             Told::AskedReady if host => words.asked_host.clone(),
             Told::AskedReady => words.asked.clone(),
             Told::Counting => words.counting.clone(),
@@ -258,14 +259,14 @@ fn follow(
         log.0.push(line);
     }
     for said in staged.entry.take_said() {
-        log.0.push(fill(&words.said, &[&said.name, &said.words]));
+        log.0.push(filled(&words.said, &[&said.name, &said.words]));
     }
     for gone in staged.entry.take_left() {
         let format = match gone.kicked {
             true => &words.kicked,
             false => &words.quit,
         };
-        log.0.push(fill(format, &[&gone.name]));
+        log.0.push(filled(format, &[&gone.name]));
     }
     let kept = log.0.len().saturating_sub(KEPT);
     log.0.drain(..kept);
@@ -402,7 +403,7 @@ fn show_controls(
         ChildOf(controls),
         text(format!("{}{lock}", staging.name), Font::Large),
     ));
-    let players = fill(
+    let players = filled(
         &words.players,
         &[&staging.guests.len().to_string(), &staging.most.to_string()],
     );

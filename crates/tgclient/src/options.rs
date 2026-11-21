@@ -5,7 +5,6 @@ use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::ecs::system::NonSendMarker;
-use bevy::input::keyboard::KeyboardInput;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, SliderValue, ValueChange};
@@ -19,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tgdata::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 use tgrender::camera::RtsCamera;
 
+use crate::fields::{Entered, Field, Focused, field};
 use crate::hud::Hud;
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
@@ -200,14 +200,10 @@ struct Body;
 #[derive(Component)]
 struct Hotkeys;
 
-/// The box the player's nickname is typed in.
+/// The [`Field`] the player's nickname is typed in, with the nickname from
+/// before typing, which stands while what's typed is no name.
 #[derive(Component)]
-struct NicknameBox;
-
-/// What's being typed in the [`NicknameBox`] while it takes the keyboard,
-/// and the nickname before, which stands while what's typed is no name.
-#[derive(Resource, Default)]
-struct Typing(Option<(String, String)>);
+struct NicknameBox(String);
 
 /// A button choosing a set of hotkeys, by its id.
 #[derive(Component)]
@@ -480,12 +476,11 @@ impl Plugin for OptionsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Open>()
             .init_resource::<Tab>()
-            .init_resource::<Typing>()
             .init_resource::<AntiAliasing>()
             .init_resource::<WindowedSize>()
             .add_systems(OnEnter(Screen::Options), screen)
             .add_observer(set_volume)
-            .add_observer(type_in_nickname)
+            .add_observer(enter_nickname)
             .add_systems(PreUpdate, follow_window)
             .add_systems(PostUpdate, anti_alias)
             .add_systems(
@@ -502,7 +497,6 @@ impl Plugin for OptionsPlugin {
                     mark_chosen,
                     show_border,
                     type_nickname,
-                    show_nickname,
                     show_volumes,
                     show_sound_switches,
                 )
@@ -523,7 +517,6 @@ fn screen(mut commands: Commands, options: Res<Options>) {
 pub fn page(commands: &mut Commands, options: &Options) -> Entity {
     commands.insert_resource(Open::Nothing);
     commands.insert_resource(Tab::Game);
-    commands.insert_resource(Typing::default());
     let page = Node {
         position_type: PositionType::Absolute,
         width: percent(100),
@@ -647,6 +640,7 @@ fn show_body(
     mut commands: Commands,
     options: Res<Options>,
     volumes: Res<Volumes>,
+    nickname: Res<Nickname>,
     tab: Res<Tab>,
     body: Single<(Entity, Ref<Body>)>,
 ) {
@@ -656,25 +650,18 @@ fn show_body(
     }
     commands.entity(body).despawn_children();
     commands.insert_resource(Open::Nothing);
-    commands.insert_resource(Typing::default());
     match *tab {
         Tab::Game => {
             let game = section(&mut commands, body, &options.game_title);
             choice(&mut commands, game, &options.hotkeys_label, Hotkeys);
-            let field = Node {
-                width: px(LIST_WIDTH),
-                justify_content: JustifyContent::Start,
-                ..padded()
-            };
-            let field = (
-                NicknameBox,
-                switch(card(field)),
+            let nickname_box = (
+                NicknameBox(nickname.0.clone()),
+                field(&nickname.0, tgserver::NAME_LONGEST, px(LIST_WIDTH)),
                 Card,
                 called("options.nickname"),
-                children![text("", Font::Body)],
             );
             let name = &options.nickname_label;
-            let holder = children![field];
+            let holder = children![nickname_box];
             choice(&mut commands, game, name, holder);
             let extras = section(&mut commands, body, &options.extras_title);
             commands
@@ -1190,70 +1177,30 @@ fn close_list(
     }
 }
 
-/// Has the [`NicknameBox`] pressed take the keyboard, or give it back.
-fn type_in_nickname(
-    pressed: On<Activate>,
-    boxes: Query<(), With<NicknameBox>>,
-    mut typing: ResMut<Typing>,
-    nickname: Res<Nickname>,
-) {
-    if !boxes.contains(pressed.entity) {
-        return;
-    }
-    typing.0 = match typing.0 {
-        Some(_) => None,
-        None => Some((nickname.0.clone(), nickname.0.clone())),
-    };
-}
-
-/// Types into the [`NicknameBox`] while it has the keyboard, the player
-/// going by what's typed whenever that makes a name, until Enter.
+/// Has the player go by what's typed in the [`NicknameBox`] whenever that
+/// makes a name.
 fn type_nickname(
-    mut presses: MessageReader<KeyboardInput>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut typing: ResMut<Typing>,
+    boxes: Query<(&Field, &NicknameBox), Changed<Field>>,
     mut nickname: ResMut<Nickname>,
-    console: Option<Res<crate::console::Console>>,
 ) {
-    // What's typed in the console is the console's.
-    let under = console.is_some_and(|c| !crate::console::closed(c));
-    let Some((typed, before)) = typing.0.as_mut().filter(|_| !under) else {
-        presses.clear();
-        return;
-    };
-    if keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]) {
-        presses.clear();
-        typing.0 = None;
-        return;
-    }
-    let mut now = typed.clone();
-    crate::chat::type_into(&mut now, tgserver::NAME_LONGEST, &mut presses);
-    if now != *typed {
-        let name = tgserver::name(&now).unwrap_or_else(|| before.clone());
+    for (field, NicknameBox(before)) in &boxes {
+        let name = tgserver::name(&field.text).unwrap_or_else(|| before.clone());
         nickname.set_if_neq(Nickname(name));
-        *typed = now;
     }
 }
 
-/// Shows what's being typed in the [`NicknameBox`] while it has the
-/// keyboard, else the nickname.
-fn show_nickname(
-    typing: Res<Typing>,
+/// Enter in the [`NicknameBox`] gives the keyboard back, and shows the name
+/// what was typed made.
+fn enter_nickname(
+    entered: On<Entered>,
+    mut boxes: Query<(&mut Field, &mut NicknameBox)>,
     nickname: Res<Nickname>,
-    boxes: Query<(&Children, Ref<NicknameBox>)>,
-    mut texts: Query<&mut Text>,
+    mut focused: ResMut<Focused>,
 ) {
-    for (children, added) in &boxes {
-        if !typing.is_changed() && !nickname.is_changed() && !added.is_added() {
-            continue;
-        }
-        let shown = match &typing.0 {
-            Some((typed, _)) => format!("{typed}_"),
-            None => nickname.0.clone(),
-        };
-        if let Some(Ok(mut text)) = texts.iter_many_mut(children).fetch_next() {
-            text.0 = shown;
-        }
+    if let Ok((mut field, mut before)) = boxes.get_mut(entered.entity) {
+        field.text = nickname.0.clone();
+        before.0 = nickname.0.clone();
+        focused.0 = None;
     }
 }
 
@@ -1304,6 +1251,7 @@ mod tests {
             StatesPlugin,
             bevy::input::InputPlugin,
             OptionsPlugin,
+            crate::fields::FieldsPlugin,
         ))
         .insert_state(Screen::Options)
         .insert_resource(options(Some("classic")))

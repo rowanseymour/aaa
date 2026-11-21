@@ -13,7 +13,6 @@ use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GameEvent, Id, InterfaceVars};
 use tgrender::camera::RtsCamera;
 use tgrender::terrain::world;
-use tgrender::textures;
 use tgserver::protocol::Said;
 use tgsim::{Channel, Notice, Pause, Pausing, Piece, Relation, Seen, Votes, World};
 
@@ -115,6 +114,15 @@ impl Look {
 pub enum About {
     Organization(usize),
     Building(usize),
+}
+
+impl From<tgsim::Piece> for About {
+    fn from(piece: tgsim::Piece) -> About {
+        match piece {
+            tgsim::Piece::Organization(r) => About::Organization(r),
+            tgsim::Piece::Building(b) => About::Building(b),
+        }
+    }
 }
 
 /// Where a line happened: at what it's about, while that's there, else
@@ -255,6 +263,12 @@ impl From<String> for Fill {
 impl From<&str> for Fill {
     fn from(words: &str) -> Fill {
         Fill::from(words.to_string())
+    }
+}
+
+impl From<&String> for Fill {
+    fn from(words: &String) -> Fill {
+        Fill::from(words.clone())
     }
 }
 
@@ -545,7 +559,7 @@ impl Look {
             .into_iter()
             .map(|k| {
                 let icon = k.icon.as_deref().and_then(|path| {
-                    let image = textures::decode(&game.read(path)?, path, formats, true)?;
+                    let image = crate::ui::read_image(game, path, formats)?;
                     Some(images.add(image))
                 });
                 let [r, g, b] = k.colour;

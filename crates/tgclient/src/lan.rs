@@ -12,6 +12,7 @@ use tgserver::lan::{Advert, Advertiser, Found, Search};
 use tgserver::{Entry, Lobby, NotJoined, Refusal, Staging};
 
 use crate::fields::{Entered, Field, field};
+use crate::messages::filled;
 use crate::orders::Line;
 use crate::ui::{self, Font, Ink, Surface, button, called, label, panel, text};
 use crate::{Data, Nickname, Screen, confirm, menu};
@@ -148,12 +149,6 @@ impl Default for Words {
     fn default() -> Self {
         Words::of(&tgdata::Strings::default())
     }
-}
-
-/// `format` with its placeholders filled in turn by `fills`.
-pub(crate) fn fill(format: &str, fills: &[&str]) -> String {
-    let fills: Vec<String> = fills.iter().map(|f| f.to_string()).collect();
-    crate::messages::filled(format, &fills)
 }
 
 /// The games found on the network, and the search for more.
@@ -632,8 +627,8 @@ fn start_join(
     at: SocketAddr,
     password: String,
 ) {
-    let asked = confirm::ask(commands, Screen::Lan, fill(&words.joining, &[&name]));
-    let timeout = fill(&words.timeout, &[&JOIN_TIMEOUT.to_string()]);
+    let asked = confirm::ask(commands, Screen::Lan, filled(&words.joining, &[&name]));
+    let timeout = filled(&words.timeout, &[&JOIN_TIMEOUT.to_string()]);
     commands.spawn((
         ChildOf(asked.dialog()),
         JoiningText,
@@ -678,7 +673,7 @@ fn join(
     };
     let left = JOIN_TIMEOUT.saturating_sub(joining.started.elapsed().as_secs());
     for mut text in &mut shown {
-        let now = fill(&words.timeout, &[&left.to_string()]);
+        let now = filled(&words.timeout, &[&left.to_string()]);
         if text.0 != now {
             text.0 = now;
         }
@@ -906,7 +901,7 @@ fn join_direct(
         None => notice(
             &mut commands,
             &confirm,
-            fill(&words.unresolved, &[&address]),
+            filled(&words.unresolved, &[&address]),
         ),
     }
 }
@@ -924,7 +919,7 @@ fn open_create(
     let name = made
         .name
         .clone()
-        .unwrap_or_else(|| fill(&words.default_name, &[&nickname.0]));
+        .unwrap_or_else(|| filled(&words.default_name, &[&nickname.0]));
     for (words, typed, which, masked) in [
         ("Game Name", name, FieldOf::Name, false),
         ("Password", made.password.clone(), FieldOf::Password, true),
@@ -1031,7 +1026,7 @@ fn create(
         let found = fields.iter().find(|(_, f)| which(f));
         found.map(|(f, _)| f.text.clone()).unwrap_or_default()
     };
-    let default_name = fill(&words.default_name, &[&nickname.0]);
+    let default_name = filled(&words.default_name, &[&nickname.0]);
     let name = typed(|f| matches!(f, FieldOf::Name));
     let name = match name.trim() {
         "" => default_name.clone(),
@@ -1041,7 +1036,7 @@ fn create(
     made.password = typed(|f| matches!(f, FieldOf::Password));
     let Some((listener, port)) = listen() else {
         let bind = "Unable to bind to port %d";
-        notice(&mut commands, &confirm, fill(bind, &[&PORT.to_string()]));
+        notice(&mut commands, &confirm, filled(bind, &[&PORT.to_string()]));
         return;
     };
     let map = crate::lobby::first_scenario(&data).unwrap_or_default();

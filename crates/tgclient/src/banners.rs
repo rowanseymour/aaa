@@ -15,6 +15,7 @@ use tgrender::camera::RtsCamera;
 use tgrender::overlay::BannerImages;
 use tgrender::terrain::world;
 
+use crate::ui::visible;
 use crate::{Drawn, Focus, Leaders, Loaded, Local, OnMap, Screen, Sim, TINTS, tint};
 
 /// How high over the ground under its organization a banner floats, in world
@@ -205,13 +206,6 @@ fn layer(image: &Option<Handle<Image>>, colour: Color) -> impl Bundle {
     )
 }
 
-fn show(on: bool) -> Visibility {
-    match on {
-        true => Visibility::Inherited,
-        false => Visibility::Hidden,
-    }
-}
-
 /// The banner over an unpacked HQ, by the building's index into the sim's
 /// and the HQ's id.
 #[derive(Component)]
@@ -368,11 +362,13 @@ pub fn show_hq_banners(
         if let Ok((_, mut v)) = layers.get_mut(banner.shortage) {
             let owner = building.owner;
             let short = *(short.entry(owner)).or_insert_with(|| sim.0.short(owner).is_some());
-            v.set_if_neq(show(short && time.elapsed_secs() % (2.0 * FLASH) < FLASH));
+            v.set_if_neq(visible(
+                short && time.elapsed_secs() % (2.0 * FLASH) < FLASH,
+            ));
         }
         if let Ok((mut image, mut v)) = layers.get_mut(banner.focus) {
             let focused = *focus == Focus::Building(b);
-            v.set_if_neq(show(focused));
+            v.set_if_neq(visible(focused));
             if focused {
                 image.color = TINTS[tint(&sim.0, local.0, building.owner)];
             }
@@ -561,22 +557,24 @@ pub fn show_banners(
             }
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.engaged) {
-            v.set_if_neq(show(!organization.engaged.is_empty()));
+            v.set_if_neq(visible(!organization.engaged.is_empty()));
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.out_of_supply) {
-            v.set_if_neq(show(sim.0.lacks_supply(banner.organization)));
+            v.set_if_neq(visible(sim.0.lacks_supply(banner.organization)));
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.entrenched) {
-            v.set_if_neq(show(sim.0.entrenched(banner.organization)));
+            v.set_if_neq(visible(sim.0.entrenched(banner.organization)));
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.shortage) {
             let owner = organization.owner;
             let short = *(short.entry(owner)).or_insert_with(|| sim.0.short(owner).is_some());
-            v.set_if_neq(show(short && time.elapsed_secs() % (2.0 * FLASH) < FLASH));
+            v.set_if_neq(visible(
+                short && time.elapsed_secs() % (2.0 * FLASH) < FLASH,
+            ));
         }
         if let Ok((mut image, mut v)) = layers.get_mut(banner.focus) {
             let focused = *focus == Focus::Organization(banner.organization);
-            v.set_if_neq(show(focused));
+            v.set_if_neq(visible(focused));
             if focused {
                 image.color = TINTS[tint(&sim.0, local.0, organization.owner)];
             }
@@ -663,7 +661,7 @@ pub fn badge_banners(
                 .flatten()
                 .and_then(|level| banners.rank(&loaded.game, assets, flies, level));
             if let Ok((mut node, mut visibility)) = layers.get_mut(banner.rank) {
-                *visibility = show(image.is_some());
+                *visibility = visible(image.is_some());
                 // Made with no image, it starts clear.
                 node.color = Color::WHITE;
                 node.image = image.unwrap_or_default();
@@ -682,10 +680,7 @@ pub fn badge_banners(
         };
         let badge = wears
             .and_then(|(hq, _)| badges.badge(banners, &loaded.game, assets, template.as_str(), hq));
-        *visibility = match badge.is_some() {
-            true => Visibility::Inherited,
-            false => Visibility::Hidden,
-        };
+        *visibility = visible(badge.is_some());
         // Made with no image, it starts clear.
         image.color = Color::WHITE;
         image.image = badge.unwrap_or_default();

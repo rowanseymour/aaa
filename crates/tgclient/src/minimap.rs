@@ -18,7 +18,6 @@ use tgdata::{GameData, Id};
 use tgmap::{Ground, Map, Tile};
 use tgrender::camera::RtsCamera;
 use tgrender::terrain::{map_point, world};
-use tgrender::textures;
 
 use crate::{Loaded, Sim, TINTS};
 use tgsim::{Relation, State};
@@ -210,7 +209,7 @@ fn decode_icon(
     path: &str,
     formats: bevy::image::CompressedImageFormats,
 ) -> Option<Icon> {
-    let image = textures::decode(&game.read(path)?, path, formats, true)?;
+    let image = crate::ui::read_image(game, path, formats)?;
     let image = match image.texture_descriptor.format {
         TextureFormat::Rgba8UnormSrgb => image,
         _ => image.convert(TextureFormat::Rgba8UnormSrgb)?,
@@ -633,7 +632,7 @@ impl Minimap {
     pub fn view(&self) -> impl Bundle {
         (
             MinimapView,
-            crate::actions::OfMap,
+            crate::ui::OfMap,
             RelativeCursorPosition::default(),
             ImageNode::new(self.image.clone()),
         )

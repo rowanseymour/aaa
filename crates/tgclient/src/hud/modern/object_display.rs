@@ -13,10 +13,10 @@ use tgrender::overlay::BannerImages;
 use tgrender::portrait::Stage;
 use tgsim::{Target, World};
 
-use crate::actions::Blocks;
 use crate::banners::Badges;
 use crate::hud::original::{CardShows, Cards};
 use crate::object_display::*;
+use crate::ui::Blocks;
 use crate::ui::{self, Font, Gauge, Hint, Ink, Shade, Surface, framed, label, meter};
 use crate::{Drawn, Leaders, Loaded, Local, Sim};
 
@@ -186,10 +186,7 @@ pub fn lay_out(
         Some(row) => drop(commands.entity(row).despawn_related::<Children>()),
         None => {
             commands.entity(*root).despawn_related::<Children>();
-            visibility.set_if_neq(match showing.now {
-                Some(_) => Visibility::Inherited,
-                None => Visibility::Hidden,
-            });
+            visibility.set_if_neq(crate::ui::visible(showing.now.is_some()));
         }
     }
     let Some((mode, detail)) = &showing.now else {

@@ -8,11 +8,11 @@ use bevy::ui_widgets::Button;
 
 use super::displays::Rim;
 use crate::Loaded;
-use crate::actions::Blocks;
 use crate::clock::{PAUSE, PAUSE_BUTTON, PauseState, Pauses};
 use crate::displays;
 use crate::intent::Asks;
 use crate::keys::{Bindings, Named};
+use crate::ui::Blocks;
 use crate::ui::{Click, Edge, Hint, Ink, Surface, Theme};
 
 /// Our interface's pause button, a glyph on the minimap's rim.

@@ -4,14 +4,21 @@
 //! whole interface, even while it's up. [`Shade`] and [`Meter`] do the same
 //! for pictures and bars.
 
+use std::collections::HashMap;
+
 use bevy::asset::uuid_handle;
 use bevy::ecs::observer::IntoEntityObserver;
+use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{Font as Face, FontSource};
+use bevy::ui::{ComputedStackIndex, RelativeCursorPosition};
 use bevy::ui_widgets::{
     Button, Slider, SliderRange, SliderStep, SliderThumb, SliderValue, TrackClick,
 };
+
+use tgdata::{GameData, Id};
+use tgrender::textures;
 
 use crate::sound::Sounds;
 
@@ -410,6 +417,26 @@ pub fn marked(parent: &mut ChildSpawnerCommands, name: &Marked, size: Font, ink:
     });
 }
 
+/// Drawn or hidden with what it's in.
+pub fn visible(on: bool) -> Visibility {
+    match on {
+        true => Visibility::Inherited,
+        false => Visibility::Hidden,
+    }
+}
+
+/// Lays `node` out or takes it out of the layout, touching it only when
+/// that changes.
+pub fn show(node: &mut Mut<Node>, on: bool) {
+    let display = match on {
+        true => Display::Flex,
+        false => Display::None,
+    };
+    if node.display != display {
+        node.display = display;
+    }
+}
+
 /// A [`label`] in [`Ink::Body`].
 pub fn text(words: impl Into<String>, size: Font) -> impl Bundle {
     label(words, size, Ink::Body)
@@ -432,8 +459,8 @@ pub fn load_gem(
 ) {
     let formats = formats.map(|f| f.0).unwrap_or_default();
     let image = data.0.side_glyph().and_then(|name| {
-        let path = format!("{}/{name}.png", crate::actions::GLYPH_DIR);
-        tgrender::textures::decode(&data.0.read(&path)?, &path, formats, true)
+        let path = format!("{}/{name}.png", GLYPH_DIR);
+        read_image(&data.0, &path, formats)
     });
     gem.0 = image.map(|i| images.add(i));
 }
@@ -1210,8 +1237,89 @@ fn fill(
     }
 }
 
+/// Where the game's font keeps the images of the glyphs it draws
+/// resources with.
+pub(crate) const GLYPH_DIR: &str = "Fonts/medium/1280";
+
+/// The image at `path` in the game's data, decoded.
+pub fn read_image(
+    game: &GameData,
+    path: &str,
+    formats: bevy::image::CompressedImageFormats,
+) -> Option<Image> {
+    textures::decode(&game.read(path)?, path, formats, true)
+}
+
+/// Each resource's glyph, by the resource's id.
+pub(crate) fn glyphs(
+    game: &GameData,
+    images: &mut Assets<Image>,
+    formats: bevy::image::CompressedImageFormats,
+) -> HashMap<Id, Handle<Image>> {
+    // Resources often share a glyph, such as a limit and what provides it.
+    let mut decoded: HashMap<String, Option<Handle<Image>>> = HashMap::new();
+    let mut out = HashMap::new();
+    for r in game.resources().iter() {
+        let Some(name) = &r.glyph else { continue };
+        let handle = decoded.entry(name.clone()).or_insert_with(|| {
+            let path = format!("{GLYPH_DIR}/{name}.png");
+            let image = read_image(game, &path, formats)?;
+            Some(images.add(image))
+        });
+        if let Some(h) = handle {
+            out.insert(r.id.clone(), h.clone());
+        }
+    }
+    out
+}
+
+/// Part of the interface that takes clicks, so they don't go to the map
+/// under it.
+#[derive(Component)]
+pub struct Blocks;
+
+/// Part of the interface whose clicks are the map's, even drawn over a
+/// panel that [`Blocks`] them, such as the minimap.
+#[derive(Component)]
+pub struct OfMap;
+
+/// What's under the cursor of what takes clicks from the map and what
+/// gives them back.
+#[derive(SystemParam)]
+pub struct Panels<'w, 's> {
+    blocking: Query<'w, 's, Pointed, With<Blocks>>,
+    giving: Query<'w, 's, Pointed, With<OfMap>>,
+}
+
+type Pointed = (
+    &'static RelativeCursorPosition,
+    &'static InheritedVisibility,
+    &'static ComputedStackIndex,
+);
+
+impl Panels<'_, '_> {
+    /// Whether the cursor is on a panel, with nothing of the map's drawn
+    /// over it there.
+    pub fn under_cursor(&self) -> bool {
+        fn top<F: bevy::ecs::query::QueryFilter>(q: &Query<Pointed, F>) -> Option<u32> {
+            (q.iter())
+                .filter(|(p, shown, _)| shown.get() && p.cursor_over)
+                .map(|(.., stack)| stack.0)
+                .max()
+        }
+        top(&self.blocking) > top(&self.giving)
+    }
+}
+
+/// Whether the cursor is off every panel, so clicks go to the map.
+pub fn pointer_away(panels: Panels) -> bool {
+    !panels.under_cursor()
+}
+
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
     use super::*;
 
     #[test]
@@ -1331,5 +1439,37 @@ mod tests {
         app.update();
         let background = app.world().get::<BackgroundColor>(card).unwrap();
         assert_eq!(background.0, tint);
+    }
+
+    /// Spawns a node the cursor is on, `stack` deep in the UI.
+    fn pointed(world: &mut World, stack: u32, marker: impl Bundle) {
+        let cursor = RelativeCursorPosition {
+            cursor_over: true,
+            normalized: Some(Vec2::ZERO),
+        };
+        world.spawn((
+            cursor,
+            InheritedVisibility::VISIBLE,
+            ComputedStackIndex(stack),
+            marker,
+        ));
+    }
+
+    fn on_panel(world: &mut World) -> bool {
+        world
+            .run_system_once(|panels: Panels| panels.under_cursor())
+            .unwrap()
+    }
+
+    #[test]
+    fn the_map_over_a_panel_takes_the_click() {
+        let mut world = World::new();
+        assert!(!on_panel(&mut world));
+        pointed(&mut world, 3, Blocks);
+        assert!(on_panel(&mut world));
+        pointed(&mut world, 5, OfMap);
+        assert!(!on_panel(&mut world));
+        pointed(&mut world, 7, Blocks);
+        assert!(on_panel(&mut world));
     }
 }

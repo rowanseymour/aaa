@@ -30,8 +30,9 @@ use lettering::LayoutScale;
 pub(crate) use object::{CardShows, Cards, fill_bars};
 
 use super::{Hud, InMatch};
-use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
+use crate::actions::{COLUMNS, ROWS, Shown, Slot};
 use crate::intent::Asks;
+use crate::ui::Blocks;
 use crate::{Loaded, Local, Sim};
 
 /// While a match is played with the original's interface.
@@ -939,10 +940,7 @@ pub fn show_pressables(
                 continue;
             };
             let all = drawn.when.iter().all(|e| e.shown(&holding));
-            shown.set_if_neq(match all {
-                true => Visibility::Inherited,
-                false => Visibility::Hidden,
-            });
+            shown.set_if_neq(crate::ui::visible(all));
             let picture = match (disabled, &drawn.greyed) {
                 (true, Some(greyed)) => greyed,
                 _ => &drawn.image,
@@ -1081,7 +1079,7 @@ fn grey_icons(
         let Some(path) = looks.source(icon) else {
             continue;
         };
-        let decoded = (game.read(path)).and_then(|b| textures::decode(&b, path, formats.0, true));
+        let decoded = crate::ui::read_image(game, path, formats.0);
         if let Some(grey) = decoded.as_ref().and_then(grey) {
             greyed.0.insert(icon.id(), images.add(grey));
         }
@@ -1107,10 +1105,7 @@ pub fn show_grid(
         let pressed = !button.0.is_empty();
         let face = shown.faces[slot.0].as_ref();
         // An empty slot has no button, only the panel's picture.
-        visibility.set_if_neq(match face {
-            Some(_) => Visibility::Inherited,
-            None => Visibility::Hidden,
-        });
+        visibility.set_if_neq(crate::ui::visible(face.is_some()));
         let Some(face) = face else {
             continue;
         };
@@ -1134,10 +1129,7 @@ pub fn show_grid(
         };
         for &child in children {
             if let Ok((shows, mut shown)) = frames.get_mut(child) {
-                shown.set_if_neq(match shows.0.shown(&holding) {
-                    true => Visibility::Inherited,
-                    false => Visibility::Hidden,
-                });
+                shown.set_if_neq(crate::ui::visible(shows.0.shown(&holding)));
             }
             if let Ok((inset, mut image, mut node)) = icons.get_mut(child) {
                 let [l, t, r, b] = match pressed {

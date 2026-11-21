@@ -2,13 +2,13 @@
 //! to one other person, while the match goes on. It's hidden until opened.
 //! What's said travels as an order, and the message log shows it.
 
-use bevy::input::ButtonState;
-use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use tgrender::camera::{self, RtsCamera};
 use tgsim::{Action, Channel, Relation, World};
 
+use crate::fields::type_into;
 use crate::keys::Bindings;
 use crate::messages::MessageLog;
 use crate::ui::{self, Font};
@@ -237,36 +237,6 @@ pub fn keys(
         }
     }
     type_into(&mut chat.input, tgsim::CHAT_LONGEST, &mut presses);
-}
-
-/// Types what's been pressed into `input`, as far as `longest`
-/// characters; Backspace takes the last character back.
-pub(crate) fn type_into(
-    input: &mut String,
-    longest: usize,
-    presses: &mut MessageReader<KeyboardInput>,
-) {
-    for press in presses.read() {
-        if press.state != ButtonState::Pressed {
-            continue;
-        }
-        if press.key_code == KeyCode::Backspace {
-            input.pop();
-            continue;
-        }
-        let typed = match &press.logical_key {
-            Key::Character(c) => c.as_str(),
-            Key::Space => " ",
-            _ => continue,
-        };
-        let room = longest.saturating_sub(input.chars().count());
-        let typed: String = typed
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(room)
-            .collect();
-        input.push_str(&typed);
-    }
 }
 
 /// The choice `by` along from `from` in `offered`, wrapping round; the
