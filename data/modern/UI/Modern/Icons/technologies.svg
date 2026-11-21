@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- Three orbits round a nucleus, drawn heavy to hold up at button size. -->
-  <g fill="none" stroke="#fff" stroke-width="5">
-    <ellipse cx="32" cy="32" rx="28" ry="10"/>
-    <ellipse cx="32" cy="32" rx="28" ry="10" transform="rotate(60 32 32)"/>
-    <ellipse cx="32" cy="32" rx="28" ry="10" transform="rotate(120 32 32)"/>
+  <!-- A conical flask with liquid in its base, drawn heavy to hold up at button size. -->
+  <g fill="none" stroke="#fff" stroke-width="6" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M26,6 L26,24 L8,54 Q6,58 11,58 L53,58 Q58,58 56,54 L38,24 L38,6"/>
+    <line x1="21" y1="6" x2="43" y2="6"/>
   </g>
-  <circle fill="#fff" cx="32" cy="32" r="6"/>
+  <path fill="#fff" d="M20,41 L44,41 L50.5,52.5 L13.5,52.5 Z"/>
 </svg>

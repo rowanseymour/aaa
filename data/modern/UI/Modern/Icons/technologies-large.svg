@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- technologies.svg with finer lines, for buttons big enough to show them. -->
-  <g fill="none" stroke="#fff" stroke-width="4">
-    <ellipse cx="32" cy="32" rx="28" ry="10"/>
-    <ellipse cx="32" cy="32" rx="28" ry="10" transform="rotate(60 32 32)"/>
-    <ellipse cx="32" cy="32" rx="28" ry="10" transform="rotate(120 32 32)"/>
+  <!-- technologies.svg with finer lines and bubbles, for buttons big enough to show them. -->
+  <g fill="none" stroke="#fff" stroke-width="5" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M26,6 L26,24 L8,54 Q6,58 11,58 L53,58 Q58,58 56,54 L38,24 L38,6"/>
+    <line x1="21" y1="6" x2="43" y2="6"/>
   </g>
-  <circle fill="#fff" cx="32" cy="32" r="5"/>
+  <path fill="#fff" d="M20,41 L44,41 L50.5,52.5 L13.5,52.5 Z"/>
+  <circle fill="#fff" cx="30" cy="33" r="2.5"/>
+  <circle fill="#fff" cx="34.5" cy="25" r="2"/>
 </svg>
