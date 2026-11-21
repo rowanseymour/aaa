@@ -58,6 +58,7 @@ mod options;
 mod orders;
 mod outcome;
 mod pause;
+mod paused;
 mod placing;
 mod pointing;
 mod random;
@@ -491,6 +492,7 @@ pub fn run(program: Program) -> ExitCode {
             lobby::LobbyPlugin,
             scenario::ScenarioPlugin,
             pause::PausePlugin,
+            paused::PausedPlugin,
             displays::DisplaysPlugin,
             technologies::TechnologyPlugin,
             objectives::ObjectivesPlugin,

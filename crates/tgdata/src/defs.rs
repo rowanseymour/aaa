@@ -1575,6 +1575,9 @@ pub struct AVars {
     pub terrain_ambient: Option<f32>,
     #[serde(rename = "TerrainDiffuse")]
     pub terrain_diffuse: Option<f32>,
+    /// What the sun's dimmer is multiplied by while the game is paused.
+    #[serde(rename = "SunDimmerMultiplierWhenPaused")]
+    pub sun_dimmer_multiplier_when_paused: Option<f32>,
     /// How dark a shadow is, as the share of the sun it takes away.
     #[serde(rename = "DynamicShadowSunModulate")]
     pub dynamic_shadow_sun_modulate: Option<f32>,

@@ -22,7 +22,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::ui_widgets::Button;
 
 mod bars;
-mod lettering;
+pub(crate) mod lettering;
 mod object;
 mod tips;
 

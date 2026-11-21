@@ -712,6 +712,16 @@ impl GameData {
         ]
     }
 
+    /// What the sun's light is multiplied by while the game is paused,
+    /// none of it taken away where the settings don't say.
+    pub fn paused_dimmer(&self) -> f32 {
+        let vars = self.avars();
+        let dimmer = vars
+            .iter()
+            .find_map(|v| v.sun_dimmer_multiplier_when_paused);
+        dimmer.unwrap_or(1.0).max(0.0)
+    }
+
     /// The share of the sun's light a shadow takes away, all of it where
     /// the settings don't say.
     pub fn shadow_shade(&self) -> f32 {
