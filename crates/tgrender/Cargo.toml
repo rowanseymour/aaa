@@ -14,3 +14,4 @@ tgdata = { path = "../tgdata" }
 tgmap = { path = "../tgmap" }
 tgck = { path = "../tgck" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }
+resvg = { version = "0.50", default-features = false }

@@ -8,6 +8,7 @@ use bevy::image::CompressedImageFormats;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::ScrollArea;
+use tgdata::GameData;
 use tgrender::textures;
 
 use crate::intent::{Asked, Asks, Intent};
@@ -301,47 +302,34 @@ fn keys(mut intents: MessageReader<Intent>, mut toggling: Toggling) {
     }
 }
 
-/// One of the icons in `assets/icons`, white on clear for a button to
-/// tint, built in.
-#[derive(Clone, Copy)]
-pub struct Icon {
-    pub name: &'static str,
-    pub png: &'static [u8],
+/// The path of our interface's icon `name`, white on clear for a button to
+/// tint.
+pub fn icon(name: &str) -> String {
+    format!("UI/Modern/Icons/{name}.svg")
 }
 
-/// The [`Icon`] in `assets/icons` named `$name`.
-macro_rules! icon {
-    ($name:literal) => {
-        $crate::displays::Icon {
-            name: concat!($name, ".png"),
-            png: include_bytes!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../assets/icons/",
-                $name,
-                ".png"
-            )),
-        }
-    };
-}
-pub(crate) use icon;
-
-/// The icons decoded so far, kept from one match to the next.
+/// The icons decoded so far, by path, kept from one match to the next.
 #[derive(Resource, Default)]
-pub struct Icons(HashMap<&'static str, Handle<Image>>);
+pub struct Icons(HashMap<String, Handle<Image>>);
 
 impl Icons {
-    /// `icon` as an image, blank if it won't decode.
+    /// The image at `path` in `game`, blank if it isn't there or won't
+    /// decode.
     pub fn get(
         &mut self,
-        icon: Icon,
+        game: &GameData,
+        path: &str,
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
     ) -> Handle<Image> {
-        let decode = || textures::decode(icon.png, icon.name, formats, true);
-        let image = self
-            .0
-            .entry(icon.name)
-            .or_insert_with(|| decode().map(|i| images.add(i)).unwrap_or_default());
+        let image = self.0.entry(path.to_string()).or_insert_with(|| {
+            if !game.exists(path) {
+                warn!("no {path} in the data");
+            }
+            (textures::read(game, path, formats, true))
+                .map(|i| images.add(i))
+                .unwrap_or_default()
+        });
         image.clone()
     }
 }
