@@ -25,6 +25,7 @@ mod bars;
 mod experience;
 pub(crate) mod lettering;
 mod object;
+mod shortage;
 mod tips;
 
 use lettering::LayoutScale;
@@ -81,6 +82,7 @@ impl Plugin for OriginalHudPlugin {
                     (abilities::refresh, abilities::show).chain(),
                     abilities::fill,
                     experience::refresh,
+                    shortage::show,
                     (show_grid, tips::show).chain(),
                     bars::slide,
                 )
@@ -515,6 +517,7 @@ pub fn spawn(
     let colour = |c: Option<[f32; 3]>, or: Color| c.map_or(or, |[r, g, b]| Color::srgb(r, g, b));
     let short = colour(game.invalid_colour(), Color::srgb(1.0, 0.0, 0.0));
     let key = colour(game.highlight_colour(), Color::srgb(1.0, 1.0, 0.0));
+    let shortage = named(shortage::WIDGET).map(|w| shortage::build(w, &mut drawer));
     let cells = game.economy_bar();
     let impact = drawer.flags.economic_impact;
     let resource_bars: Vec<_> = (bars::BARS.iter())
@@ -564,6 +567,9 @@ pub fn spawn(
             }
             if let Some(experience) = experience {
                 experience.spawn(screen, &letters);
+            }
+            if let Some(shortage) = shortage {
+                shortage.spawn(screen);
             }
             if let Some((within, over)) = minimap_at {
                 screen.spawn((placed(&within), minimap.view()));
