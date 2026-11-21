@@ -322,10 +322,14 @@ impl World {
     }
 
     /// Whether the owner of the city centred on `c` holds it firmly enough
-    /// for it to give supply: its side outweighs its enemies there.
+    /// for it to give supply: nobody is there, or its side outweighs its
+    /// enemies there.
     fn held_firmly(&self, c: usize, zone: f32) -> bool {
         let owner = self.buildings[c].owner;
         let occupants = self.occupants(c, zone);
+        if occupants.is_empty() {
+            return true;
+        }
         let weight = |of: &dyn Fn(u32) -> bool| -> f32 {
             let theirs = occupants.iter().filter(|(o, _)| of(*o));
             theirs.map(|(_, w)| w).sum()
@@ -389,21 +393,28 @@ impl World {
         }
     }
 
+    /// How many seconds a bombardment hit by `from`, whose weapon takes
+    /// `recharge` seconds between shots, holds what it lands on: longer
+    /// while `from` is carrying out a bombard order, until the weapon could
+    /// have fired again too.
+    pub(crate) fn bombard_hold(&self, from: Target, recharge: f32) -> f32 {
+        let ordered = match from {
+            Target::Unit(u) => self.organizations[self.units[u].organization].bombarding,
+            Target::Building(_) => false,
+        };
+        let timeout = self.rules.supply_rules.bombard_timeout;
+        if ordered { timeout + recharge } else { timeout }
+    }
+
     /// Notes a bombardment's hit on the organization at `r` by `from`, whose
     /// weapon takes `recharge` seconds between shots.
     pub(crate) fn shell(&mut self, r: usize, from: Target, recharge: f32) {
         let by = self.piece(from);
-        let (ticks, timeout) = (self.ticks, self.rules.supply_rules.bombard_timeout);
+        let (ticks, seconds) = (self.ticks, self.bombard_hold(from, recharge));
         let organization = &mut self.organizations[r];
         match organization.bombarded.iter_mut().find(|b| b.by == by) {
             Some(known) => known.tick = ticks,
             None => {
-                // One that's bombarding is kept out until the weapon could
-                // have fired again too.
-                let seconds = match organization.bombarding {
-                    true => timeout + recharge,
-                    false => timeout,
-                };
                 organization.bombarded.push(Bombarder {
                     by,
                     tick: ticks,
@@ -792,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn cities_supply_only_while_their_side_outweighs_its_enemies_there() {
+    fn cities_supply_while_empty_or_their_side_outweighs_its_enemies_there() {
         let mut centre = city()[0].clone();
         centre.template = "centre".into();
         let mut w = siege(&[centre]);
@@ -803,7 +814,7 @@ mod tests {
             .insert(Id::from("centre"), supply(20.0, false, 0.0));
         // Nobody's there.
         run(&mut w, 1.0);
-        assert!(w.buildings[0].supply.zone.is_none());
+        assert!(w.supplied(2, [40.0, 20.0]));
         let to = |w: &mut World, x| {
             let to = [x, 10.0];
             w.apply(
@@ -819,8 +830,24 @@ mod tests {
         to(&mut w, 30.0);
         assert_eq!(w.buildings[0].owner, 1);
         assert!(w.supplied(1, [40.0, 20.0]));
+        // Left empty, it still supplies its new owner.
         to(&mut w, 10.0);
-        assert!(!w.supplied(1, [40.0, 20.0]));
+        assert!(w.supplied(1, [40.0, 20.0]));
+    }
+
+    #[test]
+    fn contested_cities_arent_held_firmly() {
+        let rifleman = || soldier(vec![rifle(12.0, 30.0)]);
+        let w = battle(&[1, 2], vec![rifleman(), rifleman()], at_war());
+        let mut centre = building(30, 1, [15.0, 15.0]);
+        centre.zone = Some(15.0);
+        let mut w = with_buildings(w, &[centre]);
+        // Equal weights.
+        assert!(!w.held_firmly(0, 15.0));
+        w.units[1].health /= 2.0;
+        assert!(w.held_firmly(0, 15.0));
+        w.units[0].health /= 4.0;
+        assert!(!w.held_firmly(0, 15.0));
     }
 
     #[test]
@@ -1127,15 +1154,28 @@ mod tests {
         assert!(!w.organizations[1].in_supply);
         run(&mut w, 1.0);
         assert!(w.organizations[1].in_supply && w.organizations[1].bombarded.is_empty());
-        // One that's bombarding waits out the weapon's recharge too, from
-        // each hit, and doesn't resupply meanwhile.
-        let a = w.organizations[1].units[0];
-        w.units[a].health = 10.0;
+        // What the shelled organization is doing plays no part.
         w.organizations[1].bombarding = true;
         w.shell(1, gun, 4.0);
-        run(&mut w, 3.0);
+        assert_eq!(w.organizations[1].bombarded[0].length, 10);
         w.organizations[1].bombarding = false;
-        w.shell(1, gun, 4.0);
+        run(&mut w, 2.0);
+        // One carrying out a bombard order when its first hit lands waits
+        // out the weapon's recharge too, from each hit, and the shelled
+        // organization doesn't resupply meanwhile.
+        let mut t = truck();
+        (t.id, t.owner) = (70, 2);
+        t.members[0].id = 70;
+        t.place([60.0, 30.0], [0.0, 1.0]);
+        w.add_organization(&t);
+        let mortar = Target::Unit(w.organizations[2].units[0]);
+        let a = w.organizations[1].units[0];
+        w.units[a].health = 10.0;
+        w.organizations[2].bombarding = true;
+        w.shell(1, mortar, 4.0);
+        run(&mut w, 3.0);
+        w.organizations[2].bombarding = false;
+        w.shell(1, mortar, 4.0);
         assert_eq!(w.organizations[1].bombarded[0].length, 50);
         run(&mut w, 4.0);
         assert!(!w.organizations[1].in_supply);
