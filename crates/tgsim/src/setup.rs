@@ -55,6 +55,7 @@ impl World {
             );
         }
         world.next_id = world.next_id.max(map.next_id());
+        world.grant_from_buildings();
         world
     }
 

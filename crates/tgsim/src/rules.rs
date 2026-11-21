@@ -165,6 +165,9 @@ pub struct Rules {
     /// What each template that researches lists, in its menu's order, by
     /// template id.
     pub research_lists: HashMap<Id, Vec<tgmap::Research>>,
+    /// The technologies each building template gives its side while the
+    /// side holds one, for those that give any.
+    pub granted: HashMap<Id, Vec<Id>>,
     /// The experience every side with a faction gains a second.
     pub experience_per_second: f32,
     /// How far each template sees, by template.
@@ -246,6 +249,7 @@ impl Default for Rules {
             plane_fall_tweak: 0.005,
             recruit_times: HashMap::new(),
             research_lists: HashMap::new(),
+            granted: HashMap::new(),
             experience_per_second: 0.0,
             sights: HashMap::new(),
             numbered: HashSet::new(),

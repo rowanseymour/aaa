@@ -77,7 +77,7 @@ pub use outcome::Fate;
 pub use packing::unpack_site;
 pub use properties::Held;
 pub use remains::Remains;
-pub use research::{Lacking, Researchable};
+pub use research::{Granted, Lacking, Researchable, Source};
 pub use rules::Rules;
 pub use schedule::{
     Action, CHAT_LONGEST, Channel, Diverged, Given, Pausing, Record, SPEEDS, Schedule, Votes,
@@ -176,8 +176,8 @@ pub struct World {
     /// The ids of the scenery buildings have cleared away, in the order
     /// they went.
     pub cleared: Vec<u32>,
-    /// The technologies each side has, by player id.
-    pub technologies: BTreeMap<u32, Vec<Id>>,
+    /// Each side's grants of technologies, by player id, oldest first.
+    pub technologies: BTreeMap<u32, Vec<Granted>>,
     /// The objectives each side holds, by player id.
     pub objectives: BTreeMap<u32, Objectives>,
     /// The heroes each side holds, by player id.
@@ -1279,6 +1279,7 @@ impl World {
         self.deliver();
         self.rally();
         self.unpack();
+        self.grant_from_buildings();
         self.earn();
         self.lead_sides();
         self.look();
@@ -1480,6 +1481,18 @@ digest!(tgmap::Settlement {
 impl Digest for Step {
     fn digest(&self, h: &mut Hasher) {
         (*self as u8).digest(h);
+    }
+}
+
+digest!(Granted { technology, source });
+
+impl Digest for Source {
+    fn digest(&self, h: &mut Hasher) {
+        match *self {
+            Source::Kept => 0u8.digest(h),
+            Source::Given => 1u8.digest(h),
+            Source::Building(b) => (2u8, b).digest(h),
+        }
     }
 }
 

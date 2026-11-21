@@ -220,6 +220,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         falls: game.falls(),
         recruit_times: game.recruit_times(),
         research_lists: game.research_lists(),
+        granted: game.granted_technologies(),
         experience_per_second: experience.per_second,
         sights: game.sights(),
         numbered: game.numbered(),

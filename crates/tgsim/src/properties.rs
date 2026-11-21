@@ -34,7 +34,7 @@ impl World {
             let has = |p| kind.is_some_and(|k| k.properties.contains(p));
             requires(e).iter().all(has)
         };
-        let technologies = self.technologies.get(&owner).into_iter().flatten();
+        let technologies = self.technologies_of(owner);
         let timed = held.into_iter().map(|h| &h.property);
         let of = |p| table.get(p);
         (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))

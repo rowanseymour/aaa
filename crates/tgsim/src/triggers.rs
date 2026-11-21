@@ -171,6 +171,10 @@ impl World {
                 (Some(a), Some(b)) => compare(comparison(p.get(1)), a, b),
                 _ => false,
             },
+            "kingdom_has_technology" => match (self.kingdom(p.first()), technology(p.get(1))) {
+                (Some(k), Some(t)) => self.holds(k, &t),
+                _ => false,
+            },
             "kingdom_has_compare_value_primary_resource" => {
                 match (self.kingdom(p.first()), self.number(p.get(2))) {
                     (Some(k), Some(v)) => {
@@ -195,6 +199,30 @@ impl World {
             "kingdom_loses_hero" => match (self.kingdom(p.first()), hero(p.get(1))) {
                 (Some(k), Some(Some(hero))) => self.lose_hero(k, &hero),
                 (Some(k), Some(None)) => self.lose_random_hero(k),
+                _ => false,
+            },
+            "kingdom_gains_technology" => {
+                let Some(t) = technology(p.get(1)) else {
+                    return false;
+                };
+                let all = p.first().is_some_and(|p| p.source == "mi_kingdom_all");
+                let kingdoms: Vec<u32> = match all {
+                    true => (self.sides.players.iter())
+                        .filter(|k| !k.independent)
+                        .map(|k| k.id)
+                        .collect(),
+                    false => self.kingdom(p.first()).into_iter().collect(),
+                };
+                for &k in &kingdoms {
+                    self.gain_taken_back(k, t.clone());
+                }
+                !kingdoms.is_empty()
+            }
+            "kingdom_loses_technology" => match (self.kingdom(p.first()), technology(p.get(1))) {
+                (Some(k), Some(t)) => {
+                    self.lose_given(k, &t);
+                    true
+                }
                 _ => false,
             },
             "kingdom_mission_won" => match self.kingdom(p.first()) {
@@ -364,6 +392,14 @@ fn hero(p: Option<&Parameter>) -> Option<Option<Id>> {
     }
 }
 
+/// The technology a parameter names.
+fn technology(p: Option<&Parameter>) -> Option<Id> {
+    match p.map(|p| (p.source.as_str(), &p.value))? {
+        ("mi_technology", Value::String(n)) if !n.is_empty() => Some(Id::from(n.as_str())),
+        _ => None,
+    }
+}
+
 /// The name a parameter gives.
 fn name(p: Option<&Parameter>) -> Option<&str> {
     match &p?.value {
@@ -380,7 +416,8 @@ mod tests {
     use crate::experience::regiment_tests::veterans;
     use crate::heroes::tests::pool;
     use crate::testing::run;
-    use crate::{Outcome, World};
+    use crate::{Notice, Outcome, World};
+    use tgmap::Id;
 
     fn parameter(kind: &str, source: &str, value: Value) -> Parameter {
         Parameter {
@@ -541,6 +578,59 @@ mod tests {
         w.tick();
         assert_eq!(count(&w, "n"), 1.0);
         assert!(!w.triggers.switches[1].active);
+    }
+
+    #[test]
+    fn triggers_give_and_take_technologies_one_grant_at_a_time() {
+        let radar = || {
+            parameter(
+                "ma_technology",
+                "mi_technology",
+                Value::String("radar".into()),
+            )
+        };
+        let all = parameter("ma_kingdom", "mi_kingdom_all", Value::Int(0));
+        let gains = |k: Parameter| element("kingdom_gains_technology", vec![k, radar()]);
+        let loses = |k: Parameter| element("kingdom_loses_technology", vec![k, radar()]);
+        let has = |k: u32| element("kingdom_has_technology", vec![kingdom(k), radar()]);
+        let start = trigger(
+            1,
+            true,
+            false,
+            Vec::new(),
+            vec![gains(kingdom(1)), gains(all)],
+        );
+        // Each loses one grant: player 1 keeps its other, and player 2's
+        // start technology is never taken.
+        let once = vec![
+            loses(kingdom(1)),
+            loses(kingdom(2)),
+            loses(kingdom(2)),
+            incr("n"),
+        ];
+        let lose = trigger(2, true, false, vec![has(1), has(2)], once);
+        let last = trigger(3, true, false, vec![after(1)], vec![loses(kingdom(1))]);
+        let mut w = with(pool(), vec![start, lose, last], &[("n", 0.0)]);
+        w.grant(2, Id::from("radar"));
+        w.sides.players[2].barred.push(Id::from("radar"));
+        w.tick();
+        assert_eq!(count(&w, "n"), 1.0);
+        assert!(w.holds(1, &Id::from("radar")) && w.holds(2, &Id::from("radar")));
+        assert!(!w.holds(3, &Id::from("radar")), "barred");
+        let told = |w: &World, lost: bool| {
+            (w.notices.iter())
+                .filter(|n| match n {
+                    Notice::Gained { player: 1, .. } => !lost,
+                    Notice::TechnologyLost { player: 1, .. } => lost,
+                    Notice::Gained { .. } | Notice::TechnologyLost { .. } => panic!("{n:?}"),
+                    _ => false,
+                })
+                .count()
+        };
+        assert_eq!((told(&w, false), told(&w, true)), (1, 0));
+        run(&mut w, 1.0);
+        assert!(!w.holds(1, &Id::from("radar")));
+        assert_eq!(told(&w, true), 1);
     }
 
     #[test]

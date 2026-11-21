@@ -119,8 +119,10 @@ fn refresh(
         return;
     }
     shown.refreshed = Some(now);
+    // A line for each grant, so a technology can show more than once.
     let held = local.0.and_then(|p| sim.0.technologies.get(&p));
     let ids: Vec<Id> = (held.into_iter().flatten())
+        .map(|g| &g.technology)
         .filter(|t| looks.lines.contains_key(*t))
         .cloned()
         .collect();
