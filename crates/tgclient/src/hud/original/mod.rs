@@ -27,7 +27,7 @@ mod object;
 mod tips;
 
 use lettering::LayoutScale;
-pub(crate) use object::{CardShows, Cards, fill_bars};
+pub(crate) use object::{Cards, fill_bars};
 
 use super::{Hud, InMatch};
 use crate::actions::{COLUMNS, ROWS, Shown, Slot};

@@ -32,6 +32,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -756,26 +757,92 @@ pub(crate) fn owner_colour(sim: &World, local: Option<u32>, owner: u32) -> Color
     }
 }
 
-/// What an organization's banner is drawn from.
-pub(crate) struct Flown<'a> {
+/// What either interface's object display reads of the match and the
+/// game to draw what's shown.
+pub(crate) struct Shows<'a> {
     pub sim: &'a World,
-    pub detail: &'a Detail,
+    pub local: Option<u32>,
     pub leaders: &'a Leaders,
+    pub gem: &'a ui::Gem,
+    pub drawn: &'a Drawn,
     pub badges: &'a Badges,
+    pub detail: &'a Detail,
     pub game: &'a GameData,
+    pub looks: &'a mut Looks,
+    pub banners: &'a mut BannerImages,
+    pub images: &'a mut Assets<Image>,
 }
 
-impl Flown<'_> {
+/// The resources [`Shows`] borrows, for a system that lays a display out.
+#[derive(SystemParam)]
+pub(crate) struct ShowsFrom<'w> {
+    sim: Res<'w, Sim>,
+    local: Res<'w, Local>,
+    leaders: Res<'w, Leaders>,
+    gem: Res<'w, ui::Gem>,
+    drawn: Res<'w, Drawn>,
+    badges: Res<'w, Badges>,
+    loaded: Res<'w, Loaded>,
+    looks: ResMut<'w, Looks>,
+    banners: ResMut<'w, BannerImages>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
+impl ShowsFrom<'_> {
+    /// What a display reads to draw `detail`.
+    pub(crate) fn shows<'a>(&'a mut self, detail: &'a Detail) -> Shows<'a> {
+        Shows {
+            sim: &self.sim.0,
+            local: self.local.0,
+            leaders: &self.leaders,
+            gem: &self.gem,
+            drawn: &self.drawn,
+            badges: &self.badges,
+            detail,
+            game: &self.loaded.game,
+            looks: &mut self.looks,
+            banners: &mut self.banners,
+            images: &mut self.images,
+        }
+    }
+}
+
+impl Shows<'_> {
+    /// The same, borrowed for a shorter while, such as to draw a card with.
+    pub(crate) fn reborrow(&mut self) -> Shows<'_> {
+        Shows {
+            looks: &mut *self.looks,
+            banners: &mut *self.banners,
+            images: &mut *self.images,
+            ..*self
+        }
+    }
+
+    pub(crate) fn picture(&mut self, template: &str) -> Option<Handle<Image>> {
+        picture(self.drawn, self.looks, self.game, self.images, template)
+    }
+
+    pub(crate) fn organization_name(&self, r: usize) -> String {
+        let looks = &self.looks;
+        organization_name(self.sim, &looks.names, &looks.strings, &looks.map, r)
+    }
+
+    pub(crate) fn building_name(&self, b: usize) -> String {
+        let looks = &self.looks;
+        building_name(self.sim, &looks.names, &looks.strings, &looks.map, b)
+    }
+
+    /// What `template` says of itself, if anything.
+    pub(crate) fn described(&self, template: &Id) -> Option<String> {
+        self.looks.listings.get(template)?.description.clone()
+    }
+
     /// The organization at `r`'s banner, as it flies over it: its layers,
     /// bottom first, each in its colour, with none where it has no such
     /// layer.
-    pub(crate) fn layers(
-        &self,
-        banners: &mut BannerImages,
-        images: &mut Assets<Image>,
-        r: usize,
-    ) -> [(Option<Handle<Image>>, Color); 5] {
-        let (sim, game) = (self.sim, self.game);
+    pub(crate) fn banner(&mut self, r: usize) -> [(Option<Handle<Image>>, Color); 5] {
+        let (sim, game, banners, images) =
+            (self.sim, self.game, &mut *self.banners, &mut *self.images);
         let organization = &sim.organizations[r];
         let [red, green, blue] = (sim.sides.player(organization.owner)).map_or([1.0; 3], |p| p.rgb);
         let template = organization.template.as_str();
@@ -794,6 +861,152 @@ impl Flown<'_> {
             (out_of_supply, Color::WHITE),
             (badge, Color::WHITE),
         ]
+    }
+}
+
+/// The parts of an object display, each drawn its interface's own way;
+/// which of them show, and in what order, is the same for both.
+pub(crate) trait Parts<'a> {
+    fn shows(&mut self) -> &mut Shows<'a>;
+    /// The name over the owner, and where it has `properties`, its icons.
+    fn title(&mut self, name: String, owner: u32, properties: bool);
+    /// The portrait of `template`, over a bar filled as `fill` says, both
+    /// giving `of`'s tooltip.
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says);
+    /// `target`'s weapons, each its icon with its main damage by it.
+    fn attacks(&mut self, target: Target);
+    /// The shield, with `target`'s defence by it, whose `template` gives
+    /// the icon; only called for a target with a defence.
+    fn defense(&mut self, target: Target, template: &Id);
+    /// What a lone thing's template says of it.
+    fn description(&mut self, says: String);
+    /// What the building at `b` is commissioning.
+    fn queue(&mut self, b: usize);
+    /// The relay at `b`'s stockpile, under its portrait.
+    fn stockpile(&mut self, b: usize);
+    /// The organization at `r`'s banner, between its efficiency and morale.
+    fn flag(&mut self, r: usize);
+    /// An HQ's places, with what `building`'s been asked for.
+    fn places(&mut self, building: Option<usize>);
+    /// A card for each of the organization at `r`'s units but `captain`.
+    fn units(&mut self, r: usize, captain: usize);
+    /// A card for each of the organizations at `rs`.
+    fn cards(&mut self, rs: &[usize]);
+    fn formation_buttons(&mut self);
+    /// What `status`'s thing counts for in its side's economy, and what
+    /// it's doing.
+    fn status(&mut self, status: Status);
+
+    /// Draws what's shown in `mode`.
+    fn draw(&mut self, mode: &Mode) {
+        match mode {
+            Mode::SimpleActor(actor) => self.simple_actor(actor),
+            Mode::Company(Actor::Organization(r)) => self.organization(*r),
+            Mode::Company(Actor::Building(b, _)) => {
+                let b = *b;
+                self.structure(b);
+                // An HQ unpacked from an organization shows its banner.
+                if let Some(r) = self.shows().sim.buildings[b].unpacked_from {
+                    self.flag(r);
+                }
+                self.places(Some(b));
+                self.status(Status::Building(b));
+            }
+            Mode::Group(rs) => {
+                let shows = self.shows();
+                let name = shows.organization_name(rs[0]);
+                let owner = shows.sim.organizations[rs[0]].owner;
+                self.title(name, owner, false);
+                self.cards(rs);
+            }
+            Mode::Settlement => {}
+        }
+        if matches!(mode, Mode::Company(Actor::Organization(_)) | Mode::Group(_)) {
+            self.formation_buttons();
+        }
+    }
+
+    /// The simple actor display: a building with what it's commissioning,
+    /// or a unit on its own.
+    fn simple_actor(&mut self, actor: &Actor) {
+        let sim = self.shows().sim;
+        let (target, template, own, status) = match *actor {
+            Actor::Organization(r) => {
+                let captain = self.heading(r);
+                let unit = sim.units[captain].template.clone();
+                let own = Some(&sim.organizations[r].template);
+                (Target::Unit(captain), unit, own, Status::Organization(r))
+            }
+            Actor::Building(b, _) => {
+                self.structure(b);
+                let template = sim.buildings[b].template.clone();
+                (Target::Building(b), template, None, Status::Building(b))
+            }
+        };
+        self.attacks(target);
+        if sim.defense(target).is_some() {
+            self.defense(target, &template);
+        }
+        match *actor {
+            // What it's commissioning shows where its description would.
+            Actor::Building(b, ref queue) if !queue.is_empty() => self.queue(b),
+            // An organization's template says more of it than its captain's.
+            _ => {
+                let shows = self.shows();
+                let says = own
+                    .into_iter()
+                    .chain([&template])
+                    .find_map(|t| shows.described(t));
+                if let Some(says) = says {
+                    self.description(says);
+                }
+            }
+        }
+        self.status(status);
+    }
+
+    /// The organization at `r`'s name and owner, and its captain's
+    /// portrait over the captain's health; gives the captain.
+    fn heading(&mut self, r: usize) -> usize {
+        let shows = self.shows();
+        let name = shows.organization_name(r);
+        let owner = shows.sim.organizations[r].owner;
+        let captain = captain(shows.sim, shows.looks, r);
+        let template = shows.sim.units[captain].template.clone();
+        self.title(name, owner, true);
+        self.portrait(template.as_str(), Fill::Unit(captain), Says::Unit(captain));
+        captain
+    }
+
+    /// The company display for the organization at `r`: its units, or as
+    /// an HQ its places, and its banner.
+    fn organization(&mut self, r: usize) {
+        let captain = self.heading(r);
+        let shows = self.shows();
+        // An HQ shows its places where an organization shows its units.
+        if !lone(shows.sim, r) && shows.detail.slots.is_empty() {
+            self.units(r, captain);
+        }
+        // A lone thing has this display only as an HQ, which still shows
+        // its banner.
+        self.flag(r);
+        self.places(None);
+        self.status(Status::Organization(r));
+    }
+
+    /// A building's name and owner, and its picture over its health and,
+    /// for a relay, its stockpile.
+    fn structure(&mut self, b: usize) {
+        let shows = self.shows();
+        let building = &shows.sim.buildings[b];
+        let (template, owner) = (building.template.clone(), building.owner);
+        let name = shows.building_name(b);
+        let stockpile = shows.detail.stockpile;
+        self.title(name, owner, true);
+        self.portrait(template.as_str(), Fill::Building(b), Says::Building(b));
+        if stockpile {
+            self.stockpile(b);
+        }
     }
 }
 

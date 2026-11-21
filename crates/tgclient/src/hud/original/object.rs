@@ -14,19 +14,17 @@ use bevy::text::Font as Face;
 use bevy::ui_widgets::Button;
 use tgdata::Id;
 use tgdata::widgets::{RESTING, Rect, SCREEN, ViewElement, Widget};
-use tgrender::overlay::BannerImages;
 use tgrender::portrait::Stage;
-use tgsim::{Target, World};
+use tgsim::Target;
 
 use super::Pictures;
 use super::lettering::{Letters, Measured, PLAIN, Sliced};
-use crate::banners::Badges;
 use crate::object_display::{
-    self as shown, Actor, Armed, Defends, Detail, Fill, Flown, Looks, Marker, Mode, Pick, Place,
-    Queued, Says, Shield, Showing, Status, Strikes, UnitPicture, WhileSeen,
+    self as shown, Armed, Defends, Fill, Looks, Marker, Mode, Parts as _, Pick, Place, Queued,
+    Says, Shield, Showing, Shows, ShowsFrom, Status, Strikes, UnitPicture, WhileSeen,
 };
 use crate::ui::{self, Hint, Shade};
-use crate::{Drawn, Leaders, Loaded, Local, Sim};
+use crate::{Local, Sim};
 
 /// The displays, one for each kind of thing shown.
 const SIMPLE: &str = "SimpleActorDisplay";
@@ -504,23 +502,13 @@ impl Painter<'_> {
 }
 
 /// Lays the display out afresh when what it should show changes.
-#[allow(clippy::too_many_arguments)]
 pub fn lay_out(
     mut commands: Commands,
     showing: Res<Showing>,
     // None where the layouts have no object display.
     layout: Option<Res<Layout>>,
     letters: Res<Letters>,
-    sim: Res<Sim>,
-    local: Res<Local>,
-    leaders: Res<Leaders>,
-    gem: Res<ui::Gem>,
-    drawn: Res<Drawn>,
-    badges: Res<Badges>,
-    loaded: Res<Loaded>,
-    mut looks: ResMut<Looks>,
-    mut banners: ResMut<BannerImages>,
-    mut images: ResMut<Assets<Image>>,
+    mut from: ShowsFrom,
     holder: Single<Entity, With<Holder>>,
     icons: Query<Entity, With<PropertyIcon>>,
 ) {
@@ -557,30 +545,11 @@ pub fn lay_out(
             },
             display,
             area: display.bounds(layout.at),
-            sim: &sim.0,
-            local: local.0,
-            leaders: &leaders,
-            gem: &gem,
-            drawn: &drawn,
-            badges: &badges,
-            detail,
-            game: &loaded.game,
-            looks: &mut looks,
-            banners: &mut banners,
-            images: &mut images,
+            shows: from.shows(detail),
         };
         draw.properties();
-        if showing.icons_only {
-            return;
-        }
-        match mode {
-            Mode::SimpleActor(actor) => draw.simple_actor(actor),
-            Mode::Company(actor) => draw.company(actor),
-            Mode::Group(rs) => draw.group(rs),
-            Mode::Settlement => {}
-        }
-        if matches!(mode, Mode::Company(Actor::Organization(_)) | Mode::Group(_)) {
-            draw.formation_buttons();
+        if !showing.icons_only {
+            draw.draw(mode);
         }
     });
 }
@@ -592,17 +561,7 @@ struct Draw<'a, 'w> {
     /// The layout of the display for what's shown, and where it is.
     display: &'a Widget,
     area: Rect,
-    sim: &'a World,
-    local: Option<u32>,
-    leaders: &'a Leaders,
-    gem: &'a ui::Gem,
-    drawn: &'a Drawn,
-    badges: &'a Badges,
-    detail: &'a Detail,
-    game: &'a tgdata::GameData,
-    looks: &'a mut Looks,
-    banners: &'a mut BannerImages,
-    images: &'a mut Assets<Image>,
+    shows: Shows<'a>,
 }
 
 /// `r` placed within `at`, as a share of its size.
@@ -627,7 +586,21 @@ fn spawn_faces(button: &mut ChildSpawnerCommands, faces: Vec<(Node, super::Drawn
     }
 }
 
-impl Draw<'_, '_> {
+impl<'a> shown::Parts<'a> for Draw<'a, '_> {
+    fn shows(&mut self) -> &mut Shows<'a> {
+        &mut self.shows
+    }
+
+    /// The relay's stockpile, under its portrait.
+    fn stockpile(&mut self, b: usize) {
+        let parts = self.part("SupplyStockpile", &["TargetPercentage"]);
+        self.fill(&parts, "StatusBar", Fill::Stockpile(b));
+        self.says(&parts, "", Says::Building(b));
+        if let Some(mut bar) = self.entity(&parts, "") {
+            bar.insert(WhileSeen(Target::Building(b)));
+        }
+    }
+
     /// The formation buttons, down the layout's panel for them from its
     /// top, each its height over [`MOST`](crate::formations::MOST) apart,
     /// drawn in the states they're in, with a place for the formation's
@@ -680,117 +653,8 @@ impl Draw<'_, '_> {
         }
     }
 
-    /// The pictures of `button` at `at` for the states it shows them in,
-    /// each placed within it.
-    fn faces(&self, button: &Widget, at: Rect) -> Vec<(Node, super::Drawn)> {
-        (button.view.iter())
-            .flat_map(|v| &v.children)
-            .filter_map(|e| {
-                let image = (self.painter.layout.images).get(e.texture.as_deref()?)?;
-                let element = ViewElement {
-                    children: Vec::new(),
-                    ..e.clone()
-                };
-                let drawn = super::Drawn {
-                    when: vec![element],
-                    image: image.clone(),
-                    greyed: None,
-                };
-                Some((share(e.bounds.place(at), at), drawn))
-            })
-            .collect()
-    }
-
-    /// The display's widget called `name`, drawn but for `skip`.
-    fn part(&mut self, name: &str, skip: &[&str]) -> Parts {
-        let Some(widget) = self.display.children.iter().find(|c| c.name == name) else {
-            return Parts::new();
-        };
-        self.painter.paint(self.s, widget, self.area, skip)
-    }
-
-    fn entity(&mut self, parts: &Parts, path: &str) -> Option<EntityCommands<'_>> {
-        let &(entity, _) = parts.get(path)?;
-        Some(self.s.commands_mut().entity(entity))
-    }
-
-    fn picture(&mut self, template: &str) -> Option<Handle<Image>> {
-        shown::picture(self.drawn, self.looks, self.game, self.images, template)
-    }
-
-    /// Shows `image` in the decal at `path`, if there's one to show.
-    fn show(&mut self, parts: &Parts, path: &str, image: Option<Handle<Image>>) {
-        if let Some(image) = image
-            && let Some(mut decal) = self.entity(parts, path)
-        {
-            decal.insert((ImageNode::new(image), Visibility::Inherited));
-        }
-    }
-
-    /// Fills the bar at `path` as `fill` says.
-    fn fill(&mut self, parts: &Parts, path: &str, fill: Fill) {
-        if let Some(mut bar) = self.entity(parts, path) {
-            bar.insert(fill);
-        }
-    }
-
-    /// Has the widget at `path` give `of`'s tooltip.
-    fn says(&mut self, parts: &Parts, path: &str, of: Says) {
-        if let Some(mut part) = self.entity(parts, path) {
-            part.insert((shown::says(of), Pickable::default()));
-        }
-    }
-
-    /// An icon for each property the shown thing holds that shows, left to
-    /// right along the `Properties` panel, as many as it has places for.
-    fn properties(&mut self) {
-        let Some(panel) = (self.display.children.iter()).find(|c| c.name == "Properties") else {
-            return;
-        };
-        let Some(bar) = panel.children.iter().find(|c| c.name == "PropertyBar") else {
-            return;
-        };
-        let separation = (panel.value("property_separation"))
-            .and_then(|v| v.trim().parse::<f32>().ok())
-            .unwrap_or(1.0)
-            .min(2.0);
-        let at = panel.bounds(self.area);
-        let width = bar.bounds(at).width();
-        let seen = self.detail.seen_as.map(WhileSeen);
-        let (tips, more) = self.looks.property_tips(&self.detail.properties);
-        for (n, (icon, tip)) in tips.into_iter().enumerate() {
-            let within = moved(at, n as f32 * (width + separation), 0.0);
-            let parts = self.painter.paint(self.s, bar, within, &[]);
-            let icon = self.looks.image(self.game, self.images, Some(&icon));
-            self.show(&parts, "Decal", icon);
-            self.mark_icon(&parts, Hint(tip), seen);
-        }
-        // The rest behind one marker at the panel's right end, which lists
-        // them.
-        let indicator = panel
-            .children
-            .iter()
-            .find(|c| c.name == "PropertyMoreIndicator");
-        if let (Some(tip), Some(indicator)) = (more, indicator) {
-            let size = indicator.bounds(at);
-            let within = moved(size, at.right - size.right, 0.0);
-            let parts = self.painter.paint(self.s, indicator, within, &[]);
-            self.mark_icon(&parts, Hint(tip), seen);
-        }
-    }
-
-    /// Makes the root of `parts` one of the property icons, saying `hint`.
-    fn mark_icon(&mut self, parts: &Parts, hint: Hint, seen: Option<WhileSeen>) {
-        if let Some(mut icon) = self.entity(parts, "") {
-            icon.insert((PropertyIcon, hint, Pickable::default()));
-            if let Some(seen) = seen {
-                icon.insert(seen);
-            }
-        }
-    }
-
     /// The name and owner lines.
-    fn title(&mut self, name: String, owner: u32) {
+    fn title(&mut self, name: String, owner: u32, _properties: bool) {
         let parts = self.part("Name", &[]);
         if let Some(mut label) = self.entity(&parts, "Label") {
             label.insert(Text::new(name));
@@ -799,11 +663,14 @@ impl Draw<'_, '_> {
         let Some(&(label, at)) = parts.get("Label") else {
             return;
         };
-        let Some(player) = self.sim.sides.player(owner) else {
+        let Some(player) = self.shows.sim.sides.player(owner) else {
             return;
         };
-        let colour = shown::owner_colour(self.sim, self.local, owner);
-        let name = self.leaders.owner(player, &self.sim.sides, &self.looks.map);
+        let colour = shown::owner_colour(self.shows.sim, self.shows.local, owner);
+        let name = self
+            .shows
+            .leaders
+            .owner(player, &self.shows.sim.sides, &self.shows.looks.map);
         // The owner's gem, as tall and wide as the line, then its name.
         let line = Node {
             align_items: AlignItems::Center,
@@ -811,8 +678,8 @@ impl Draw<'_, '_> {
             ..self.painter.place(at)
         };
         let font = self.font("Owner");
-        let mark =
-            (!player.independent).then(|| ui::side_mark(self.gem, player.rgb, Node::default()));
+        let mark = (!player.independent)
+            .then(|| ui::side_mark(self.shows.gem, player.rgb, Node::default()));
         let words = self.painter.letters.text(&font, &name, colour);
         let gem_size = Vec2::splat(at.height());
         let s = &mut *self.s;
@@ -831,21 +698,13 @@ impl Draw<'_, '_> {
         });
     }
 
-    /// The font of the display's label widget called `name`.
-    fn font(&self, name: &str) -> String {
-        let widget = self.display.children.iter().find(|c| c.name == name);
-        let label =
-            widget.and_then(|w| w.parts.iter().find(|p| p.kind.as_deref() == Some("LABEL")));
-        label.and_then(|l| l.font.clone()).unwrap_or(PLAIN.into())
-    }
-
     /// The portrait's box and frame, showing `template`'s picture until
     /// there's a portrait drawn, over a health bar filled as `fill` says,
     /// both giving `of`'s tooltip.
     fn portrait(&mut self, template: &str, fill: Fill, of: Says) {
         let skip = ["ModelPortrait", "Icon"];
         let parts = self.part("PortraitButton", &skip);
-        let picture = self.picture(template);
+        let picture = self.shows.picture(template);
         if let Some(&(model, _)) = parts.get("Portrait/Model") {
             let face = (
                 Node {
@@ -893,9 +752,6 @@ impl Draw<'_, '_> {
     /// The shield, with `target`'s defence by it, for one with a body,
     /// whose `template` gives the icon.
     fn defense(&mut self, target: Target, template: &Id) {
-        if self.sim.defense(target).is_none() {
-            return;
-        }
         let Some(values) = self.display.children.iter().find(|c| c.name == "Values") else {
             return;
         };
@@ -904,8 +760,11 @@ impl Draw<'_, '_> {
         };
         let within = values.bounds(self.area);
         let parts = self.painter.paint(self.s, widget, within, &[]);
-        let icon = (self.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
-        let icon = self.looks.image(self.game, self.images, icon.as_deref());
+        let icon = (self.shows.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
+        let icon = self
+            .shows
+            .looks
+            .image(self.shows.game, self.shows.images, icon.as_deref());
         self.show(&parts, "Icon/Decal", icon);
         if let Some(mut label) = self.entity(&parts, "Label/Label") {
             label.insert(Defends(target, Some(Color::WHITE)));
@@ -930,7 +789,7 @@ impl Draw<'_, '_> {
         let apart: f32 = apart.unwrap_or(0.0);
         let within = values.bounds(self.area);
         let row = widget.bounds(within).height() + apart;
-        let icons: Vec<Option<String>> = (self.sim.weapons(target).iter())
+        let icons: Vec<Option<String>> = (self.shows.sim.weapons(target).iter())
             .take(most)
             .map(|w| w.shown.icon.clone())
             .collect();
@@ -942,7 +801,10 @@ impl Draw<'_, '_> {
                 ..within
             };
             let parts = self.painter.paint(self.s, widget, within, &[]);
-            let icon = self.looks.image(self.game, self.images, icon.as_deref());
+            let icon = self
+                .shows
+                .looks
+                .image(self.shows.game, self.shows.images, icon.as_deref());
             self.show(&parts, "Icon/Decal", icon);
             if let Some(mut label) = self.entity(&parts, "Label/Label") {
                 label.insert(Strikes(target, i, Some(Color::WHITE)));
@@ -953,77 +815,11 @@ impl Draw<'_, '_> {
         }
     }
 
-    /// The box of what a lone thing's template says of it; none for one
-    /// that says nothing.
-    fn description(&mut self, says: Option<String>) {
-        let Some(says) = says else {
-            return;
-        };
+    /// The box of what a lone thing's template says of it.
+    fn description(&mut self, says: String) {
         let parts = self.part("DescriptionLabel", &[]);
         if let Some(mut label) = self.entity(&parts, "Label") {
             label.insert(Text::new(says));
-        }
-    }
-
-    fn described(&self, template: &Id) -> Option<String> {
-        self.looks.listings.get(template)?.description.clone()
-    }
-
-    /// The simple actor display: a building with what it's commissioning,
-    /// or a unit on its own.
-    fn simple_actor(&mut self, actor: &Actor) {
-        match *actor {
-            Actor::Organization(r) => {
-                let organization = &self.sim.organizations[r];
-                let name = self.organization_name(r);
-                self.title(name, organization.owner);
-                let captain = shown::captain(self.sim, self.looks, r);
-                let unit = self.sim.units[captain].template.clone();
-                self.portrait(unit.as_str(), Fill::Unit(captain), Says::Unit(captain));
-                self.attacks(Target::Unit(captain));
-                self.defense(Target::Unit(captain), &unit);
-                let says = [&organization.template, &unit];
-                let says = says.into_iter().find_map(|t| self.described(t));
-                self.description(says);
-                self.status(Status::Organization(r));
-            }
-            Actor::Building(b, ref queue) => {
-                self.structure(b);
-                let template = self.sim.buildings[b].template.clone();
-                self.attacks(Target::Building(b));
-                self.defense(Target::Building(b), &template);
-                // What it's commissioning shows where its description would.
-                match queue.is_empty() {
-                    true => self.description(self.described(&template)),
-                    false => self.queue(b),
-                }
-                self.status(Status::Building(b));
-            }
-        }
-    }
-
-    fn organization_name(&self, r: usize) -> String {
-        let looks = &self.looks;
-        shown::organization_name(self.sim, &looks.names, &looks.strings, &looks.map, r)
-    }
-
-    /// A building's name and owner, and its picture over its health and,
-    /// for a relay, its stockpile.
-    fn structure(&mut self, b: usize) {
-        let building = &self.sim.buildings[b];
-        let (template, owner) = (building.template.clone(), building.owner);
-        let looks = &self.looks;
-        let name = shown::building_name(self.sim, &looks.names, &looks.strings, &looks.map, b);
-        self.title(name, owner);
-        let of = Says::Building(b);
-        self.portrait(template.as_str(), Fill::Building(b), of);
-        if self.detail.stockpile {
-            let parts = self.part("SupplyStockpile", &["TargetPercentage"]);
-            self.fill(&parts, "StatusBar", Fill::Stockpile(b));
-            self.says(&parts, "", of);
-            if let Some(mut bar) = self.entity(&parts, "") {
-                bar.insert(WhileSeen(Target::Building(b)));
-            }
         }
     }
 
@@ -1046,7 +842,7 @@ impl Draw<'_, '_> {
         let most = number("max_queue_widgets").unwrap_or(shown::MAX_QUEUED);
         let across = number("max_queue_widgets_horizontal").unwrap_or(3).max(1);
         let at = panel.bounds(self.area);
-        let queue: Vec<String> = (self.sim.buildings[b].queue.iter())
+        let queue: Vec<String> = (self.shows.sim.buildings[b].queue.iter())
             .map(|c| c.template().to_string())
             .collect();
         let child = |name: &str| panel.children.iter().find(|c| c.name == name);
@@ -1061,7 +857,7 @@ impl Draw<'_, '_> {
             held: false,
         };
         let parts = self.painter.paint(self.s, current, at, &[]);
-        let picture = queue.first().and_then(|t| self.picture(t));
+        let picture = queue.first().and_then(|t| self.shows.picture(t));
         self.show(&parts, "UnitButtonDecal/Decal", picture);
         self.button(&parts, Queued(0), held(0), "object.queued.1");
         let parts = self
@@ -1080,7 +876,7 @@ impl Draw<'_, '_> {
             let (x, y) = ((n % across) as f32 * w, (n / across) as f32 * h);
             let within = moved(row, x, y);
             let parts = self.painter.paint(self.s, button, within, &[]);
-            let picture = self.picture(template);
+            let picture = self.shows.picture(template);
             self.show(&parts, "UnitButtonDecal/Decal", picture);
             let id = format!("object.queued.{}", place + 1);
             self.button(&parts, Queued(place), held(place), &id);
@@ -1093,57 +889,6 @@ impl Draw<'_, '_> {
         {
             self.painter.paint(self.s, more, row, &[]);
         }
-    }
-
-    /// Makes the widget of `parts` a button that calls off what's at
-    /// `place` in the queue.
-    fn button(&mut self, parts: &Parts, place: Queued, of: Says, id: &str) {
-        if let Some(mut button) = self.entity(parts, "") {
-            button
-                .insert((
-                    Button,
-                    ui::called(id),
-                    place,
-                    shown::says(of),
-                    Pickable::default(),
-                ))
-                .observe(shown::cancel);
-        }
-    }
-
-    /// The company display: an organization with its units, or an HQ with
-    /// its places.
-    fn company(&mut self, actor: &Actor) {
-        match *actor {
-            Actor::Organization(r) => self.organization(r),
-            Actor::Building(b, _) => {
-                self.structure(b);
-                // An HQ unpacked from an organization shows its banner.
-                if let Some(r) = self.sim.buildings[b].unpacked_from {
-                    self.flag(r);
-                }
-                self.places(Some(b));
-                self.status(Status::Building(b));
-            }
-        }
-    }
-
-    fn organization(&mut self, r: usize) {
-        let organization = &self.sim.organizations[r];
-        let name = self.organization_name(r);
-        self.title(name, organization.owner);
-        let captain = shown::captain(self.sim, self.looks, r);
-        let template = self.sim.units[captain].template.clone();
-        self.portrait(template.as_str(), Fill::Unit(captain), Says::Unit(captain));
-        let lone = shown::lone(self.sim, r);
-        if !lone && self.detail.slots.is_empty() {
-            self.units(r, captain);
-        }
-        // A lone thing has this display only as an HQ, which still shows
-        // its banner.
-        self.flag(r);
-        self.places(None);
-        self.status(Status::Organization(r));
     }
 
     /// A card for each of the organization at `r`'s units but an officer
@@ -1170,7 +915,7 @@ impl Draw<'_, '_> {
         let at = panel.bounds(self.area);
         let size = card.bounds(at);
         let size = Vec2::new(size.width(), size.height());
-        let groups = shown::card_groups(self.sim, self.looks, r, captain);
+        let groups = shown::card_groups(self.shows.sim, self.shows.looks, r, captain);
         let places = shown::card_places(
             &groups,
             size,
@@ -1186,7 +931,9 @@ impl Draw<'_, '_> {
                 within,
                 &["Properties", "Health/TargetPercentage"],
             );
-            let picture = self.picture(self.sim.units[u].template.as_str());
+            let picture = self
+                .shows
+                .picture(self.shows.sim.units[u].template.as_str());
             self.show(&parts, "UnitButton/UnitButtonDecal/Decal", picture);
             if let Some(mut decal) = self.entity(&parts, "UnitButton/UnitButtonDecal/Decal") {
                 decal.insert((UnitPicture(u), Shade::Full));
@@ -1206,6 +953,283 @@ impl Draw<'_, '_> {
         self.efficiency(&parts, "", r);
         let parts = self.part("Morale", &[]);
         self.marked(&parts, "", Fill::Morale(r), Marker::Breakpoint(r));
+    }
+
+    /// An HQ's places: each with the banner, health and morale of the
+    /// organization in it, which a click selects; the picture and progress
+    /// of what `building`'s queue holds it for, which a click calls off;
+    /// or empty.
+    fn places(&mut self, building: Option<usize>) {
+        let count = self.shows.detail.slots.len();
+        if count == 0 {
+            return;
+        }
+        let Some(panel) = self
+            .display
+            .children
+            .iter()
+            .find(|c| c.name == "HQAttached")
+        else {
+            return;
+        };
+        let Some(place) = panel
+            .children
+            .iter()
+            .find(|c| c.name == "HQAttachedOrganization")
+        else {
+            return;
+        };
+        let at = panel.bounds(self.area);
+        let size = place.bounds(at);
+        let area = Vec2::new(at.width(), at.height());
+        let slot = Vec2::new(size.width(), size.height());
+        let empty = self.shows.looks.said(shown::EMPTY_SLOT);
+        for (i, held) in self.shows.detail.slots.clone().into_iter().enumerate() {
+            let step = shown::spread(i, count, area, slot);
+            let within = moved(at, step.x, step.y);
+            // A banner where there's an organization and a picture where
+            // there isn't, with the bars of what's there.
+            let (shows, bars): (&str, &[&str]) = match held {
+                Place::Organization(_) => ("Button/ButtonModel", &["Health", "Morale"]),
+                Place::Queued(_) => ("Button/ButtonDecal", &["RecruitProgress"]),
+                Place::Flown(_) => ("Button/ButtonDecal", &["HealthTransport"]),
+                Place::Empty => ("Button/ButtonDecal", &[]),
+            };
+            let all = ["Health", "Morale", "HealthTransport", "RecruitProgress"];
+            let markers = all.map(|b| format!("{b}/TargetPercentage"));
+            let mut skip: Vec<&str> = markers.iter().map(String::as_str).collect();
+            let pictures = ["Button/ButtonDecal", "Button/ButtonModel"];
+            skip.extend(pictures.into_iter().filter(|p| *p != shows));
+            skip.extend(all.into_iter().filter(|b| !bars.contains(b)));
+            let parts = self.painter.paint(self.s, place, within, &skip);
+            let id = ui::called(format!("object.slot.{}", i + 1));
+            let fill = |this: &mut Self, name: &str, fill: Option<Fill>| {
+                if let Some(fill) = fill {
+                    this.fill(&parts, &format!("{name}/StatusBar"), fill);
+                }
+            };
+            match (held, building) {
+                (Place::Organization(r), _) => {
+                    self.banner(&parts, "Button/ButtonModel/Model", r);
+                    fill(self, "Health", Some(Fill::Organization(r)));
+                    fill(self, "Morale", Some(Fill::Morale(r)));
+                    if let Some(mut card) = self.entity(&parts, "") {
+                        let of = shown::says(Says::Organization(r));
+                        card.insert((Button, id, Pick(r), of, Pickable::default()))
+                            .observe(shown::pick);
+                    }
+                }
+                (Place::Queued(n), Some(b)) => {
+                    let queue = &self.shows.sim.buildings[b].queue;
+                    let template = queue.get(n).map(|c| c.template().to_string());
+                    let picture = template.and_then(|t| self.shows.picture(&t));
+                    self.show(&parts, "Button/ButtonDecal/Decal", picture);
+                    // Only the first is under way.
+                    fill(
+                        self,
+                        "RecruitProgress",
+                        (n == 0).then_some(Fill::Progress(b)),
+                    );
+                    let of = Says::Queued {
+                        building: b,
+                        place: n,
+                        held: true,
+                    };
+                    if let Some(mut card) = self.entity(&parts, "") {
+                        card.insert((Button, id, Queued(n), shown::says(of), Pickable::default()))
+                            .observe(shown::cancel);
+                    }
+                }
+                (Place::Flown(d), _) => {
+                    let template = self.shows.sim.deliveries[d].template.to_string();
+                    let picture = self.shows.picture(&template);
+                    self.show(&parts, "Button/ButtonDecal/Decal", picture);
+                    fill(self, "HealthTransport", Some(Fill::Flight));
+                    let name = shown::template_name(&self.shows.looks.names, &template);
+                    if let Some(mut card) = self.entity(&parts, "") {
+                        card.insert((Hint(name), Pickable::default()));
+                    }
+                }
+                _ => {
+                    if let Some(mut card) = self.entity(&parts, "") {
+                        card.insert((Hint(empty.clone()), Pickable::default()));
+                    }
+                }
+            }
+        }
+    }
+
+    /// A card for each, side by side.
+    fn cards(&mut self, rs: &[usize]) {
+        let offset = (self.display.value("mini_display_offset"))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(0.0);
+        // Each card after the last, whatever its kind and so its width.
+        let mut left = 0.0;
+        for r in shown::newest_first(rs) {
+            let Some(card) = card_widget(self.display, shown::lone(self.shows.sim, r)) else {
+                continue;
+            };
+            let size = card.bounds(self.area);
+            let at = moved(size, left, 0.0);
+            left += size.width() + offset;
+            let holder = self
+                .s
+                .spawn((self.painter.place(at), Pickable::IGNORE))
+                .id();
+            let commands = self.s.commands_mut();
+            let mut holder = commands.entity(holder);
+            holder.with_children(|s| {
+                let mut draw = Draw {
+                    s,
+                    painter: Painter {
+                        frame: card.bounds(SCREEN_RECT),
+                        ..self.painter
+                    },
+                    display: self.display,
+                    area: SCREEN_RECT,
+                    shows: self.shows.reborrow(),
+                };
+                draw.card(card, r);
+            });
+        }
+    }
+}
+
+impl Draw<'_, '_> {
+    /// The pictures of `button` at `at` for the states it shows them in,
+    /// each placed within it.
+    fn faces(&self, button: &Widget, at: Rect) -> Vec<(Node, super::Drawn)> {
+        (button.view.iter())
+            .flat_map(|v| &v.children)
+            .filter_map(|e| {
+                let image = (self.painter.layout.images).get(e.texture.as_deref()?)?;
+                let element = ViewElement {
+                    children: Vec::new(),
+                    ..e.clone()
+                };
+                let drawn = super::Drawn {
+                    when: vec![element],
+                    image: image.clone(),
+                    greyed: None,
+                };
+                Some((share(e.bounds.place(at), at), drawn))
+            })
+            .collect()
+    }
+
+    /// The display's widget called `name`, drawn but for `skip`.
+    fn part(&mut self, name: &str, skip: &[&str]) -> Parts {
+        let Some(widget) = self.display.children.iter().find(|c| c.name == name) else {
+            return Parts::new();
+        };
+        self.painter.paint(self.s, widget, self.area, skip)
+    }
+
+    fn entity(&mut self, parts: &Parts, path: &str) -> Option<EntityCommands<'_>> {
+        let &(entity, _) = parts.get(path)?;
+        Some(self.s.commands_mut().entity(entity))
+    }
+
+    /// Shows `image` in the decal at `path`, if there's one to show.
+    fn show(&mut self, parts: &Parts, path: &str, image: Option<Handle<Image>>) {
+        if let Some(image) = image
+            && let Some(mut decal) = self.entity(parts, path)
+        {
+            decal.insert((ImageNode::new(image), Visibility::Inherited));
+        }
+    }
+
+    /// Fills the bar at `path` as `fill` says.
+    fn fill(&mut self, parts: &Parts, path: &str, fill: Fill) {
+        if let Some(mut bar) = self.entity(parts, path) {
+            bar.insert(fill);
+        }
+    }
+
+    /// Has the widget at `path` give `of`'s tooltip.
+    fn says(&mut self, parts: &Parts, path: &str, of: Says) {
+        if let Some(mut part) = self.entity(parts, path) {
+            part.insert((shown::says(of), Pickable::default()));
+        }
+    }
+
+    /// An icon for each property the shown thing holds that shows, left to
+    /// right along the `Properties` panel, as many as it has places for.
+    fn properties(&mut self) {
+        let Some(panel) = (self.display.children.iter()).find(|c| c.name == "Properties") else {
+            return;
+        };
+        let Some(bar) = panel.children.iter().find(|c| c.name == "PropertyBar") else {
+            return;
+        };
+        let separation = (panel.value("property_separation"))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(1.0)
+            .min(2.0);
+        let at = panel.bounds(self.area);
+        let width = bar.bounds(at).width();
+        let seen = self.shows.detail.seen_as.map(WhileSeen);
+        let (tips, more) = self
+            .shows
+            .looks
+            .property_tips(&self.shows.detail.properties);
+        for (n, (icon, tip)) in tips.into_iter().enumerate() {
+            let within = moved(at, n as f32 * (width + separation), 0.0);
+            let parts = self.painter.paint(self.s, bar, within, &[]);
+            let icon = self
+                .shows
+                .looks
+                .image(self.shows.game, self.shows.images, Some(&icon));
+            self.show(&parts, "Decal", icon);
+            self.mark_icon(&parts, Hint(tip), seen);
+        }
+        // The rest behind one marker at the panel's right end, which lists
+        // them.
+        let indicator = panel
+            .children
+            .iter()
+            .find(|c| c.name == "PropertyMoreIndicator");
+        if let (Some(tip), Some(indicator)) = (more, indicator) {
+            let size = indicator.bounds(at);
+            let within = moved(size, at.right - size.right, 0.0);
+            let parts = self.painter.paint(self.s, indicator, within, &[]);
+            self.mark_icon(&parts, Hint(tip), seen);
+        }
+    }
+
+    /// Makes the root of `parts` one of the property icons, saying `hint`.
+    fn mark_icon(&mut self, parts: &Parts, hint: Hint, seen: Option<WhileSeen>) {
+        if let Some(mut icon) = self.entity(parts, "") {
+            icon.insert((PropertyIcon, hint, Pickable::default()));
+            if let Some(seen) = seen {
+                icon.insert(seen);
+            }
+        }
+    }
+
+    /// The font of the display's label widget called `name`.
+    fn font(&self, name: &str) -> String {
+        let widget = self.display.children.iter().find(|c| c.name == name);
+        let label =
+            widget.and_then(|w| w.parts.iter().find(|p| p.kind.as_deref() == Some("LABEL")));
+        label.and_then(|l| l.font.clone()).unwrap_or(PLAIN.into())
+    }
+
+    /// Makes the widget of `parts` a button that calls off what's at
+    /// `place` in the queue.
+    fn button(&mut self, parts: &Parts, place: Queued, of: Says, id: &str) {
+        if let Some(mut button) = self.entity(parts, "") {
+            button
+                .insert((
+                    Button,
+                    ui::called(id),
+                    place,
+                    shown::says(of),
+                    Pickable::default(),
+                ))
+                .observe(shown::cancel);
+        }
     }
 
     /// Fills the efficiency bar at `path` of `parts` for the organization
@@ -1248,7 +1272,7 @@ impl Draw<'_, '_> {
             Node {
                 position_type: PositionType::Absolute,
                 top: px(0),
-                left: shown::marked(self.sim, marker),
+                left: shown::marked(self.shows.sim, marker),
                 width,
                 height,
                 margin: UiRect::left(percent(-w)),
@@ -1270,14 +1294,7 @@ impl Draw<'_, '_> {
         let Some(&(model, _)) = parts.get(path) else {
             return;
         };
-        let layers = Flown {
-            sim: self.sim,
-            detail: self.detail,
-            leaders: self.leaders,
-            badges: self.badges,
-            game: self.game,
-        }
-        .layers(self.banners, self.images, r);
+        let layers = self.shows.banner(r);
         let commands = self.s.commands_mut();
         for (image, colour) in layers {
             let Some(image) = image else {
@@ -1301,166 +1318,12 @@ impl Draw<'_, '_> {
         }
     }
 
-    /// An HQ's places: each with the banner, health and morale of the
-    /// organization in it, which a click selects; the picture and progress
-    /// of what `building`'s queue holds it for, which a click calls off;
-    /// or empty.
-    fn places(&mut self, building: Option<usize>) {
-        let count = self.detail.slots.len();
-        if count == 0 {
-            return;
-        }
-        let Some(panel) = self
-            .display
-            .children
-            .iter()
-            .find(|c| c.name == "HQAttached")
-        else {
-            return;
-        };
-        let Some(place) = panel
-            .children
-            .iter()
-            .find(|c| c.name == "HQAttachedOrganization")
-        else {
-            return;
-        };
-        let at = panel.bounds(self.area);
-        let size = place.bounds(at);
-        let area = Vec2::new(at.width(), at.height());
-        let slot = Vec2::new(size.width(), size.height());
-        let empty = self.looks.said(shown::EMPTY_SLOT);
-        for (i, held) in self.detail.slots.clone().into_iter().enumerate() {
-            let step = shown::spread(i, count, area, slot);
-            let within = moved(at, step.x, step.y);
-            // A banner where there's an organization and a picture where
-            // there isn't, with the bars of what's there.
-            let (shows, bars): (&str, &[&str]) = match held {
-                Place::Organization(_) => ("Button/ButtonModel", &["Health", "Morale"]),
-                Place::Queued(_) => ("Button/ButtonDecal", &["RecruitProgress"]),
-                Place::Flown(_) => ("Button/ButtonDecal", &["HealthTransport"]),
-                Place::Empty => ("Button/ButtonDecal", &[]),
-            };
-            let all = ["Health", "Morale", "HealthTransport", "RecruitProgress"];
-            let markers = all.map(|b| format!("{b}/TargetPercentage"));
-            let mut skip: Vec<&str> = markers.iter().map(String::as_str).collect();
-            let pictures = ["Button/ButtonDecal", "Button/ButtonModel"];
-            skip.extend(pictures.into_iter().filter(|p| *p != shows));
-            skip.extend(all.into_iter().filter(|b| !bars.contains(b)));
-            let parts = self.painter.paint(self.s, place, within, &skip);
-            let id = ui::called(format!("object.slot.{}", i + 1));
-            let fill = |this: &mut Self, name: &str, fill: Option<Fill>| {
-                if let Some(fill) = fill {
-                    this.fill(&parts, &format!("{name}/StatusBar"), fill);
-                }
-            };
-            match (held, building) {
-                (Place::Organization(r), _) => {
-                    self.banner(&parts, "Button/ButtonModel/Model", r);
-                    fill(self, "Health", Some(Fill::Organization(r)));
-                    fill(self, "Morale", Some(Fill::Morale(r)));
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        let of = shown::says(Says::Organization(r));
-                        card.insert((Button, id, Pick(r), of, Pickable::default()))
-                            .observe(shown::pick);
-                    }
-                }
-                (Place::Queued(n), Some(b)) => {
-                    let queue = &self.sim.buildings[b].queue;
-                    let template = queue.get(n).map(|c| c.template().to_string());
-                    let picture = template.and_then(|t| self.picture(&t));
-                    self.show(&parts, "Button/ButtonDecal/Decal", picture);
-                    // Only the first is under way.
-                    fill(
-                        self,
-                        "RecruitProgress",
-                        (n == 0).then_some(Fill::Progress(b)),
-                    );
-                    let of = Says::Queued {
-                        building: b,
-                        place: n,
-                        held: true,
-                    };
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        card.insert((Button, id, Queued(n), shown::says(of), Pickable::default()))
-                            .observe(shown::cancel);
-                    }
-                }
-                (Place::Flown(d), _) => {
-                    let template = self.sim.deliveries[d].template.to_string();
-                    let picture = self.picture(&template);
-                    self.show(&parts, "Button/ButtonDecal/Decal", picture);
-                    fill(self, "HealthTransport", Some(Fill::Flight));
-                    let name = shown::template_name(&self.looks.names, &template);
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        card.insert((Hint(name), Pickable::default()));
-                    }
-                }
-                _ => {
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        card.insert((Hint(empty.clone()), Pickable::default()));
-                    }
-                }
-            }
-        }
-    }
-
-    /// The group display: the first's name and owner, and a card for
-    /// each.
-    fn group(&mut self, rs: &[usize]) {
-        let first = rs[0];
-        let name = self.organization_name(first);
-        self.title(name, self.sim.organizations[first].owner);
-        let offset = (self.display.value("mini_display_offset"))
-            .and_then(|v| v.trim().parse::<f32>().ok())
-            .unwrap_or(0.0);
-        // Each card after the last, whatever its kind and so its width.
-        let mut left = 0.0;
-        for r in shown::newest_first(rs) {
-            let Some(card) = card_widget(self.display, shown::lone(self.sim, r)) else {
-                continue;
-            };
-            let size = card.bounds(self.area);
-            let at = moved(size, left, 0.0);
-            left += size.width() + offset;
-            let holder = self
-                .s
-                .spawn((self.painter.place(at), Pickable::IGNORE))
-                .id();
-            let commands = self.s.commands_mut();
-            let mut holder = commands.entity(holder);
-            holder.with_children(|s| {
-                let mut draw = Draw {
-                    s,
-                    painter: Painter {
-                        frame: card.bounds(SCREEN_RECT),
-                        ..self.painter
-                    },
-                    display: self.display,
-                    area: SCREEN_RECT,
-                    sim: self.sim,
-                    local: self.local,
-                    leaders: self.leaders,
-                    gem: self.gem,
-                    drawn: self.drawn,
-                    badges: self.badges,
-                    detail: self.detail,
-                    game: self.game,
-                    looks: &mut *self.looks,
-                    banners: &mut *self.banners,
-                    images: &mut *self.images,
-                };
-                draw.card(card, r);
-            });
-        }
-    }
-
     /// The group display's card for the organization at `r`, drawn from
     /// `card`'s layout to fill the node it's drawn in: a lone thing's
     /// picture and health, or a regiment's banner over its efficiency,
     /// morale, captain's health and a small bar for each of the rest.
     fn card(&mut self, card: &Widget, r: usize) {
-        let lone = shown::lone(self.sim, r);
+        let lone = shown::lone(self.shows.sim, r);
         let skip = [
             "PortraitButton/Portrait",
             "PortraitButton/ModelPortrait",
@@ -1473,12 +1336,12 @@ impl Draw<'_, '_> {
             "PrimaryHealth/TargetPercentage",
         ];
         let parts = self.painter.paint(self.s, card, SCREEN_RECT, &skip);
-        let captain = shown::captain(self.sim, self.looks, r);
+        let captain = shown::captain(self.shows.sim, self.shows.looks, r);
         let of = match lone {
             true => Says::Unit(captain),
             false => Says::Organization(r),
         };
-        let id = format!("object.organization.{}", self.sim.organizations[r].id);
+        let id = format!("object.organization.{}", self.shows.sim.organizations[r].id);
         if let Some(mut node) = self.entity(&parts, "") {
             node.insert((
                 Button,
@@ -1499,8 +1362,8 @@ impl Draw<'_, '_> {
             true => {
                 if let Some(icon) = inner("Icon") {
                     let parts = self.painter.paint(self.s, icon, at, &[]);
-                    let template = self.sim.units[captain].template.clone();
-                    let picture = self.picture(template.as_str());
+                    let template = self.shows.sim.units[captain].template.clone();
+                    let picture = self.shows.picture(template.as_str());
                     self.show(&parts, "Decal", picture);
                 }
                 self.fill(&parts, "Health/StatusBar", Fill::Unit(captain));
@@ -1532,11 +1395,12 @@ impl Draw<'_, '_> {
         let at = button.bounds(at);
         let faces = self.faces(button, at);
         // Shown at once, so it's there to press as soon as the card is.
-        let shown =
-            crate::ui::visible(crate::actions::card_order(self.sim, self.local, r).is_some());
+        let shown = crate::ui::visible(
+            crate::actions::card_order(self.shows.sim, self.shows.local, r).is_some(),
+        );
         let id = format!(
             "object.organization.{}.retreat",
-            self.sim.organizations[r].id
+            self.shows.sim.organizations[r].id
         );
         self.s
             .spawn((
@@ -1570,7 +1434,7 @@ impl Draw<'_, '_> {
         let area = panel.bounds(at);
         let size = bar.bounds(area);
         let size = Vec2::new(size.width(), size.height());
-        for (n, u) in shown::small_bars(self.sim, self.looks, r)
+        for (n, u) in shown::small_bars(self.shows.sim, self.shows.looks, r)
             .into_iter()
             .enumerate()
         {
@@ -1625,21 +1489,6 @@ pub struct Cards {
     pub(super) letters: Letters,
 }
 
-/// The things a card shows of the match, as its interface has them.
-pub(crate) struct CardShows<'a> {
-    pub sim: &'a World,
-    pub local: Option<u32>,
-    pub leaders: &'a Leaders,
-    pub gem: &'a ui::Gem,
-    pub drawn: &'a Drawn,
-    pub badges: &'a Badges,
-    pub detail: &'a Detail,
-    pub game: &'a tgdata::GameData,
-    pub looks: &'a mut Looks,
-    pub banners: &'a mut BannerImages,
-    pub images: &'a mut Assets<Image>,
-}
-
 impl Cards {
     /// How big the card for a thing on its own, or an organization, is, in
     /// the layouts' units; none where the layouts have no such card.
@@ -1660,7 +1509,7 @@ impl Cards {
 
     /// Draws the card for the organization at `r` to fill the node `s`
     /// spawns into, as the group display shows it.
-    pub(crate) fn draw(&self, s: &mut ChildSpawnerCommands, shows: CardShows, r: usize) {
+    pub(crate) fn draw(&self, s: &mut ChildSpawnerCommands, shows: Shows, r: usize) {
         let Some(display) = self.layout.displays.get(GROUP) else {
             return;
         };
@@ -1676,17 +1525,7 @@ impl Cards {
             },
             display,
             area: SCREEN_RECT,
-            sim: shows.sim,
-            local: shows.local,
-            leaders: shows.leaders,
-            gem: shows.gem,
-            drawn: shows.drawn,
-            badges: shows.badges,
-            detail: shows.detail,
-            game: shows.game,
-            looks: shows.looks,
-            banners: shows.banners,
-            images: shows.images,
+            shows,
         };
         draw.card(card, r);
     }
