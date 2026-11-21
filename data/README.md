@@ -12,5 +12,6 @@ Images can be SVGs, drawn without text, so letters have to be paths. An SVG is
 drawn at the size it gives itself: give an icon about three times the texels
 it's drawn at, so that it stays sharp when the interface is scaled up.
 
-The fonts are under the [SIL Open Font License](modern/Fonts/TrueType/OFL.txt);
-the rest is under this project's [licence](../LICENSE).
+The fonts are under the SIL Open Font License, given beside each, e.g.
+[`modern/Fonts/TrueType/OFL.txt`](modern/Fonts/TrueType/OFL.txt); the rest is
+under this project's [licence](../LICENSE).

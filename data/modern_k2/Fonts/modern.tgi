@@ -1,0 +1,22 @@
+;; K2's faces, in place of the shared ones: its own for the logo's lettering
+;; and headings, the shared plain face for the rest.
+
+[Font]
+{
+	ids = modern_stencil
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/CinzelDecorative-700.ttf
+	}
+}
+
+[Font]
+{
+	ids = modern_plain
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/BigShouldersText-600.ttf
+	}
+}
