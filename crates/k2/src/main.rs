@@ -21,5 +21,6 @@ fn main() -> ExitCode {
             map: "(1v1)Battleground",
             focus: [128.0, 128.0],
         },
+        emblems: &[],
     })
 }

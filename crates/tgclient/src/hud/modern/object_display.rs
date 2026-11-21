@@ -100,6 +100,14 @@ const WEAPON_ROW: f32 = 21.0;
 const DESCRIPTION: [f32; 4] = [244.0, 46.0, 239.0, 104.0];
 const DESCRIPTION_IN: f32 = 5.0;
 
+/// How much of the display's height the player's nation's emblem fills,
+/// and how faintly it shows.
+const EMBLEM_ACROSS: f32 = 0.6;
+const EMBLEM_ALPHA: f32 = 0.07;
+
+/// Texels down the image the emblem is drawn in.
+const EMBLEM_TEXELS: u32 = 128;
+
 /// Spawns our interface's object display, at the middle of the window's
 /// lower edge.
 pub fn spawn(mut commands: Commands) {
@@ -147,6 +155,41 @@ pub fn spawn(mut commands: Commands) {
             DespawnOnExit(super::DRAWN),
         ))
         .add_children(&[said, display]);
+}
+
+/// Puts the player's nation's emblem behind the display, or takes it away
+/// where the nation has none, as the player or the display changes.
+pub fn emblem(
+    mut commands: Commands,
+    program: Res<crate::Program>,
+    sim: Res<Sim>,
+    local: Res<Local>,
+    mut images: ResMut<Assets<Image>>,
+    display: Single<Entity, With<ObjectDisplay>>,
+    mut drawn: bevy::prelude::Local<Option<(Entity, Option<String>)>>,
+) {
+    let nation = local.0.and_then(|p| sim.0.sides.player(p)?.nation.clone());
+    let now = (*display, nation);
+    if drawn.as_ref() == Some(&now) {
+        return;
+    }
+    let (_, nation) = drawn.insert(now);
+    let emblem = program
+        .emblems
+        .iter()
+        .find(|(id, _)| Some(*id) == nation.as_deref());
+    let Some((_, emblem)) = emblem else {
+        commands.entity(*display).remove::<ImageNode>();
+        return;
+    };
+    let texels = UVec2::new(
+        (EMBLEM_TEXELS as f32 * SIZE.x / SIZE.y).round() as u32,
+        EMBLEM_TEXELS,
+    );
+    let image = emblem.image(texels, EMBLEM_ACROSS, EMBLEM_ALPHA);
+    commands
+        .entity(*display)
+        .insert(ImageNode::new(images.add(image)));
 }
 
 /// Lays the display out afresh when what it should show changes.

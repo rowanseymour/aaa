@@ -37,6 +37,7 @@ mod deliveries;
 mod displays;
 mod drive;
 mod effects;
+mod emblem;
 mod fields;
 mod fog;
 mod formations;
@@ -80,6 +81,7 @@ mod ui;
 mod waypoints;
 
 pub use backdrop::View;
+pub use emblem::{Emblem, Shape};
 pub use ui::Palette;
 
 /// For a [`Palette`]'s colours.
@@ -136,6 +138,9 @@ pub struct Program {
     pub palette: Palette,
     /// What the main menu stands over.
     pub backdrop: View,
+    /// Each nation's emblem, by the nation's id, that our interface draws
+    /// faintly behind its object display.
+    pub emblems: &'static [(&'static str, Emblem)],
 }
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
