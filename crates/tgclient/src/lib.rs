@@ -284,6 +284,24 @@ fn shot_due(after: Res<ShotAfter>, started: Option<Res<MatchStarted>>, time: Res
     started.is_some_and(|s| time.elapsed_secs_f64() - s.0 >= after.0)
 }
 
+/// The folders of this project's own data for the game tagged `tag`, in the
+/// order they're looked in after the game's: `modern_<tag>` where there's
+/// one, then `modern`, both in the first folder named `data` at or above
+/// the program's that has `modern`, as an install of the program or the
+/// checkout it was built in does.
+fn own_data(tag: &str) -> Result<Vec<PathBuf>, String> {
+    let program = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("can't find where the program is: {e}"))?;
+    let root = (program.ancestors().skip(1))
+        .map(|dir| dir.join("data"))
+        .find(|data| data.join("modern").is_dir())
+        .ok_or_else(|| format!("no data/modern beside {} or above it", program.display()))?;
+    let own = root.join(format!("modern_{tag}"));
+    let own = own.is_dir().then_some(own);
+    Ok(own.into_iter().chain([root.join("modern")]).collect())
+}
+
 /// Plays the game `program` is of, as its command line asks.
 pub fn run(program: Program) -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -333,17 +351,21 @@ pub fn run(program: Program) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let opened = GameData::open(&PathBuf::from(dir)).and_then(|game| {
+    let opened = GameData::open(&PathBuf::from(dir)).and_then(|mut game| {
         own_game(&game, program.tag).map_err(|e| format!("{dir}: {e}"))?;
+        for depot in own_data(program.tag)? {
+            game.add_depot(&depot)?;
+        }
+        let faces = ui::Faces::read(&game)?;
         let Some(map) = map else {
-            return Ok((game, None));
+            return Ok((game, None, faces));
         };
         let name = game
             .find_map(map)
             .ok_or_else(|| format!("no map named {map:?}; run without one to pick from a menu"))?;
-        Ok((game, Some(name)))
+        Ok((game, Some(name), faces))
     });
-    let (game, map) = match opened {
+    let (game, map, faces) = match opened {
         Ok(o) => o,
         Err(e) => {
             eprintln!("{}: {e}", program.name);
@@ -713,6 +735,7 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(music::Music::new(&game))
         .insert_resource(volumes)
         .insert_resource(Data(Arc::new(game)))
+        .insert_resource(faces)
         .init_resource::<ui::Gem>()
         .add_systems(
             Startup,

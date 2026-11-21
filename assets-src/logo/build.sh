@@ -11,7 +11,7 @@ set -eu
 src=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$src/../.." && pwd)
 out=$root/assets/logo
-font=$root/assets/fonts/BigShouldersStencilDisplay-800.ttf
+font=$root/data/modern/Fonts/TrueType/BigShouldersStencilDisplay-800.ttf
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 

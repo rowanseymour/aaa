@@ -1,0 +1,22 @@
+;; The faces this project's own interface sets its text in, given as the
+;; game gives its fonts.
+
+[Font]
+{
+	ids = modern_stencil
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/BigShouldersStencilDisplay-800.ttf
+	}
+}
+
+[Font]
+{
+	ids = modern_plain
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/BigShouldersText-600.ttf
+	}
+}

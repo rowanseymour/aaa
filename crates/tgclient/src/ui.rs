@@ -344,20 +344,42 @@ const PLAIN: Handle<Face> = uuid_handle!("f5c773eb-4ca7-4c04-80e4-2f691862ea4e")
 /// sets its text in another.
 pub const HUD: Handle<Face> = uuid_handle!("c36b3287-1c7b-4378-b32a-61c4bce2710a");
 
-const PLAIN_FACE: &[u8] = include_bytes!("../../../assets/fonts/BigShouldersText-600.ttf");
+/// The faces [`STENCIL`] and [`PLAIN`] are, from this project's own data,
+/// as the `[Font]`s of these `ids`.
+const STENCIL_IDS: &str = "modern_stencil";
+const PLAIN_IDS: &str = "modern_plain";
 
-fn faces(mut fonts: ResMut<Assets<Face>>) {
+/// The interface's faces, as their files' bytes.
+#[derive(Resource)]
+pub struct Faces {
+    stencil: Vec<u8>,
+    plain: Vec<u8>,
+}
+
+impl Faces {
+    /// Reads the faces from `game`, or says which isn't there.
+    pub fn read(game: &GameData) -> Result<Faces, String> {
+        let face = |ids: &str| {
+            let file = game.font(ids).and_then(|f| f.file);
+            file.and_then(|f| game.read(&f))
+                .ok_or_else(|| format!("no font {ids} in this project's data"))
+        };
+        Ok(Faces {
+            stencil: face(STENCIL_IDS)?,
+            plain: face(PLAIN_IDS)?,
+        })
+    }
+}
+
+fn faces(faces: Res<Faces>, mut fonts: ResMut<Assets<Face>>) {
     let faces = [
-        (
-            STENCIL,
-            &include_bytes!("../../../assets/fonts/BigShouldersStencilDisplay-800.ttf")[..],
-        ),
-        (PLAIN, PLAIN_FACE),
-        (HUD, PLAIN_FACE),
+        (STENCIL, &faces.stencil),
+        (PLAIN, &faces.plain),
+        (HUD, &faces.plain),
     ];
     for (handle, bytes) in faces {
         // Never fails for a fixed handle.
-        let _ = fonts.insert(handle.id(), Face::from_bytes(bytes.to_vec()));
+        let _ = fonts.insert(handle.id(), Face::from_bytes(bytes.clone()));
     }
 }
 

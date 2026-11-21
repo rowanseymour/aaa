@@ -106,17 +106,18 @@ use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use tgck::{Archive, Entry, Map};
+use tgck::{Archive, Map};
 
 pub struct GameData {
     /// The install's folder.
     dir: PathBuf,
-    /// Each behind a lock of its own, as reading one moves its place in
-    /// the file.
-    archives: Vec<Mutex<Archive<BufReader<File>>>>,
-    /// Each archive's entries, to look them up without the lock.
-    entries: Vec<Vec<Entry>>,
-    /// Lower-case path to entry; where archives share a path the first wins.
+    /// Where the files are, in the order their paths are looked up: the
+    /// game's archives, then those [`GameData::add_depot`] adds.
+    depots: Vec<Depot>,
+    /// Each depot's paths, as it spells them, to look them up without a
+    /// lock.
+    entries: Vec<Vec<String>>,
+    /// Lower-case path to entry; where depots share a path the first wins.
     paths: HashMap<String, EntryRef>,
     /// The archive paths of the `.tgi` files the game loads, in the order
     /// it loads them.
@@ -303,17 +304,83 @@ pub(crate) fn scoped<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> Vec<Scope
         .collect()
 }
 
-/// An entry of one of [`GameData`]'s archives: `(archive, entry)` indices.
+/// An entry of one of [`GameData`]'s depots: `(depot, entry)` indices.
 type EntryRef = (usize, usize);
 
 /// A nation's skin, from [`GameData::skin`]: its depots, in the order
 /// given.
 pub struct Skin(Vec<Depot>);
 
-/// Where a skin's files are: an archive, or a folder of loose files.
+/// Where files are: an archive, or a folder of loose files laid out as an
+/// archive's paths are.
 enum Depot {
+    /// Behind a lock of its own, as reading one moves its place in the
+    /// file.
     Archive(Mutex<Archive<BufReader<File>>>),
     Folder(PathBuf),
+}
+
+impl Depot {
+    /// The folder or archive at `path`.
+    fn open(path: &Path) -> Result<Depot, String> {
+        if path.is_dir() {
+            return Ok(Depot::Folder(path.to_path_buf()));
+        }
+        let archive = Archive::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(Depot::Archive(Mutex::new(archive)))
+    }
+
+    /// Every file's path, `/` between its parts: an archive's in its
+    /// order, a folder's sorted, leaving out those whose names start with
+    /// a `.`.
+    fn names(&self) -> Vec<String> {
+        match self {
+            Depot::Archive(archive) => (locked(archive).entries.iter())
+                .map(|e| e.name.clone())
+                .collect(),
+            Depot::Folder(dir) => {
+                let mut names = Vec::new();
+                walk(dir, "", &mut names);
+                names.sort_unstable();
+                names
+            }
+        }
+    }
+
+    /// The file at `name`, the `i`th of [`Depot::names`].
+    fn read_at(&self, i: usize, name: &str) -> Option<Vec<u8>> {
+        match self {
+            Depot::Archive(archive) => {
+                let mut archive = locked(archive);
+                let entry = archive.entries.get(i)?.clone();
+                archive.read(&entry).ok()
+            }
+            Depot::Folder(dir) => std::fs::read(dir.join(name)).ok(),
+        }
+    }
+}
+
+/// Adds the paths of the files under `dir` to `out`, each after `prefix`.
+fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.filter_map(Result::ok) {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            log::warn!("{}: not a name paths can give", entry.path().display());
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = format!("{prefix}{name}");
+        // Links to folders aren't followed, so that one can't loop.
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => walk(&entry.path(), &format!("{path}/"), out),
+            Ok(t) if t.is_file() || entry.path().is_file() => out.push(path),
+            _ => {}
+        }
+    }
 }
 
 impl Skin {
@@ -348,38 +415,67 @@ impl GameData {
     /// Opens the archives in the game's install directory: `Data.rwd`, which
     /// must be there, and the music and speech archives if they are.
     pub fn open(dir: &Path) -> Result<Self, String> {
-        let open =
-            |path: PathBuf| Archive::open(&path).map_err(|e| format!("{}: {e}", path.display()));
         let data = find_case_insensitive(dir, "Data.rwd")
             .ok_or_else(|| format!("no Data.rwd in {}", dir.display()))?;
-        let mut archives = vec![open(data)?];
-        for name in EXTRA_ARCHIVES {
-            if let Some(path) = find_case_insensitive(dir, name) {
-                archives.push(open(path)?);
-            }
-        }
-        let entries: Vec<Vec<Entry>> = archives.iter().map(|a| a.entries.clone()).collect();
-        let mut paths = HashMap::new();
-        for (a, entries) in entries.iter().enumerate() {
-            for (i, e) in entries.iter().enumerate() {
-                paths.entry(e.name.to_ascii_lowercase()).or_insert((a, i));
-            }
-        }
+        let extras = EXTRA_ARCHIVES
+            .iter()
+            .filter_map(|name| find_case_insensitive(dir, name));
         let mut game = GameData {
             dir: dir.to_path_buf(),
-            archives: archives.into_iter().map(Mutex::new).collect(),
-            entries,
-            paths,
+            depots: Vec::new(),
+            entries: Vec::new(),
+            paths: HashMap::new(),
             tgis: Vec::new(),
             tag: None,
             parsed: Mutex::default(),
             tables: Mutex::default(),
         };
+        for path in [data].into_iter().chain(extras) {
+            game.push(Depot::open(&path)?);
+        }
         let names: Vec<String> = game.entries().map(str::to_string).collect();
         game.tag = game_tag(&names);
-        let tgis = listed_tgis(&names, |name| game.read(name).map(|b| tgi::decode(&b)));
-        game.tgis = tgis;
+        game.list_tgis();
         Ok(game)
+    }
+
+    /// Adds the folder or archive at `path` after the depots there are, so
+    /// that its files are found where theirs aren't, and the `.tgi` files
+    /// its load lists name are loaded after theirs. The game stays the one
+    /// [`GameData::tag`] said it was.
+    pub fn add_depot(&mut self, path: &Path) -> Result<(), String> {
+        if !path.exists() {
+            return Err(format!("no {}", path.display()));
+        }
+        self.push(Depot::open(path)?);
+        self.list_tgis();
+        // What was read before may have been read without it.
+        self.parsed
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.tables
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        Ok(())
+    }
+
+    fn push(&mut self, depot: Depot) {
+        let d = self.depots.len();
+        let names = depot.names();
+        for (i, name) in names.iter().enumerate() {
+            self.paths
+                .entry(name.to_ascii_lowercase())
+                .or_insert((d, i));
+        }
+        self.depots.push(depot);
+        self.entries.push(names);
+    }
+
+    fn list_tgis(&mut self) {
+        let names: Vec<String> = self.entries().map(str::to_string).collect();
+        self.tgis = listed_tgis(&names, |name| self.read(name).map(|b| tgi::decode(&b)));
     }
 
     /// A nation's skin, from its depots ([`Nation::skin`]), paths in the
@@ -390,33 +486,28 @@ impl GameData {
         let depots: Vec<Depot> = (depots.iter())
             .filter_map(|d| {
                 let path = find_path(&self.dir, d)?;
-                if path.is_dir() {
-                    return Some(Depot::Folder(path));
-                }
-                match Archive::open(&path) {
-                    Ok(archive) => Some(Depot::Archive(Mutex::new(archive))),
-                    Err(e) => {
-                        log::warn!("{}: {e}", path.display());
-                        None
-                    }
-                }
+                Depot::open(&path).map_err(|e| log::warn!("{e}")).ok()
             })
             .collect();
         (!depots.is_empty()).then_some(Skin(depots))
     }
 
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
-        let (a, i) = *self.paths.get(&name.to_ascii_lowercase())?;
-        locked(&self.archives[a]).read(&self.entries[a][i]).ok()
+        let (d, i) = *self.paths.get(&name.to_ascii_lowercase())?;
+        self.depots[d].read_at(i, &self.entries[d][i])
     }
 
-    /// Every entry's path, in archive order.
+    /// Every path, in depot order, as the depot it's found in spells it:
+    /// those another depot has first are left out.
     fn entries(&self) -> impl Iterator<Item = &str> {
-        self.entries.iter().flatten().map(|e| e.name.as_str())
+        (self.entries.iter().enumerate())
+            .flat_map(|(d, names)| names.iter().enumerate().map(move |(i, n)| (d, i, n)))
+            .filter(|(d, i, n)| self.paths.get(&n.to_ascii_lowercase()) == Some(&(*d, *i)))
+            .map(|(_, _, n)| n.as_str())
     }
 
-    pub(crate) fn entry_name(&self, (a, i): EntryRef) -> &str {
-        &self.entries[a][i].name
+    pub(crate) fn entry_name(&self, (d, i): EntryRef) -> &str {
+        &self.entries[d][i]
     }
 
     /// A `.tgi` file, parsed the first time it's asked for and kept.
@@ -1071,13 +1162,92 @@ mod tests {
     fn empty() -> GameData {
         GameData {
             dir: PathBuf::new(),
-            archives: Vec::new(),
+            depots: Vec::new(),
             entries: Vec::new(),
             paths: HashMap::new(),
             tgis: Vec::new(),
             tag: None,
             parsed: Mutex::default(),
             tables: Mutex::default(),
+        }
+    }
+
+    /// A folder of `files`, by path, for a test called `name`.
+    fn folder(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tgdata-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, text) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn added_depots_are_looked_in_after_those_there() {
+        let first = folder(
+            "first",
+            &[
+                ("index_x.lst", "Things/*.tgi"),
+                ("Things/a.tgi", "[Thing]\nids = first"),
+            ],
+        );
+        let second = folder(
+            "second",
+            &[
+                ("index_y.lst", "Extra/b.tgi"),
+                ("Things/A.tgi", "[Thing]\nids = second"),
+                ("Extra/b.tgi", "[Thing]\nids = extra"),
+                (".hidden", ""),
+            ],
+        );
+        // A link back up, which mustn't be followed round and round.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&second, second.join("Extra/loop")).unwrap();
+        let mut game = empty();
+        game.add_depot(&first).unwrap();
+        // Read before the second is there, which mustn't be kept.
+        assert_eq!(game.parse_tgis(|_| true).len(), 1);
+        game.add_depot(&second).unwrap();
+
+        assert_eq!(game.read("things/a.tgi").unwrap(), b"[Thing]\nids = first");
+        assert_eq!(game.read("EXTRA/B.TGI").unwrap(), b"[Thing]\nids = extra");
+        assert!(!game.exists(".hidden"));
+        assert_eq!(game.tgis, ["Things/a.tgi", "Extra/b.tgi"]);
+        assert_eq!(game.entry_names(|n| n == "things/a.tgi"), ["Things/a.tgi"]);
+        assert_eq!(game.parse_tgis(|_| true).len(), 2);
+        assert!(game.add_depot(&first.join("missing")).is_err());
+
+        for dir in [first, second] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn this_projects_own_fonts_are_there() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let mut game = empty();
+        for entry in std::fs::read_dir(&data).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                game.add_depot(&path).unwrap();
+            }
+        }
+        let fonts = game.parse_named(
+            (game
+                .entry_names(|n| n.starts_with("fonts/") && n.ends_with(".tgi"))
+                .iter())
+            .map(String::as_str),
+        );
+        let ids: Vec<String> = (fonts.iter())
+            .flat_map(|(_, f)| f.root.blocks_of("Font"))
+            .filter_map(|f| f.field("ids")?.value.clone())
+            .collect();
+        assert!(!ids.is_empty());
+        for ids in ids {
+            let file = game.font(&ids).and_then(|f| f.file);
+            assert!(file.is_some(), "{ids} has no face");
         }
     }
 
