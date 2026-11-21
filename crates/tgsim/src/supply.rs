@@ -322,10 +322,14 @@ impl World {
     }
 
     /// Whether the owner of the city centred on `c` holds it firmly enough
-    /// for it to give supply: its side outweighs its enemies there.
+    /// for it to give supply: nobody is there, or its side outweighs its
+    /// enemies there.
     fn held_firmly(&self, c: usize, zone: f32) -> bool {
         let owner = self.buildings[c].owner;
         let occupants = self.occupants(c, zone);
+        if occupants.is_empty() {
+            return true;
+        }
         let weight = |of: &dyn Fn(u32) -> bool| -> f32 {
             let theirs = occupants.iter().filter(|(o, _)| of(*o));
             theirs.map(|(_, w)| w).sum()
@@ -792,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn cities_supply_only_while_their_side_outweighs_its_enemies_there() {
+    fn cities_supply_while_empty_or_their_side_outweighs_its_enemies_there() {
         let mut centre = city()[0].clone();
         centre.template = "centre".into();
         let mut w = siege(&[centre]);
@@ -803,7 +807,7 @@ mod tests {
             .insert(Id::from("centre"), supply(20.0, false, 0.0));
         // Nobody's there.
         run(&mut w, 1.0);
-        assert!(w.buildings[0].supply.zone.is_none());
+        assert!(w.supplied(2, [40.0, 20.0]));
         let to = |w: &mut World, x| {
             let to = [x, 10.0];
             w.apply(
@@ -819,8 +823,24 @@ mod tests {
         to(&mut w, 30.0);
         assert_eq!(w.buildings[0].owner, 1);
         assert!(w.supplied(1, [40.0, 20.0]));
+        // Left empty, it still supplies its new owner.
         to(&mut w, 10.0);
-        assert!(!w.supplied(1, [40.0, 20.0]));
+        assert!(w.supplied(1, [40.0, 20.0]));
+    }
+
+    #[test]
+    fn contested_cities_arent_held_firmly() {
+        let rifleman = || soldier(vec![rifle(12.0, 30.0)]);
+        let w = battle(&[1, 2], vec![rifleman(), rifleman()], at_war());
+        let mut centre = building(30, 1, [15.0, 15.0]);
+        centre.zone = Some(15.0);
+        let mut w = with_buildings(w, &[centre]);
+        // Equal weights.
+        assert!(!w.held_firmly(0, 15.0));
+        w.units[1].health /= 2.0;
+        assert!(w.held_firmly(0, 15.0));
+        w.units[0].health /= 4.0;
+        assert!(!w.held_firmly(0, 15.0));
     }
 
     #[test]
