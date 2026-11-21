@@ -1,7 +1,6 @@
 //! Our button over the minimap that steps through the player's detached
 //! organizations.
 
-use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
@@ -28,10 +27,10 @@ pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut cache: ResMut<crate::ui::ImageCache>,
 ) {
     let game = &loaded.game;
-    let icon = crate::ui::read_image(game, CYCLE_ICON, formats.0).map(|i| images.add(i));
+    let icon = cache.get(game, &mut images, CYCLE_ICON);
     let help = game.strings().get(CYCLE_HELP).cloned();
     commands.spawn((
         CycleDetached,

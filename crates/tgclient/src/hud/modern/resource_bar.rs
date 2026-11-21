@@ -3,7 +3,6 @@
 //! previewing what the order under the cursor would make of them.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
-use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use crate::resource_bar::{Cell, Previewing, stockpile};
@@ -33,17 +32,17 @@ pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut cache: ResMut<crate::ui::ImageCache>,
 ) {
     let game = &loaded.game;
     let strings = game.strings();
     let said = crate::ui::said(&strings);
-    let shortage = crate::ui::read_image(game, SHORTAGE_ICON, formats.0).map(|i| images.add(i));
+    let shortage = cache.get(game, &mut images, SHORTAGE_ICON);
     let shortage_tip = said(
         "game_interface_UpkeepShortageIcon_ToolTip",
         "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
     );
-    let glyphs = crate::ui::glyphs(game, &mut images, formats.0);
+    let glyphs = crate::ui::glyphs(game, &mut images, &mut cache);
     let stockpile = stockpile(game);
     let cells = game.economy_bar();
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
