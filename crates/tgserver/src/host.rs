@@ -452,7 +452,7 @@ impl<L: Link> Host<L> {
     ) -> Result<u32, Refusal> {
         players.sort_unstable();
         players.dedup();
-        let taken = |name: &str| self.clients.iter().any(|c| c.name == name);
+        let taken = |name: &str| self.client_named(name);
         let name = crate::name(name).map(|n| crate::unique(&n, &self.naming.numbered, taken));
         // Its name is what it asked with, so it didn't ask with a message.
         let refused = (self.refuses(&players))
@@ -617,10 +617,15 @@ impl<L: Link> Host<L> {
         let played = |p: &u32| {
             sides.names.contains_key(p) || sides.computers.contains_key(p) || self.seated(*p)
         };
-        self.clients.iter().any(|c| c.name == name)
+        self.client_named(name)
             || sides.computers.values().any(|c| c == name)
             || self.taking_over.iter().any(to_take_over)
             || (self.naming.computers.iter()).any(|(p, c)| c == name && !played(p))
+    }
+
+    /// Whether a client goes by `name`.
+    fn client_named(&self, name: &str) -> bool {
+        self.clients.iter().any(|c| c.name == name)
     }
 
     /// Whether a client gives side `player`'s orders.
@@ -705,12 +710,11 @@ impl<L: Link> Host<L> {
             // first, unless someone let in since plays it. Its person is
             // named unlike those let in since, who weren't numbered by them.
             let departed = std::mem::take(&mut self.departed);
-            let played = |&(player, _): &(u32, _)| {
-                (self.clients.iter()).any(|c| c.players.contains(&player))
-            };
-            for (player, name) in departed.into_iter().filter(|d| !played(d)) {
-                let taken = |n: &str| self.clients.iter().any(|c| c.name == n);
-                let name = crate::unique(&name, &self.naming.numbered, taken);
+            let departed: Vec<_> = (departed.into_iter())
+                .filter(|&(player, _)| !self.seated(player))
+                .collect();
+            for (player, name) in departed {
+                let name = crate::unique(&name, &self.naming.numbered, |n| self.client_named(n));
                 let taken_over = self.take_over(player, &name);
                 self.taking_over
                     .extend([Action::Name { player, name }, taken_over]);

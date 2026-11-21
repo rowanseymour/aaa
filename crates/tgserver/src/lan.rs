@@ -2,7 +2,6 @@
 //! [`QUERY_PORT`] with what its game is, and a search broadcasts one and
 //! gathers the answers.
 
-use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, Instant};
 
@@ -92,7 +91,7 @@ impl Advertiser {
             let from = match self.socket.recv_from(&mut heard) {
                 Ok((n, from)) if heard[..n] == query() => from,
                 Ok(_) => continue,
-                Err(e) if e.kind() == ErrorKind::WouldBlock => return,
+                // Nothing more has come, or the socket has failed.
                 Err(_) => return,
             };
             let mut answer = MAGIC.to_vec();
@@ -169,7 +168,7 @@ impl Search {
                         ping: self.sent.elapsed(),
                     });
                 }
-                Err(e) if e.kind() == ErrorKind::WouldBlock => return found,
+                // Nothing more has come, or the socket has failed.
                 Err(_) => return found,
             }
         }

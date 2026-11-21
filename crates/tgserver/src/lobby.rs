@@ -10,9 +10,10 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tgdata::{Id, RuleValues};
 
+use crate::client::{ask_in, first_answer};
 use crate::host::{LONGEST_HEARD, greet, joining, worth_saying};
 use crate::presets::Preset;
-use crate::protocol::{Gone, Join, PROTOCOL, Said, ToClient, ToHost, Welcome, decode, encode};
+use crate::protocol::{Gone, Said, ToClient, ToHost, Welcome, decode, encode};
 use crate::{Clock, Host, Link, Lost, Naming, NotJoined, Refusal, Setup, ping, refuse};
 
 /// The seconds a launch counts down, unless the game's data says
@@ -627,12 +628,7 @@ impl<L: Link> Lobby<L> {
 /// Asks the host of a game being set up, at the other end of `link`, to
 /// let in a person going by `name` with the game's `password`.
 pub fn enter_lobby(link: &mut impl Link, name: String, password: String) -> Result<(), Lost> {
-    link.send(encode(&Join {
-        protocol: PROTOCOL,
-        players: Vec::new(),
-        name,
-        password,
-    }))
+    ask_in(link, Vec::new(), name, password)
 }
 
 /// A person's end of a game being set up.
@@ -654,10 +650,9 @@ impl<L: Link> Entry<L> {
     /// one who asked to come in: the person's end of the game, once it's
     /// let them in, or else the link back while it has yet to say.
     pub fn entered(mut link: L) -> Result<Result<Entry<L>, L>, NotJoined> {
-        let heard = link.receive().map_err(|_| NotJoined::Lost)?;
-        match heard.map(|m| decode(&m)) {
+        match first_answer(&mut link)? {
             None => Ok(Err(link)),
-            Some(Some(ToClient::Entered { client, name })) => Ok(Ok(Entry {
+            Some(ToClient::Entered { client, name }) => Ok(Ok(Entry {
                 link,
                 me: client,
                 name,
@@ -667,7 +662,6 @@ impl<L: Link> Entry<L> {
                 left: Vec::new(),
                 told: Vec::new(),
             })),
-            Some(Some(ToClient::Refused(refusal))) => Err(NotJoined::Refused(refusal)),
             Some(_) => Err(NotJoined::Lost),
         }
     }
