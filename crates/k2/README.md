@@ -1,9 +1,9 @@
-# tag-k2
+# k2
 
 Plays Kohan II matches with [`tgclient`](../tgclient):
 
 ```sh
-cargo run --release -p tag-k2 -- "/path/to/Kohan II" ["(1v1)Battleground"]
+cargo run --release -p k2 -- "/path/to/Kohan II" ["(1v1)Battleground"]
 ```
 
 Licensed under the [GNU GPL v3 or later](../../LICENSE).

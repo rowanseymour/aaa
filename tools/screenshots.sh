@@ -104,7 +104,7 @@ game() {
         exit 2
         ;;
     esac
-    shoot "$1" "$bin/tag-aa" "$game" "$2" --dev --exec "$work/$1.txt" --shot-after "${3:-0}" \
+    shoot "$1" "$bin/aa" "$game" "$2" --dev --exec "$work/$1.txt" --shot-after "${3:-0}" \
         --options "$(options "$hud")" --screenshot "$work/$1.png"
 }
 
@@ -112,7 +112,7 @@ game() {
 menus() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    shoot "$1" "$bin/tag-aa" "$game" --dev --exec "$work/$1.txt" --options "$(options "${2:-modern}")" \
+    shoot "$1" "$bin/aa" "$game" --dev --exec "$work/$1.txt" --options "$(options "${2:-modern}")" \
         --screenshot "$work/$1.png"
 }
 
@@ -200,7 +200,7 @@ EOF
 build() {
     checkout=$1
     shift
-    cargo build --release -p tag-aa -p tgeditor --manifest-path "$checkout/Cargo.toml" "$@"
+    cargo build --release -p aa -p tgeditor --manifest-path "$checkout/Cargo.toml" "$@"
 }
 
 # Stops if any scene couldn't be shot, saying which and from what.

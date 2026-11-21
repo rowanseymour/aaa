@@ -1,5 +1,5 @@
 [package]
-name = "tag-k2"
+name = "k2"
 version = "0.1.0-alpha"
 edition.workspace = true
 rust-version.workspace = true
