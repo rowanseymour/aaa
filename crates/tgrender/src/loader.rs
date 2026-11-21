@@ -127,12 +127,11 @@ impl<'a> Loader<'a, '_> {
         let replaced = texture.is_some() && texturing.is_some_and(|t| t.replaces());
         let material = nif.property::<nif::Material>(props);
         let uv_set = base.map_or(0, |b| b.uv_set as usize);
+        let vertex_colours = nif.property::<nif::VertexColor>(props);
         // Vertex colours tint a mesh only where they stand for its ambient
         // and diffuse colours, as they do without a property to say.
         let tinted = !replaced
-            && nif
-                .property::<nif::VertexColor>(props)
-                .is_none_or(|v| v.stand_for() == VertexColors::AmbientDiffuse);
+            && vertex_colours.is_none_or(|v| v.stand_for() == VertexColors::AmbientDiffuse);
         let mut mesh = mesh(g, transform, uv_set, tinted)?;
         if self.pickable {
             mesh.asset_usage = RenderAssetUsages::default();
@@ -146,10 +145,7 @@ impl<'a> Loader<'a, '_> {
         let emissive = material.map_or([0.0; 3], |m| m.emissive);
         // Shapes no light reaches show their emissive colour alone, such
         // as the glow of a lit window.
-        let unlit = replaced
-            || nif
-                .property::<nif::VertexColor>(props)
-                .is_some_and(|v| !v.lit());
+        let unlit = replaced || vertex_colours.is_some_and(|v| !v.lit());
         let ([r, g, b], emissive) = match (replaced, unlit) {
             (true, _) => ([1.0; 3], [0.0; 3]),
             (false, true) => (emissive, [0.0; 3]),

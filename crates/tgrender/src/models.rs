@@ -977,10 +977,11 @@ impl Models {
         paint: Paint,
         offset: f32,
     ) {
-        let parts = match model.meshes {
+        // A rig's nodes, for particle systems that hang from them.
+        let rigged = match model.meshes {
             Meshes::Parts(parts) => {
-                particles::spawn(commands, &model.particles, root, |_| None, offset);
-                parts
+                self.spawn_parts(commands, assets, root, parts, paint, offset);
+                None
             }
             Meshes::Rig(rig) => {
                 let materials = rig
@@ -988,11 +989,27 @@ impl Models {
                     .map(|p| self.own_paint(assets, p, paint))
                     .collect();
                 let joints = rig.spawn(commands, root, offset, materials);
-                let node = |i| rig.joint(i).map(|j| joints[j]);
-                particles::spawn(commands, &model.particles, root, node, offset);
-                return;
+                Some((rig, joints))
             }
         };
+        let node = |i| {
+            let (rig, joints) = rigged.as_ref()?;
+            rig.joint(i).map(|j| joints[j])
+        };
+        particles::spawn(commands, &model.particles, root, node, offset);
+    }
+
+    /// Spawns a model's meshes that stand as modelled under `root`,
+    /// painted as `paint` says, animations `offset` seconds in.
+    fn spawn_parts(
+        &mut self,
+        commands: &mut Commands,
+        assets: &mut ModelAssets,
+        root: Entity,
+        parts: Vec<Part>,
+        paint: Paint,
+        offset: f32,
+    ) {
         let materials: Vec<_> = parts
             .iter()
             .map(|p| self.own_paint(assets, p, paint))
