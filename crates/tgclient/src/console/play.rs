@@ -686,6 +686,10 @@ pub(crate) fn build(world: &mut World, args: &[&str]) -> Reply {
     let organization = organization_by_id(sim, id)?;
     let owner = sim.organizations[organization].owner;
     let template = tgmap::Id::from(*template);
+    // As aiming does: the order itself doesn't test the place.
+    if !sim.room_to_build(owner, &template, at, facing) {
+        return Err(format!("no room for {template} there"));
+    }
     let command = tgsim::Command::Build {
         organization,
         template,

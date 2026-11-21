@@ -395,6 +395,30 @@ pub(crate) fn acknowledge(
     }
 }
 
+/// Where each of `organizations` goes for an order at `[px, py]` on a map
+/// `size` across: the point plus its own offset from their centre, so they
+/// keep their places relative to each other.
+pub(crate) fn spread(
+    sim: &World,
+    organizations: &[usize],
+    [px, py]: [f32; 2],
+    size: f32,
+) -> Vec<[f32; 2]> {
+    let centres: Vec<[f32; 2]> = organizations.iter().map(|&r| sim.centre(r)).collect();
+    let n = centres.len() as f32;
+    let [cx, cy] = centres
+        .iter()
+        .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
+    (centres.into_iter())
+        .map(|[x, y]| {
+            [
+                (px + x - cx).clamp(0.0, size),
+                (py + y - cy).clamp(0.0, size),
+            ]
+        })
+        .collect()
+}
+
 /// Gives organizations an order at a point, each keeping its place relative to
 /// the rest within a map `size` across, unless they all go `together` to
 /// the point itself. Returns those that went, each with where to.
@@ -407,20 +431,12 @@ pub(crate) fn send(
     (aim, together): (actions::Aim, bool),
     size: f32,
 ) -> Vec<(usize, [f32; 2])> {
-    let centres: Vec<[f32; 2]> = organizations.iter().map(|&r| sim.centre(r)).collect();
-    let n = centres.len() as f32;
-    let [cx, cy] = centres
-        .iter()
-        .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
+    let targets = match together {
+        true => vec![[px, py]; organizations.len()],
+        false => spread(sim, organizations, [px, py], size),
+    };
     let mut sent = Vec::new();
-    for (&r, [x, y]) in organizations.iter().zip(centres) {
-        let target = match together {
-            true => [px, py],
-            false => [
-                (px + x - cx).clamp(0.0, size),
-                (py + y - cy).clamp(0.0, size),
-            ],
-        };
+    for (&r, target) in organizations.iter().zip(targets) {
         let (organization, to) = (r, target);
         let command = match aim {
             actions::Aim::Move => tgsim::Command::Move { organization, to },
@@ -487,6 +503,17 @@ pub(crate) fn choose_formation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn organizations_spread_round_a_point_as_they_stand_round_their_centre() {
+        let sim = crate::orders::testing::fresh();
+        // At 10,10 and 10,20.
+        let spots = spread(&sim, &[0, 1], [30.0, 30.0], 100.0);
+        assert_eq!(spots, [[30.0, 25.0], [30.0, 35.0]]);
+        // Kept on the map.
+        let spots = spread(&sim, &[0, 1], [30.0, 2.0], 100.0);
+        assert_eq!(spots, [[30.0, 0.0], [30.0, 7.0]]);
+    }
 
     #[test]
     fn a_right_click_moves_onto_any_organization_and_buildings_not_an_enemys() {

@@ -108,9 +108,8 @@ impl World {
             Command::Build {
                 organization,
                 ref template,
-                at,
-                facing,
-            } => self.may_build(player, organization, template, (at, facing)),
+                ..
+            } => self.may_build(player, organization, template),
             Command::Repair {
                 organization,
                 piece,
