@@ -286,12 +286,8 @@ fn write(lines: &mut ChildSpawnerCommands, pane: &Pane, letters: &Letters, sayin
                                 .spawn((amounts, Pickable::IGNORE))
                                 .with_children(|line| {
                                     for q in &row.amounts {
-                                        let number = match &q.glyph {
-                                            Some(_) => q.number(),
-                                            None => format!("{} {}", q.number(), q.resource),
-                                        };
                                         glyph(line, q);
-                                        line.spawn(text(&number, pane.body));
+                                        line.spawn(text(&q.label(), pane.body));
                                     }
                                 });
                         }

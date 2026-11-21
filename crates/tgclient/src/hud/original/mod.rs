@@ -70,19 +70,17 @@ impl Plugin for OriginalHudPlugin {
         .add_systems(
             Update,
             (
-                (select_pause_button, show_pressables)
-                    .chain()
-                    .after(crate::clock::disable_buttons),
-                (show_grid, tips::show).chain().after(crate::actions::tell),
                 (
-                    object::lay_out
-                        .after(crate::object_display::choose)
-                        .before(crate::object_display::refresh),
+                    object::lay_out.in_set(super::LayOut),
                     (object::fill_bars, object::economy),
                 )
                     .chain(),
-                object::portray.after(crate::object_display::portray),
-                bars::slide.after(crate::resource_bar::show),
+                (
+                    (select_pause_button, show_pressables).chain(),
+                    (show_grid, tips::show).chain(),
+                    bars::slide,
+                )
+                    .in_set(super::Draw),
             )
                 .run_if(in_state(DRAWN)),
         );
@@ -1130,18 +1128,7 @@ pub fn show_grid(
             continue;
         };
         // A grid button is never disabled, nor anything but toggled off.
-        let holding = [
-            "ENABLED",
-            if hovered.get() {
-                "FOCUSED"
-            } else {
-                "UNFOCUSED"
-            },
-            if pressed { "PRESSED" } else { "UNPRESSED" },
-            "UNSELECTED",
-            "UNTARGETED",
-            "CLOSED",
-        ];
+        let holding = holding(false, hovered.get(), pressed, false);
         let icon = match (&face.icon, face.ready) {
             (Some(icon), true) => Some(icon.clone()),
             (Some(icon), false) => greyed.0.get(&icon.id()).cloned(),

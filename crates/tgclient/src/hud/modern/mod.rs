@@ -45,21 +45,20 @@ impl Plugin for ModernHudPlugin {
             (
                 minimap::tint,
                 supply::show_cycle_button,
-                clock::light_button.after(crate::clock::disable_buttons),
-                displays::light_buttons.after(crate::displays::Keys),
-                displays::mark_buttons.run_if(resource_exists_and_changed::<crate::keys::Bindings>),
-                actions::show.after(crate::actions::tell),
                 (
-                    object_display::lay_out
-                        .after(crate::object_display::choose)
-                        .before(crate::object_display::refresh),
+                    object_display::lay_out.in_set(super::LayOut),
                     (object_display::economy, crate::hud::original::fill_bars),
                 )
                     .chain(),
-                object_display::portray.after(crate::object_display::portray),
-                // For the buttons on the cards it borrows from the original's.
-                crate::hud::original::show_pressables,
-                resource_bar::show.after(crate::resource_bar::show),
+                (
+                    clock::light_button,
+                    displays::light_buttons,
+                    actions::show,
+                    // For the buttons on the cards it borrows from the original's.
+                    crate::hud::original::show_pressables,
+                    resource_bar::show,
+                )
+                    .in_set(super::Draw),
                 (special_ops::refresh, special_ops::tips)
                     .run_if(resource_exists::<crate::special_ops::Panel>),
             )

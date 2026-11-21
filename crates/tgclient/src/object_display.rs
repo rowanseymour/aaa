@@ -36,7 +36,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui_widgets::Activate;
+use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GUARDING, GameData, Id, PropertyLook};
 use tgrender::MapAssets;
 use tgrender::overlay::BannerImages;
@@ -757,6 +757,61 @@ pub(crate) fn owner_colour(sim: &World, local: Option<u32>, owner: u32) -> Color
     }
 }
 
+/// The line saying whose a thing is.
+pub(crate) struct Owner {
+    pub name: String,
+    /// What the name's in, by how the player stands towards the owner.
+    pub colour: Color,
+    /// The owner's gem, in its own colour whoever's looking, as the lobby
+    /// marks it.
+    pub gem: Option<[f32; 3]>,
+}
+
+/// What one of an HQ's places shows.
+pub(crate) enum Holding {
+    /// The organization at this index, with its banner.
+    Organization(usize),
+    /// The commission at `place` in `building`'s queue, by its picture.
+    Queued {
+        building: usize,
+        place: usize,
+        picture: Option<Handle<Image>>,
+    },
+    /// An organization on its way by air: its picture and its name.
+    Flown(Option<Handle<Image>>, String),
+    /// Nothing, saying so.
+    Empty(String),
+}
+
+impl Holding {
+    /// What the `i`th place's card does: an organization's selects it, a
+    /// commission's calls it off, and the others say what they hold.
+    pub(crate) fn hook(&self, card: &mut EntityCommands, i: usize) {
+        let id = ui::called(format!("object.slot.{}", i + 1));
+        match self {
+            &Holding::Organization(r) => {
+                let of = says(Says::Organization(r));
+                card.insert((Button, id, Pick(r), of, Pickable::default()))
+                    .observe(pick);
+            }
+            &Holding::Queued {
+                building, place, ..
+            } => {
+                let of = Says::Queued {
+                    building,
+                    place,
+                    held: true,
+                };
+                card.insert((Button, id, Queued(place), says(of), Pickable::default()))
+                    .observe(cancel);
+            }
+            Holding::Flown(_, said) | Holding::Empty(said) => {
+                card.insert((Hint(said.clone()), Pickable::default()));
+            }
+        }
+    }
+}
+
 /// What either interface's object display reads of the match and the
 /// game to draw what's shown.
 pub(crate) struct Shows<'a> {
@@ -835,6 +890,62 @@ impl Shows<'_> {
     /// What `template` says of itself, if anything.
     pub(crate) fn described(&self, template: &Id) -> Option<String> {
         self.looks.listings.get(template)?.description.clone()
+    }
+
+    /// The owner line of what `owner` holds, for a side in the match.
+    pub(crate) fn owner(&self, owner: u32) -> Option<Owner> {
+        let player = self.sim.sides.player(owner)?;
+        let name = (self.leaders).owner(player, &self.sim.sides, &self.looks.map);
+        Some(Owner {
+            name,
+            colour: owner_colour(self.sim, self.local, owner),
+            // An independent side's things show no gem.
+            gem: (!player.independent).then_some(player.rgb),
+        })
+    }
+
+    /// The shield icon `template` gives its defence.
+    pub(crate) fn defense_icon(&mut self, template: &Id) -> Option<Handle<Image>> {
+        let icon = (self.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
+        self.looks.image(self.game, self.images, icon.as_deref())
+    }
+
+    /// The icons of the first `most` of `target`'s weapons.
+    pub(crate) fn weapon_icons(
+        &mut self,
+        target: Target,
+        most: usize,
+    ) -> Vec<Option<Handle<Image>>> {
+        let icons: Vec<Option<String>> = (self.sim.weapons(target).iter())
+            .take(most)
+            .map(|w| w.shown.icon.clone())
+            .collect();
+        (icons.iter())
+            .map(|icon| self.looks.image(self.game, self.images, icon.as_deref()))
+            .collect()
+    }
+
+    /// What an HQ's place shows, holding `place`, of `building`'s queue.
+    pub(crate) fn held(&mut self, place: Place, building: Option<usize>) -> Holding {
+        match (place, building) {
+            (Place::Organization(r), _) => Holding::Organization(r),
+            (Place::Queued(n), Some(b)) => {
+                let queue = &self.sim.buildings[b].queue;
+                let template = queue.get(n).map(|c| c.template().to_string());
+                let picture = template.and_then(|t| self.picture(&t));
+                Holding::Queued {
+                    building: b,
+                    place: n,
+                    picture,
+                }
+            }
+            (Place::Flown(d), _) => {
+                let template = self.sim.deliveries[d].template.to_string();
+                let picture = self.picture(&template);
+                Holding::Flown(picture, template_name(&self.looks.names, &template))
+            }
+            _ => Holding::Empty(self.looks.said(EMPTY_SLOT)),
+        }
     }
 
     /// The organization at `r`'s banner, as it flies over it: its layers,
@@ -1610,6 +1721,13 @@ pub(crate) fn counted(sim: &World, local: Option<u32>, status: Status) -> Option
     ours(sim, local, owner).then_some(ledger)
 }
 
+/// The economy line's figures for the thing a status line is of: none
+/// for what [`counted`] doesn't say.
+pub(crate) fn economy_line(sim: &World, local: Option<u32>, status: Status) -> Vec<(Id, String)> {
+    let resources = &sim.rules().economy.resources;
+    counted(sim, local, status).map_or_else(Vec::new, |l| economy(&l, resources))
+}
+
 /// What a thing counts for in its side's economy, as the display's line
 /// has it, by resource in the order `resources` are defined: of each what
 /// it earns less what it takes to keep, signed, but for a limited
@@ -1950,6 +2068,37 @@ fn ordinal(n: u32) -> String {
 
 pub(crate) fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
     ImageNode::new(picture.unwrap_or_default())
+}
+
+/// Where either interface shows the portrait: a picture filling the width
+/// of a box that centres it, holding the flat picture until there's a
+/// portrait drawn to show.
+#[derive(Component)]
+pub struct Portrait;
+
+/// Shows the portrait, once it's drawn, in each [`Portrait`]: a face
+/// filling the box whatever shape that is, a fitted model keeping its
+/// shape, in a band across it.
+pub fn show_portrait(
+    stage: Res<Stage>,
+    mut boxes: Query<(&mut ImageNode, &mut Node), With<Portrait>>,
+) {
+    let Some((portrait, fitted)) = stage.picture() else {
+        return;
+    };
+    for (mut shown, mut node) in &mut boxes {
+        if shown.image == portrait {
+            continue;
+        }
+        shown.image = portrait.clone();
+        shown.image_mode = bevy::ui::widget::NodeImageMode::Stretch;
+        let (height, aspect) = match fitted {
+            true => (Val::Auto, Some(tgrender::portrait::FIT_ASPECT)),
+            false => (percent(100), None),
+        };
+        node.height = height;
+        node.aspect_ratio = aspect;
+    }
 }
 
 /// An organization's card clicked: selects it alone, in place of any building.

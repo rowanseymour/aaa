@@ -25,7 +25,7 @@ pub(crate) use card_buttons::{
     press_card_button, show_card_buttons,
 };
 pub(crate) use layout::{builder, builds, contents, lit};
-pub(crate) use looks::{Looks, Quantity, look_of, setup};
+pub(crate) use looks::{Looks, Quantity, setup};
 pub(crate) use press::{act, widget};
 pub(crate) use tips::{Said, Tip, fill, hover, tell};
 
@@ -245,6 +245,8 @@ pub struct Slot(pub usize);
 /// and whichever interface draws it.
 #[derive(Resource, Default, PartialEq)]
 pub struct Shown {
+    /// Whether the selection is the player's to command, so has a grid.
+    pub(crate) commanded: bool,
     /// What each slot holds.
     pub(crate) entries: [Option<Entry>; SLOTS],
     /// How each slot's button shows.

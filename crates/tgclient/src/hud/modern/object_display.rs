@@ -9,7 +9,6 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
 use tgdata::Id;
-use tgrender::portrait::Stage;
 use tgsim::Target;
 
 use crate::hud::original::Cards;
@@ -100,11 +99,6 @@ const WEAPON_ROW: f32 = 21.0;
 /// and how far in its words start.
 const DESCRIPTION: [f32; 4] = [244.0, 46.0, 239.0, 104.0];
 const DESCRIPTION_IN: f32 = 5.0;
-
-/// Where the portrait shows, holding the flat picture until there's a
-/// portrait drawn to show.
-#[derive(Component)]
-pub struct PortraitBox;
 
 /// Spawns our interface's object display, at the middle of the window's
 /// lower edge.
@@ -320,11 +314,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                 let top = FORMATIONS_AT.y + FORMATION_ROW * n as f32;
                 let node = at(FORMATIONS_AT.x, top, FORMATION_BUTTON, FORMATION_BUTTON);
                 display.spawn((
-                    crate::formations::FormationButton(n),
-                    ui::called(format!("formation.{}", n + 1)),
-                    Button,
-                    Pickable::default(),
-                    Visibility::Hidden,
+                    crate::formations::button_bundle(n),
                     Node {
                         border: UiRect::all(px(2)),
                         ..node
@@ -333,13 +323,11 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                     ui::Edge::Clear,
                     children![(
                         crate::formations::FormationIcon,
-                        ImageNode::default(),
                         Node {
                             width: percent(100),
                             height: percent(100),
                             ..default()
                         },
-                        Pickable::IGNORE,
                     )],
                 ));
             }
@@ -349,8 +337,8 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// The strip across the top: the name over the owner, and, where it
     /// has `properties`, the icons for those that show on its right.
     fn title(&mut self, name: String, owner: u32, properties: bool) {
-        let player = self.shows.sim.sides.player(owner);
-        let colour = owner_colour(self.shows.sim, self.shows.local, owner);
+        let owner = self.shows.owner(owner);
+        let gem = self.shows.gem;
         let mut row = None;
         self.commands.entity(self.root).with_children(|display| {
             let strip = Node {
@@ -380,7 +368,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                         .spawn((lines, Pickable::IGNORE))
                         .with_children(|lines| {
                             lines.spawn((label(name, Font::HudTitle, Ink::Body), unwrapped()));
-                            let Some(p) = player else {
+                            let Some(owner) = owner else {
                                 return;
                             };
                             let line = Node {
@@ -388,10 +376,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                                 ..default()
                             };
                             lines.spawn((line, Pickable::IGNORE)).with_children(|line| {
-                                // The owner's gem in its own colour, whoever's looking,
-                                // as the lobby marks it. An independent side's things
-                                // show none.
-                                if !p.independent {
+                                if let Some(rgb) = owner.gem {
                                     let size = px(ui::GEM * SCALE);
                                     let mark = Node {
                                         width: size,
@@ -399,14 +384,10 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                                         align_self: AlignSelf::Center,
                                         ..default()
                                     };
-                                    line.spawn(ui::side_mark(self.shows.gem, p.rgb, mark));
+                                    line.spawn(ui::side_mark(gem, rgb, mark));
                                 }
-                                let owner = self.shows.leaders.owner(
-                                    p,
-                                    &self.shows.sim.sides,
-                                    &self.shows.looks.map,
-                                );
-                                line.spawn((ui::coloured(owner, Font::Hud, colour), unwrapped()));
+                                let name = ui::coloured(owner.name, Font::Hud, owner.colour);
+                                line.spawn((name, unwrapped()));
                             });
                         });
                     if properties {
@@ -433,10 +414,23 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
         let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
         self.commands.entity(self.root).with_children(|display| {
             display.spawn(framed(at(left, top, width, height)));
-            let inside = || at(left + in_left, top + in_top, PORTRAIT.x, PORTRAIT.y);
-            // What shows round a portrait that doesn't fill its box.
-            display.spawn((inside(), BackgroundColor(Color::BLACK), Pickable::IGNORE));
-            display.spawn((inside(), picture_node(picture), PortraitBox, says(of)));
+            let inside = Node {
+                align_items: AlignItems::Center,
+                overflow: Overflow::clip(),
+                ..at(left + in_left, top + in_top, PORTRAIT.x, PORTRAIT.y)
+            };
+            // Black round a portrait that doesn't fill its box.
+            let backdrop = BackgroundColor(Color::BLACK);
+            display.spawn((inside, backdrop, says(of))).with_child((
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    ..default()
+                },
+                picture_node(picture).with_mode(NodeImageMode::Stretch),
+                Portrait,
+                Pickable::IGNORE,
+            ));
             let bar_top = top + height - in_bottom + 1.0;
             bar(
                 display,
@@ -494,11 +488,10 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
             let mut card = self.commands.spawn((framed(node), ChildOf(self.root)));
             let [left, top, side] = SLOT_BANNER;
             let inside = at(left, top, side, side);
-            match (place, building) {
-                (Place::Organization(r), _) => {
-                    let id = ui::called(format!("object.slot.{}", i + 1));
-                    card.insert((Button, id, Pick(r), says(Says::Organization(r))));
-                    card.observe(pick);
+            let held = self.shows.held(place, building);
+            held.hook(&mut card, i);
+            match held {
+                Holding::Organization(r) => {
                     card.with_children(|card| {
                         banner(&mut self.shows, card, inside, r);
                         let [left, top, width, height] = SLOT_HEALTH;
@@ -510,18 +503,11 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                         );
                     });
                 }
-                (Place::Queued(n), Some(b)) => {
-                    let queue = &self.shows.sim.buildings[b].queue;
-                    let template = queue.get(n).map(|c| c.template().to_string());
-                    let picture = template.and_then(|t| self.shows.picture(&t));
-                    let of = Says::Queued {
-                        building: b,
-                        place: n,
-                        held: true,
-                    };
-                    let id = ui::called(format!("object.slot.{}", i + 1));
-                    card.insert((Button, id, Queued(n), says(of)))
-                        .observe(cancel);
+                Holding::Queued {
+                    building: b,
+                    place: n,
+                    picture,
+                } => {
                     card.with_children(|card| {
                         card.spawn((inside, picture_node(picture), Pickable::IGNORE));
                         let [left, top, width, height] = SLOT_PROGRESS;
@@ -533,17 +519,14 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                         }
                     });
                 }
-                (Place::Flown(d), _) => {
-                    let template = self.shows.sim.deliveries[d].template.as_str();
-                    let picture = self.shows.picture(template);
-                    card.insert(Hint(template_name(&self.shows.looks.names, template)));
+                Holding::Flown(picture, _) => {
                     card.with_children(|card| {
                         card.spawn((inside, picture_node(picture), Pickable::IGNORE));
                         let [left, top, width, height] = SLOT_HEALTH;
                         bar(card, at(left, top, width, height), Fill::Flight, None);
                     });
                 }
-                _ => drop(card.insert(Hint(self.shows.looks.said(EMPTY_SLOT)))),
+                Holding::Empty(_) => {}
             }
         }
     }
@@ -551,11 +534,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// The shield and the defence of `target`, for one with a body, whose
     /// `template` gives the icon.
     fn defense(&mut self, target: Target, template: &Id) {
-        let icon = (self.shows.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
-        let icon = self
-            .shows
-            .looks
-            .image(self.shows.game, self.shows.images, icon.as_deref());
+        let icon = self.shows.defense_icon(template);
         let [left, top, width, height] = DEFENSE;
         self.commands.entity(self.root).with_children(|display| {
             let row = Node {
@@ -585,15 +564,8 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// `target`'s weapons, each its icon with its main damage by it, a row
     /// each.
     fn attacks(&mut self, target: Target) {
-        let icons: Vec<Option<String>> = (self.shows.sim.weapons(target).iter())
-            .take(MOST_WEAPONS)
-            .map(|w| w.shown.icon.clone())
-            .collect();
+        let icons = self.shows.weapon_icons(target, MOST_WEAPONS);
         for (i, icon) in icons.into_iter().enumerate() {
-            let icon = self
-                .shows
-                .looks
-                .image(self.shows.game, self.shows.images, icon.as_deref());
             let [left, top, width, height] = WEAPON;
             let top = top + WEAPON_ROW * i as f32;
             self.commands.entity(self.root).with_children(|display| {
@@ -848,31 +820,6 @@ fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill, of: Option<Say
     }
 }
 
-/// Shows the portrait in its box once it's there to show.
-pub fn portray(
-    stage: Res<Stage>,
-    mut boxes: Query<(&mut ImageNode, &mut Node), With<PortraitBox>>,
-) {
-    let Some((portrait, fitted)) = stage.picture() else {
-        return;
-    };
-    // A fitted model's picture keeps its shape, in a band across the box.
-    let height = match fitted {
-        true => PORTRAIT.x / tgrender::portrait::FIT_ASPECT,
-        false => PORTRAIT.y,
-    };
-    let top = PORTRAIT_BOX[1] + PORTRAIT_IN[1] + (PORTRAIT.y - height) / 2.0;
-    for (mut shown, mut node) in &mut boxes {
-        if shown.image != portrait {
-            shown.image = portrait.clone();
-            // A face's picture fills its box whatever shape that is.
-            shown.image_mode = bevy::ui::widget::NodeImageMode::Stretch;
-            node.top = px(top * SCALE);
-            node.height = px(height * SCALE);
-        }
-    }
-}
-
 /// Keeps the economy line up to date: what the thing it's of counts for
 /// in its side's economy, by each resource's glyph.
 pub fn economy(
@@ -882,11 +829,8 @@ pub fn economy(
     looks: Res<Looks>,
     mut lines: Query<(Entity, &Status, &mut EconomyLine)>,
 ) {
-    let sim = &sim.0;
-    let resources = &sim.rules().economy.resources;
     for (row, status, mut line) in &mut lines {
-        let now = (counted(sim, local.0, *status))
-            .map_or_else(Vec::new, |l| crate::object_display::economy(&l, resources));
+        let now = crate::object_display::economy_line(&sim.0, local.0, *status);
         if line.0 == now {
             continue;
         }

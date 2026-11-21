@@ -1,5 +1,6 @@
 //! Our buttons on the minimap's rim that open the display panels.
 
+use bevy::ecs::query::QueryItem;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -10,9 +11,9 @@ use super::minimap;
 use crate::Loaded;
 use crate::displays::{Displays, Icons, PANELS, Panel, icon};
 use crate::intent::Asks;
-use crate::keys::Bindings;
+use crate::keys::{Bindings, Named};
 use crate::ui::Blocks;
-use crate::ui::{self, Click, Edge, Hint, Ink, Marked, Surface, Theme};
+use crate::ui::{self, Click, Edge, Hint, Ink, Surface, Theme};
 
 /// A glyph's size on its button.
 pub const GLYPH_SIZE: f32 = 22.0;
@@ -54,14 +55,11 @@ impl Rim {
     }
 }
 
-/// The button that opens a panel, with its name to mark its key in.
+/// The button that opens a panel.
 #[derive(Component)]
-pub struct PanelButton {
-    panel: Panel,
-    name: String,
-}
+pub struct PanelButton(Panel);
 
-/// The glyph on a [`PanelButton`].
+/// The glyph on a [`rim_button`].
 #[derive(Component)]
 pub struct Glyph;
 
@@ -140,14 +138,22 @@ fn spawn_button(
     help: String,
 ) {
     commands.spawn((
-        Blocks,
-        Button,
-        Click::PUSH,
-        RelativeCursorPosition::default(),
-        bindings.marked(panel.keys().0, &name),
+        rim_button(rim, glyph, Click::PUSH),
+        Named::new(bindings, panel.keys().0, name),
         (Asks::new(panel.keys().0), Hint(help)),
         ui::called(panel.called()),
-        PanelButton { panel, name },
+        PanelButton(panel),
+    ));
+}
+
+/// A round button at `rim` drawn with `glyph`, sounding `click` when
+/// pressed.
+pub fn rim_button(rim: Rim, glyph: Handle<Image>, click: Click) -> impl Bundle {
+    (
+        Blocks,
+        Button,
+        click,
+        RelativeCursorPosition::default(),
         rim.node(),
         Surface::Clear,
         Edge::Border,
@@ -163,19 +169,11 @@ fn spawn_button(
             },
             Pickable::IGNORE,
         )],
-    ));
+    )
 }
 
-/// Marks the buttons' keys afresh once the hotkeys change.
-pub fn mark_buttons(bindings: Res<Bindings>, mut buttons: Query<(&PanelButton, &mut Marked)>) {
-    for (button, mut marked) in &mut buttons {
-        marked.set_if_neq(bindings.marked(button.panel.keys().0, &button.name));
-    }
-}
-
-/// What [`light_buttons`] reads and sets on a button.
-type ButtonLook = (
-    Ref<'static, PanelButton>,
+/// What [`light`] reads and sets on a [`rim_button`].
+pub type RimLook = (
     Ref<'static, Hovered>,
     Has<bevy::ui::Pressed>,
     &'static mut Edge,
@@ -183,38 +181,69 @@ type ButtonLook = (
     &'static Children,
 );
 
-/// Lights a button while its panel's up, its edge while it's hovered, and
-/// its face while it's held down.
+/// How [`light`] shows a [`rim_button`].
+pub struct Lighting {
+    /// Its edge and glyph are lit, as while what it's for is on.
+    pub lit: bool,
+    /// It can be pressed; it's greyed if not.
+    pub usable: bool,
+    /// What lights it, or the theme, may have changed, so its glyph's
+    /// recoloured.
+    pub restyle: bool,
+}
+
+/// Lights a [`rim_button`] as `lighting` says, its edge while it's
+/// hovered and its face while it's held down.
+pub fn light(
+    (hovered, pressed, mut edge, mut surface, children): QueryItem<RimLook>,
+    Lighting {
+        lit,
+        usable,
+        restyle,
+    }: Lighting,
+    theme: &Theme,
+    glyphs: &mut Query<&mut ImageNode, With<Glyph>>,
+) {
+    surface.set_if_neq(match pressed && usable {
+        true => Surface::Hovered,
+        false => Surface::Clear,
+    });
+    if restyle || hovered.is_changed() {
+        edge.set_if_neq(Edge::lit(lit, hovered.get() && usable, Edge::Border));
+    }
+    if !restyle {
+        return;
+    }
+    let colour = match (lit, usable) {
+        (true, _) => theme.edge(Edge::Lit),
+        (false, true) => theme.ink(Ink::Help),
+        (false, false) => theme.ink(Ink::Muted),
+    };
+    for &child in children {
+        if let Ok(mut glyph) = glyphs.get_mut(child)
+            && glyph.color != colour
+        {
+            glyph.color = colour;
+        }
+    }
+}
+
+/// Lights a button while its panel's up.
 pub fn light_buttons(
     displays: Res<Displays>,
     theme: Res<Theme>,
-    mut buttons: Query<ButtonLook>,
+    mut buttons: Query<(Ref<PanelButton>, RimLook)>,
     mut glyphs: Query<&mut ImageNode, With<Glyph>>,
 ) {
     let restyle = displays.is_changed() || theme.is_changed();
-    for (button, hovered, pressed, mut edge, mut surface, children) in &mut buttons {
-        let open = displays.is_open(button.panel);
+    for (button, look) in &mut buttons {
+        let open = displays.is_open(button.0);
         let restyle = restyle || button.is_added();
-        if restyle || hovered.is_changed() {
-            edge.set_if_neq(Edge::lit(open, hovered.get(), Edge::Border));
-        }
-        surface.set_if_neq(match pressed {
-            true => Surface::Hovered,
-            false => Surface::Clear,
-        });
-        if !restyle {
-            continue;
-        }
-        let colour = match open {
-            true => theme.edge(Edge::Lit),
-            false => theme.ink(Ink::Help),
+        let lighting = Lighting {
+            lit: open,
+            usable: true,
+            restyle,
         };
-        for &child in children {
-            if let Ok(mut glyph) = glyphs.get_mut(child)
-                && glyph.color != colour
-            {
-                glyph.color = colour;
-            }
-        }
+        light(look, lighting, &theme, &mut glyphs);
     }
 }

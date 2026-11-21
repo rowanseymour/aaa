@@ -8,13 +8,9 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
 
-use crate::actions::{
-    COLUMNS, Looks, Page, Quantity, ROWS, SLOTS, Said, Shown, Slot, Tip, builds, lit, look_of,
-    widget,
-};
+use crate::actions::{COLUMNS, Page, Quantity, ROWS, SLOTS, Said, Shown, Slot, lit, widget};
 use crate::intent::Asks;
 use crate::ui::{self, Blocks, Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
-use crate::{Local, Selected, SelectedBuilding, Sim};
 
 /// A button's side, in logical pixels; the icons are drawn 42 across.
 pub const BUTTON: f32 = 56.0;
@@ -137,29 +133,21 @@ type SlotParts<'a> = (
 
 /// Draws the grid's slots as [`fill_slots`](crate::actions::fill_slots) filled them, and in
 /// its box what [`tell`](crate::actions::tell) has the tooltip say.
-#[allow(clippy::too_many_arguments)]
 pub fn show(
     page: Res<Page>,
-    selected: Res<Selected>,
-    chosen: Res<SelectedBuilding>,
-    sim: Res<Sim>,
-    looks: Res<Looks>,
     shown: Res<Shown>,
     said: Res<Said>,
     mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
     mut slots: Query<SlotParts, Without<SlotIcon>>,
     mut icons: Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
     mut tooltip: TipParts,
-    local: Res<Local>,
 ) {
-    let building = chosen.0.filter(|_| selected.0.is_empty());
+    tooltip.say(&said);
     // Others' things have no buttons.
-    let nothing = !crate::selection::commanded(&sim.0, local.0, &selected.0, building);
-    panel.set_if_neq(ui::visible(!nothing));
-    if nothing {
+    panel.set_if_neq(ui::visible(shown.commanded));
+    if !shown.commanded {
         return;
     }
-    let builds = builds(&sim.0, &selected.0);
     for (slot, hover, children, mut border, mut pickable) in &mut slots {
         let entry = shown.entries[slot.0];
         // Empty slots are just boxes, which nothing should hear clicks on.
@@ -170,15 +158,14 @@ pub fn show(
         if *pickable != want {
             *pickable = want;
         }
-        let Some(entry) = entry else {
+        let (Some(entry), Some(face)) = (entry, &shown.faces[slot.0]) else {
             border.set_if_neq(Edge::Clear);
             set_icon(children, &mut icons, None);
             continue;
         };
-        let look = look_of(entry, &sim.0, &looks, building, &builds);
-        let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
+        let ready = face.ready;
         let lit = lit(entry, *page);
-        let icon = look.icon.clone();
+        let icon = face.icon.clone();
         border.set_if_neq(Edge::lit(lit, hover.get() && ready, Edge::Clear));
         let shade = match ready {
             true => Shade::Full,
@@ -186,30 +173,29 @@ pub fn show(
         };
         set_icon(children, &mut icons, icon.map(|i| (i, shade)));
     }
-    tooltip.say(said.0.clone());
 }
 
 /// The tooltip's node, not the slots'.
 type TooltipOnly = (With<Tooltip>, Without<Slot>);
 
-/// The tooltip's box and what it last said.
+/// The tooltip's box.
 #[derive(SystemParam)]
 pub struct TipParts<'w, 's> {
     tooltip: Single<'w, 's, (Entity, &'static mut Node, Ref<'static, Tooltip>), TooltipOnly>,
-    said: bevy::ecs::system::Local<'s, Tip>,
     commands: Commands<'w, 's>,
 }
 
 impl TipParts<'_, '_> {
     /// Shows the tip, or hides the box for none.
-    fn say(&mut self, tip: Option<Tip>) {
+    fn say(&mut self, said: &Res<Said>) {
         let (entity, node, fresh) = &mut *self.tooltip;
-        ui::show(node, tip.is_some());
-        let tip = tip.unwrap_or_default();
-        // What it last said was in the box before this one.
-        if *self.said == tip && !fresh.is_added() {
+        ui::show(node, said.0.is_some());
+        if !said.is_changed() && !fresh.is_added() {
             return;
         }
+        let Some(tip) = &said.0 else {
+            return;
+        };
         let mut tooltip = self.commands.entity(*entity);
         tooltip.despawn_children();
         tooltip.with_children(|parent| {
@@ -250,7 +236,6 @@ impl TipParts<'_, '_> {
                 parent.spawn(label(why.clone(), Font::Small, Ink::Warn));
             }
         });
-        *self.said = tip;
     }
 }
 
@@ -262,8 +247,8 @@ fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
         align_items: AlignItems::Center,
         ..default()
     })
-    .with_children(|pair| match &q.glyph {
-        Some(glyph) => {
+    .with_children(|pair| {
+        if let Some(glyph) = &q.glyph {
             pair.spawn((
                 ImageNode::new(glyph.clone()),
                 Node {
@@ -273,15 +258,8 @@ fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
                 },
                 Pickable::IGNORE,
             ));
-            pair.spawn(label(q.number(), Font::Small, Ink::Body));
         }
-        None => {
-            pair.spawn(label(
-                format!("{} {}", q.number(), q.resource),
-                Font::Small,
-                Ink::Body,
-            ));
-        }
+        pair.spawn(label(q.label(), Font::Small, Ink::Body));
     });
 }
 
