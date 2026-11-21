@@ -65,7 +65,6 @@ mod ticking;
 mod ui_scale;
 mod views;
 use tgserver::presets;
-mod remote;
 mod resource_bar;
 mod saved;
 mod scenario;
@@ -308,7 +307,7 @@ pub fn run(program: Program) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let remote = match console.map(remote::Remote::listen).transpose() {
+    let remote = match console.map(console::Remote::listen).transpose() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("{}: {e}", program.name);
