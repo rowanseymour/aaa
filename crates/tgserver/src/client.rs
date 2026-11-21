@@ -26,9 +26,8 @@ pub enum NotJoined {
 /// orders of `players`, or only to watch if there are none, for a person
 /// going by `name`. Its answer is its [`welcome`].
 pub fn join(link: &mut impl Link, players: Vec<u32>, name: String) -> Result<(), Lost> {
-    let protocol = PROTOCOL;
     link.send(encode(&Join {
-        protocol,
+        protocol: PROTOCOL,
         players,
         name,
         password: String::new(),
@@ -154,7 +153,8 @@ impl<L: Link> Client<L> {
 
     /// Has it tell the time by `clock`.
     pub fn clock(&mut self, clock: Clock) {
-        (self.heard_at, self.sent) = (clock.now(), clock.now());
+        let now = clock.now();
+        (self.heard_at, self.sent) = (now, now);
         self.clock = clock;
     }
 
@@ -165,7 +165,7 @@ impl<L: Link> Client<L> {
 
     /// Tells the host whether it's for dropping those holding the match.
     pub fn vote(&mut self, drop: bool) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Vote(drop)))
+        self.send(ToHost::Vote(drop))
     }
 
     /// What its copy of the match has been given, and the pause and speed
@@ -200,12 +200,12 @@ impl<L: Link> Client<L> {
 
     /// Asks the host to pass `words` on to everyone at once.
     pub fn say(&mut self, words: String) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Say(words)))
+        self.send(ToHost::Say(words))
     }
 
     /// Tells the host whether it's for kicking `client` out.
     pub fn kick(&mut self, client: u32, vote: bool) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Kick { client, vote }))
+        self.send(ToHost::Kick { client, vote })
     }
 
     /// Whether its copy of the match has heard the host leave it once it
@@ -217,13 +217,13 @@ impl<L: Link> Client<L> {
     /// Tells the host it's leaving the match, which it should then do.
     pub fn leave(&mut self) -> Result<(), Lost> {
         self.lost = true;
-        self.link.send(encode(&ToHost::Leave))
+        self.send(ToHost::Leave)
     }
 
     /// Asks the host for `action`, which is carried out, if the host lets
     /// it be, when the host says so.
     pub fn ask(&mut self, action: Action) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Ask(action)))?;
+        self.send(ToHost::Ask(action))?;
         self.asked += 1;
         Ok(())
     }
@@ -231,7 +231,7 @@ impl<L: Link> Client<L> {
     /// Tells the host that its copy of the match is set up, which a host
     /// may wait for before the match begins.
     pub fn ready(&mut self) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Ready))
+        self.send(ToHost::Ready)
     }
 
     /// How many actions it's asked the host for.
@@ -279,6 +279,10 @@ impl<L: Link> Client<L> {
     /// which waits for a copy to play it.
     pub fn wait(&mut self) -> Result<(), Lost> {
         self.run(None, 0, 0)
+    }
+
+    fn send(&mut self, message: ToHost) -> Result<(), Lost> {
+        self.link.send(encode(&message))
     }
 
     /// Takes in what the host has sent.
@@ -408,7 +412,7 @@ impl<L: Link> Client<L> {
         if played != self.played || now >= self.sent + QUIET {
             (self.sent, self.played) = (now, played);
             // A host that's gone is found so as what it said is done.
-            let _ = self.link.send(encode(&ToHost::Played(played)));
+            let _ = self.send(ToHost::Played(played));
         }
     }
 }

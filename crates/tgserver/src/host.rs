@@ -4,20 +4,19 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use tgsim::{Action, ComputerPlayer, Outcome, Record, Schedule, World};
-
-/// Makes the computer player for a side of the match set up as given, by
-/// the side's player id.
-type MakeComputer = dyn Fn(&Setup, &World, u32) -> Box<dyn ComputerPlayer> + Send + Sync;
-
 use serde::{Deserialize, Serialize};
+use tgsim::{Action, ComputerPlayer, Outcome, Record, Schedule, World};
 
 use crate::pausing::{Pauses, Person};
 use crate::protocol::{
     Bundle, Gone, Join, KickVote, PROTOCOL, Said, Seated, Standing, Status, ToClient, ToHost,
     Welcome, decode, encode,
 };
-use crate::{Clock, Link, Naming, Setup};
+use crate::{Clock, Link, Naming, Setup, majority, ping};
+
+/// Makes the computer player for a side of the match set up as given, by
+/// the side's player id.
+type MakeComputer = dyn Fn(&Setup, &World, u32) -> Box<dyn ComputerPlayer> + Send + Sync;
 
 /// The most messages taken from a client in one turn, so that one sending
 /// without end holds nobody else up and puts only so much in a turn; the
@@ -147,6 +146,26 @@ struct Seat<L> {
     kicked: bool,
 }
 
+/// What a turn hears from the clients.
+#[derive(Default)]
+struct Heard {
+    /// The actions asked that the askers may have carried out, each with
+    /// who asked.
+    actions: Vec<(Option<u32>, Action)>,
+    /// Each client's first action taken, by how many it had asked for
+    /// before it.
+    first_taken: Vec<(u32, u64)>,
+    /// Whether any vote for dropping those holding the match changed.
+    votes_changed: bool,
+    /// Each kick vote cast or taken back: by whom, against whom, and which.
+    kicks: Vec<(u32, u32, bool)>,
+    /// What's said for everyone, to pass on at once.
+    said: Vec<Said>,
+    /// The clients whose copies stopped standing as the host's does, with
+    /// the step each was found at.
+    diverged: Vec<(u32, u64)>,
+}
+
 /// Why a client wasn't let in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Refusal {
@@ -177,6 +196,28 @@ pub fn refuse(link: &mut impl Link, refusal: Refusal) {
     let _ = link.send(encode(&ToClient::Refused(refusal)));
 }
 
+/// Keeps `link` among those `greeted` that have yet to ask to come in,
+/// unless there are as many as are kept, when it's refused.
+pub(crate) fn greet<L: Link>(greeted: &mut Vec<L>, mut link: L) {
+    match greeted.len() < GREETED {
+        true => greeted.push(link),
+        false => refuse(&mut link, Refusal::Full),
+    }
+}
+
+/// What `message`, the first from someone greeted, asks to come in as, if
+/// it's a join this host can take.
+pub(crate) fn joining(message: &[u8]) -> Result<Join, Refusal> {
+    if message.len() > LONGEST_HEARD {
+        return Err(Refusal::Lost);
+    }
+    match decode::<Join>(message) {
+        Some(join) if join.protocol == PROTOCOL => Ok(join),
+        Some(_) => Err(Refusal::Protocol(PROTOCOL)),
+        None => Err(Refusal::Lost),
+    }
+}
+
 /// Something a turn brought that those running the host may want to know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -193,6 +234,12 @@ pub enum Event {
 /// line holds, and nothing but what can be typed.
 pub fn sayable(words: &str) -> bool {
     words.chars().count() <= tgsim::CHAT_LONGEST && !words.chars().any(char::is_control)
+}
+
+/// Whether `words` are worth passing on as chat: [sayable](sayable), and
+/// not blank.
+pub(crate) fn worth_saying(words: &str) -> bool {
+    sayable(words) && !words.trim().is_empty()
 }
 
 /// Whether a host carries out `action` for a client it doesn't trust
@@ -228,6 +275,11 @@ impl<L> Seat<L> {
     /// Whether the host carries out `action` for it.
     fn may(&self, action: &Action) -> bool {
         self.trusted || allows(&self.players, action)
+    }
+
+    /// Whether it's staying with a side, and so has a say in kicking out.
+    fn sided(&self) -> bool {
+        !self.lost && !self.players.is_empty()
     }
 }
 
@@ -416,7 +468,7 @@ impl<L: Link> Host<L> {
                 sent.err().map(|_| Refusal::Lost)
             });
         if let Some(refusal) = refused {
-            let _ = link.send(encode(&ToClient::Refused(refusal)));
+            refuse(&mut link, refusal);
             return Err(refusal);
         }
         let id = self.next;
@@ -466,12 +518,8 @@ impl<L: Link> Host<L> {
 
     /// Takes a link to a client that has yet to say what it wants, which
     /// [`Host::seat`] lets in once it has.
-    pub fn greet(&mut self, mut link: L) {
-        if self.greeted.len() < GREETED {
-            self.greeted.push(link);
-        } else {
-            let _ = link.send(encode(&ToClient::Refused(Refusal::Full)));
-        }
+    pub fn greet(&mut self, link: L) {
+        greet(&mut self.greeted, link);
     }
 
     /// Lets in the clients greeted that have since asked to join, each as
@@ -486,18 +534,13 @@ impl<L: Link> Host<L> {
                 }
                 // Too late to ask, as it's told on not being let in.
                 Ok(None) => Ok((Vec::new(), String::new())),
-                Ok(Some(message)) if message.len() > LONGEST_HEARD => Err(Refusal::Lost),
-                Ok(Some(message)) => match decode::<Join>(&message) {
-                    Some(join) if join.protocol == PROTOCOL => Ok((join.players, join.name)),
-                    Some(_) => Err(Refusal::Protocol(PROTOCOL)),
-                    None => Err(Refusal::Lost),
-                },
+                Ok(Some(message)) => joining(&message).map(|j| (j.players, j.name)),
                 Err(_) => Err(Refusal::Lost),
             };
             seated.push(match asked {
                 Ok((players, name)) => self.admit(link, players, &name),
                 Err(refusal) => {
-                    let _ = link.send(encode(&ToClient::Refused(refusal)));
+                    refuse(&mut link, refusal);
                     Err(refusal)
                 }
             });
@@ -674,92 +717,19 @@ impl<L: Link> Host<L> {
             }
         }
         self.begun |= play;
+        let mut heard = self.hear();
+        actions.append(&mut heard.actions);
         let mut events = Vec::new();
-        let mut votes_changed = false;
-        // Whether anyone's side resigned, leaving them watching.
-        let mut resigned = false;
-        // Each kick vote cast or taken back, by whom.
-        let mut kicks = Vec::new();
-        // What's said for everyone, to pass on at once.
-        let mut said = Vec::new();
-        // Each client's first action taken this turn, by how many it had
-        // asked for before it.
-        let mut first_taken = Vec::new();
-        let checks = &self.schedule.record().checks;
-        for seat in &mut self.clients {
-            // One it trusts is heard out, having nobody to hold up but
-            // those it's trusted by.
-            let most = if seat.trusted {
-                usize::MAX
-            } else {
-                HEARD_A_TURN
-            };
-            for _ in 0..most {
-                let heard = seat.link.receive();
-                let heard =
-                    heard.map(|m| m.map(|m| (m.len() <= LONGEST_HEARD).then(|| decode(&m))));
-                let heard = heard.map(|m| m.map(Option::flatten));
-                if let Ok(Some(_)) = heard {
-                    seat.heard = Some(self.now);
-                }
-                match heard {
-                    Ok(None) => break,
-                    Ok(Some(Some(ToHost::Ask(action)))) => {
-                        if seat.may(&action) {
-                            if !first_taken.iter().any(|&(id, _)| id == seat.id) {
-                                first_taken.push((seat.id, seat.asked));
-                            }
-                            actions.push((Some(seat.id), action));
-                        }
-                        seat.asked += 1;
-                    }
-                    Ok(Some(Some(ToHost::Ready))) => seat.ready = true,
-                    Ok(Some(Some(ToHost::Played(played)))) => seat.played = seat.played.max(played),
-                    Ok(Some(Some(ToHost::Vote(vote)))) => {
-                        votes_changed |= seat.vote != vote;
-                        seat.vote = vote;
-                    }
-                    Ok(Some(Some(ToHost::Kick { client, vote }))) => {
-                        kicks.push((seat.id, client, vote));
-                    }
-                    Ok(Some(Some(ToHost::Say(words)))) => {
-                        if sayable(&words) && !words.trim().is_empty() {
-                            let from = seat.players.first().copied();
-                            let name = seat.name.clone();
-                            said.push(Said { from, name, words });
-                        }
-                    }
-                    Ok(Some(Some(ToHost::Leave))) => {
-                        seat.lost = true;
-                        break;
-                    }
-                    // Too late to change how the match is set up.
-                    Ok(Some(Some(ToHost::Choose(_)))) => {}
-                    Ok(Some(Some(ToHost::Check { step, hash }))) => {
-                        // The host has played every tick a client has.
-                        let stands = checks.binary_search(&(step, hash)).is_ok();
-                        if !stands && !seat.diverged {
-                            seat.diverged = true;
-                            let client = seat.id;
-                            events.push(Event::Diverged { client, step });
-                        }
-                    }
-                    Ok(Some(None)) | Err(_) => {
-                        seat.lost = true;
-                        break;
-                    }
-                }
-            }
+        for (client, step) in heard.diverged {
+            events.push(Event::Diverged { client, step });
+            self.tell(&ToClient::Diverged { client, step });
         }
-        for &event in &events {
-            if let Event::Diverged { client, step } = event {
-                self.tell(&ToClient::Diverged { client, step });
-            }
-        }
-        for said in said {
+        for said in heard.said {
             self.tell(&ToClient::Said(said));
         }
-        votes_changed |= self.kick(kicks);
+        // Whether anyone's side resigned, leaving them watching.
+        let mut resigned = false;
+        let votes_changed = heard.votes_changed | self.kick(heard.kicks);
         let was_held = self.held;
         self.judge();
         // Nothing's carried out before the match begins.
@@ -772,7 +742,7 @@ impl<L: Link> Host<L> {
             // and so isn't answered until it has.
             self.put_off.append(&mut actions);
             for seat in &mut self.clients {
-                let first = first_taken.iter().find(|&&(id, _)| id == seat.id);
+                let first = heard.first_taken.iter().find(|&&(id, _)| id == seat.id);
                 seat.put_off_from = seat.put_off_from.or(first.map(|&(_, asked)| asked));
             }
             Some(Some(false))
@@ -787,8 +757,10 @@ impl<L: Link> Host<L> {
         } else {
             None
         };
-        for action in given.iter().filter(|_| ticking.is_some()) {
-            self.schedule.act(action.clone());
+        if ticking.is_some() {
+            for action in &given {
+                self.schedule.act(action.clone());
+            }
         }
         let tick = ticking.map(|t| t.unwrap_or(!self.schedule.pausing()));
         // Judged once this turn's pausing is carried out, so orders aren't
@@ -839,6 +811,73 @@ impl<L: Link> Host<L> {
         events
     }
 
+    /// Takes what the clients have sent, as far as a turn takes from each.
+    fn hear(&mut self) -> Heard {
+        let mut heard = Heard::default();
+        let checks = &self.schedule.record().checks;
+        for seat in &mut self.clients {
+            // One it trusts is heard out, having nobody to hold up but
+            // those it's trusted by.
+            let most = if seat.trusted {
+                usize::MAX
+            } else {
+                HEARD_A_TURN
+            };
+            for _ in 0..most {
+                let message = match seat.link.receive() {
+                    Ok(None) => break,
+                    Ok(Some(m)) => {
+                        seat.heard = Some(self.now);
+                        (m.len() <= LONGEST_HEARD).then(|| decode(&m)).flatten()
+                    }
+                    Err(_) => None,
+                };
+                match message {
+                    Some(ToHost::Ask(action)) => {
+                        if seat.may(&action) {
+                            if !heard.first_taken.iter().any(|&(id, _)| id == seat.id) {
+                                heard.first_taken.push((seat.id, seat.asked));
+                            }
+                            heard.actions.push((Some(seat.id), action));
+                        }
+                        seat.asked += 1;
+                    }
+                    Some(ToHost::Ready) => seat.ready = true,
+                    Some(ToHost::Played(played)) => seat.played = seat.played.max(played),
+                    Some(ToHost::Vote(vote)) => {
+                        heard.votes_changed |= seat.vote != vote;
+                        seat.vote = vote;
+                    }
+                    Some(ToHost::Kick { client, vote }) => {
+                        heard.kicks.push((seat.id, client, vote))
+                    }
+                    Some(ToHost::Say(words)) => {
+                        if worth_saying(&words) {
+                            let from = seat.players.first().copied();
+                            let name = seat.name.clone();
+                            heard.said.push(Said { from, name, words });
+                        }
+                    }
+                    // Too late to change how the match is set up.
+                    Some(ToHost::Choose(_)) => {}
+                    Some(ToHost::Check { step, hash }) => {
+                        // The host has played every tick a client has.
+                        let stands = checks.binary_search(&(step, hash)).is_ok();
+                        if !stands && !seat.diverged {
+                            seat.diverged = true;
+                            heard.diverged.push((seat.id, step));
+                        }
+                    }
+                    Some(ToHost::Leave) | None => {
+                        seat.lost = true;
+                        break;
+                    }
+                }
+            }
+        }
+        heard
+    }
+
     /// What `asked`, each with the client that asked if one did, has every
     /// copy of the match given, by the rules for pausing it.
     fn rule(&mut self, asked: Vec<(Option<u32>, Action)>) -> Vec<Action> {
@@ -868,19 +907,16 @@ impl<L: Link> Host<L> {
         let mut changed = false;
         let needed = self.kicks_needed();
         for (voter, target, vote) in kicks {
-            let sided = |id| {
-                let mut sided = self
-                    .clients
-                    .iter()
-                    .filter(|c| !c.lost && !c.players.is_empty());
-                sided.find(|c| c.id == id)
-            };
+            let sided = |id| self.clients.iter().find(|c| c.id == id && c.sided());
             // Whoever runs the host is there for good: kicking it would
             // leave everyone else's match with nobody to play it on.
             let can = voter != target
                 && sided(voter).is_some()
                 && sided(target).is_some_and(|t| !t.trusted);
-            let Some(seat) = self.clients.iter_mut().find(|c| c.id == voter && can) else {
+            if !can {
+                continue;
+            }
+            let Some(seat) = self.clients.iter_mut().find(|c| c.id == voter) else {
                 continue;
             };
             if seat.kicking.contains(&target) == vote {
@@ -918,21 +954,14 @@ impl<L: Link> Host<L> {
     /// How many of those staying with a side are for kicking `client`
     /// out: a vote cast before its voter's side resigned no longer counts.
     fn kicks_against(&self, client: u32) -> u32 {
-        let voters = self
-            .clients
-            .iter()
-            .filter(|c| !c.lost && !c.players.is_empty() && c.kicking.contains(&client));
+        let voters = (self.clients.iter()).filter(|c| c.sided() && c.kicking.contains(&client));
         voters.count() as u32
     }
 
     /// How many it takes to kick a client out: more than half of those
     /// staying that give any player's orders, the one kicked among them.
     fn kicks_needed(&self) -> u32 {
-        let sided = self
-            .clients
-            .iter()
-            .filter(|c| !c.lost && !c.players.is_empty());
-        sided.count() as u32 / 2 + 1
+        majority(self.clients.iter().filter(|c| c.sided()).count())
     }
 
     /// How `seat` stands at this turn.
@@ -964,7 +993,7 @@ impl<L: Link> Host<L> {
         let heard: Vec<_> = (self.clients.iter())
             .filter(|c| self.standing(c) != Standing::Disconnected)
             .collect();
-        let needed = heard.len() as u32 / 2 + 1;
+        let needed = majority(heard.len());
         let votes = heard.iter().filter(|c| c.vote).count() as u32;
         (votes, needed)
     }
@@ -998,8 +1027,6 @@ impl<L: Link> Host<L> {
             if votes >= needed && run_out {
                 for (seat, &holds) in self.clients.iter_mut().zip(&holding) {
                     seat.lost |= holds;
-                }
-                for seat in &mut self.clients {
                     seat.vote = false;
                 }
             }
@@ -1021,7 +1048,7 @@ impl<L: Link> Host<L> {
                 standing: self.standing(c),
                 vote: c.vote,
                 kicking: c.kicking.clone(),
-                ping: (c.link.round_trip()).map(|t| t.as_millis().min(u32::MAX as u128) as u32),
+                ping: ping(&c.link),
             })
             .collect();
         let (votes, needed) = self.votes();
