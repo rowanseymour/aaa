@@ -3,18 +3,18 @@
 //! image of its own, apart from the map.
 
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{ClearColorConfig, Exposure, RenderTarget};
-use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
+use bevy::camera::{ClearColorConfig, RenderTarget};
 use bevy::light::AmbientLight;
 use bevy::prelude::*;
 use nif::Nif;
 use tgdata::{AnimationKind, Id};
 
 use crate::Playing;
-use crate::models::{ModelAssets, Models, Paint, Plays, bevy_transform, idle};
+use crate::light::light_unit;
+use crate::models::{ModelAssets, Models, Paint, Plays, idle, root};
 use crate::particles::Frames;
 use crate::shot;
-use crate::terrain::world;
+use crate::space::{bevy_transform, column, world};
 
 /// The layer sitters are drawn in, which the map's camera and lights
 /// leave alone.
@@ -89,7 +89,7 @@ impl Stage {
         let fitted = images.add(shot::target(UVec2::new(width, high)));
         let camera = commands
             .spawn((
-                Camera3d::default(),
+                crate::stored::world_camera(),
                 Camera {
                     // Before the map's, so the picture is ready for the
                     // interface drawn over that.
@@ -99,14 +99,11 @@ impl Stage {
                     ..default()
                 },
                 RenderTarget::from(face.clone()),
-                Tonemapping::None,
-                DebandDither::Disabled,
                 RenderLayers::layer(LAYER),
-                crate::stored::StoredColours::default(),
-                // White light all round: see [`crate::color_lights`].
+                // White light all round: see [`crate::light::color_lights`].
                 AmbientLight {
                     color: crate::stored::rgb([AMBIENT; 3]),
-                    brightness: 1.0 / Exposure::default().exposure(),
+                    brightness: light_unit(),
                     ..default()
                 },
             ))
@@ -125,10 +122,15 @@ impl Stage {
     /// picture, which keeps its shape, rather than a face's, which
     /// stretches; `None` with nobody on the stage.
     pub fn picture(&self) -> Option<(Handle<Image>, bool)> {
-        Some(match self.sitter()? {
+        Some(self.picture_of(self.sitter()?))
+    }
+
+    /// The image `sitter` is drawn to, and whether it keeps its shape.
+    fn picture_of(&self, sitter: &Sitter) -> (Handle<Image>, bool) {
+        match sitter {
             Sitter::Face(_) => (self.face.clone(), false),
             Sitter::Model { .. } => (self.fitted.clone(), true),
-        })
+        }
     }
 
     pub fn camera(&self) -> Entity {
@@ -226,9 +228,8 @@ impl Models {
         stage.clear(commands);
         stage.sat = stage.sat.wrapping_add(1);
         stage.light.get_or_insert_with(|| {
-            let unit = 1.0 / Exposure::default().exposure();
             let light = DirectionalLight {
-                illuminance: std::f32::consts::PI * unit,
+                illuminance: std::f32::consts::PI * light_unit(),
                 ..default()
             };
             let shining = Transform::default().looking_to(sun, Vec3::Y);
@@ -242,10 +243,7 @@ impl Models {
         let Some((root, seen)) = placed else {
             return false;
         };
-        let image = match sitter {
-            Sitter::Face(_) => stage.face.clone(),
-            Sitter::Model { .. } => stage.fitted.clone(),
-        };
+        let (image, _) = stage.picture_of(sitter);
         let mut eye = seen.transform;
         eye.translation += AT;
         commands.entity(stage.camera).insert((
@@ -286,12 +284,7 @@ impl Models {
         };
         let model = self.model(assets, &path, view, plays)?;
         let root = commands
-            .spawn((
-                Name::new(path),
-                Sitting,
-                Transform::from_translation(AT),
-                Visibility::default(),
-            ))
+            .spawn((root(path, Transform::from_translation(AT)), Sitting))
             .id();
         self.spawn_meshes(commands, assets, root, model, staged(None), 0.0);
         let of_kind = |kind: AnimationKind| -> Vec<String> {
@@ -336,14 +329,9 @@ impl Models {
         let extent = self.measures(&path)?.extent?;
         let model = self.model(assets, &path, &view, Plays::unit(&view, None))?;
         let root = commands
-            .spawn((
-                Name::new(path),
-                Sitting,
-                Transform::from_translation(AT),
-                Visibility::default(),
-            ))
+            .spawn((root(path, Transform::from_translation(AT)), Sitting))
             .id();
-        let colour = owner.and_then(|o| self.colours.get(&o).copied());
+        let colour = self.colour_of(owner);
         self.spawn_meshes(commands, assets, root, model, staged(colour), 0.0);
         let reach = view.ground_reach.unwrap_or(extent.foot);
         Some((root, fitted(extent.height(), reach, extent.furthest)))
@@ -377,8 +365,7 @@ pub(crate) fn seen_by(nif: &Nif, frames: &Frames) -> Option<Seen> {
 /// Where a model's camera placed at `placed` in the model looks from, as a
 /// Bevy camera: the model's looks along its own +x with its +y up.
 fn eye(placed: &nif::Transform) -> Transform {
-    let r = placed.rotation;
-    let axis = |c: usize| world(r[0][c], r[1][c], r[2][c]);
+    let axis = |c| column(&placed.rotation, c);
     let rotation = Quat::from_mat3(&Mat3::from_cols(axis(2), axis(1), -axis(0)));
     Transform {
         rotation: rotation.normalize(),

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::world;
+use tgrender::space::world;
 use tgsim::World;
 
 use crate::marks::SelectionBox;

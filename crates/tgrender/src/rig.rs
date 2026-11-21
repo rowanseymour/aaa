@@ -6,16 +6,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bevy::light::NotShadowCaster;
 use bevy::math::Affine3A;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
 use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 
-use crate::models::{Animated, ModelAssets, Part, PartMaterial, bevy_transform, controllers};
+use crate::models::{Animated, ModelAssets, Part, PartMaterial, controllers};
 use crate::particles::{Anchor, Frames};
-use crate::terrain::world;
+use crate::space::{affine, bevy_transform, column, world};
 
 /// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
@@ -99,11 +98,6 @@ fn left_over(
             (0..3).any(|i| (q[i] - p[i]).abs() > 1e-3)
         });
     moved.then_some(left)
-}
-
-/// A model-space transform as a Bevy matrix.
-fn affine(t: &nif::Transform) -> Affine3A {
-    Affine3A::from_mat4(bevy_transform(t).to_matrix())
 }
 
 /// One `.kf` sequence, bound to a rig's nodes by name.
@@ -577,17 +571,10 @@ impl Rig {
         }
         for (mesh, material) in self.meshes.iter().zip(materials) {
             let parent = mesh.node.map_or(root, |n| joints[n]);
-            let mut child = commands.spawn((
-                Mesh3d(mesh.part.mesh.clone()),
-                mesh.transform,
-                ChildOf(parent),
-            ));
-            material.insert(&mut child);
+            let mut child = commands.spawn((mesh.transform, ChildOf(parent)));
+            mesh.part.draw(&mut child, &material);
             if let Some(animation) = &mesh.part.animation {
                 child.insert(Animated::new(animation.clone(), offset, material));
-            }
-            if mesh.part.blended {
-                child.insert(NotShadowCaster);
             }
             let Some(skin) = &mesh.skin else { continue };
             let bones: Vec<Entity> = skin.bones.iter().map(|&b| joints[b]).collect();
@@ -698,8 +685,7 @@ pub fn carry_skins(skins: Query<&Carried>, mut places: Query<&mut GlobalTransfor
 /// Squashes `transform` onto the one axis `pose` has left, where a path has
 /// it travelling straight up or down; such a rotation has no Bevy rotation.
 fn squash(transform: &mut Transform, pose: &nif::Transform) {
-    let r = pose.rotation;
-    let column = |c: usize| world(r[0][c], r[1][c], r[2][c]);
+    let column = |c| column(&pose.rotation, c);
     if column(0).dot(column(1).cross(column(2))).abs() > 1e-6 {
         return;
     }
@@ -744,6 +730,13 @@ struct Once {
     time: f32,
 }
 
+impl Once {
+    /// `clip` from its start.
+    fn start(clip: OnceClip) -> Once {
+        Once { clip, time: 0.0 }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum OnceClip {
     /// Index into [`ClipSet::abilities`].
@@ -770,13 +763,26 @@ impl ClipSet {
 
     /// What plays the animation of this kind and these ids here.
     fn find(&self, like: OnceClip, ids: &str) -> Option<OnceClip> {
-        let at =
-            |list: &[(String, Clip)]| list.iter().position(|(a, _)| a.eq_ignore_ascii_case(ids));
         match like {
-            OnceClip::Ability(_) => at(&self.abilities).map(OnceClip::Ability),
-            OnceClip::Death(_) => at(&self.deaths).map(OnceClip::Death),
+            OnceClip::Ability(_) => self.ability(ids),
+            OnceClip::Death(_) => self.death(ids),
         }
     }
+
+    /// What plays the ability animation with these ids.
+    fn ability(&self, ids: &str) -> Option<OnceClip> {
+        named(&self.abilities, ids).map(OnceClip::Ability)
+    }
+
+    /// What plays the death with these ids.
+    fn death(&self, ids: &str) -> Option<OnceClip> {
+        named(&self.deaths, ids).map(OnceClip::Death)
+    }
+}
+
+/// Where the clip with these ids is in `list`.
+fn named(list: &[(String, Clip)], ids: &str) -> Option<usize> {
+    list.iter().position(|(a, _)| a.eq_ignore_ascii_case(ids))
 }
 
 /// What `rig` plays in the look at `look`, as [`Playing::look`] has it.
@@ -788,18 +794,11 @@ impl Playing {
     /// Plays the ability animation with these ids once from the start,
     /// unless it's dying or has none.
     pub fn use_ability(&mut self, ids: &str) {
-        let Some(i) = set_of(&self.rig, self.look)
-            .abilities
-            .iter()
-            .position(|(a, _)| a.eq_ignore_ascii_case(ids))
-        else {
+        let Some(clip) = set_of(&self.rig, self.look).ability(ids) else {
             return;
         };
         if !self.dying() {
-            self.once = Some(Once {
-                clip: OnceClip::Ability(i),
-                time: 0.0,
-            });
+            self.once = Some(Once::start(clip));
         }
     }
 
@@ -809,18 +808,9 @@ impl Playing {
         if self.dying() || self.held {
             return;
         }
-        let deaths = set_of(&self.rig, self.look).deaths.iter();
-        match ids.and_then(|ids| {
-            deaths
-                .clone()
-                .position(|(a, _)| a.eq_ignore_ascii_case(ids))
-        }) {
-            Some(i) => {
-                self.once = Some(Once {
-                    clip: OnceClip::Death(i),
-                    time: 0.0,
-                })
-            }
+        let set = set_of(&self.rig, self.look);
+        match ids.and_then(|ids| set.death(ids)) {
+            Some(clip) => self.once = Some(Once::start(clip)),
             None => (self.once, self.moving, self.held) = (None, None, true),
         }
     }
@@ -856,7 +846,7 @@ impl Playing {
         }
         let (from, to) = (set_of(&self.rig, self.look), set_of(&self.rig, look));
         let once = (self.once.as_ref()).and_then(|o| to.find(o.clip, from.ids(o.clip)));
-        self.once = once.map(|clip| Once { clip, time: 0.0 });
+        self.once = once.map(Once::start);
         self.time = 0.0;
         self.look = look;
     }

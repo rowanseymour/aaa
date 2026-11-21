@@ -17,7 +17,7 @@ use bevy::ui::RelativeCursorPosition;
 use tgdata::{GameData, Id};
 use tgmap::{Ground, Map, Tile};
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::{map_point, world};
+use tgrender::space::{map_point, world};
 
 use crate::{Loaded, Sim, TINTS};
 use tgsim::{Relation, State};

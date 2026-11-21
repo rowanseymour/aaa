@@ -15,7 +15,7 @@ use bevy::render::render_resource::{
 use tgdata::{Decal, GameData};
 use tgmap::Ground;
 
-use crate::terrain::{map_point, world};
+use crate::space::{map_point, world};
 use crate::{MapAssets, overlay, textures};
 
 /// How much higher each layer of decals lies than the one below, so that
@@ -132,9 +132,7 @@ impl MapAssets<'_> {
         let image = match cache.pictures.get(&decal.texture) {
             Some(known) => known.clone(),
             None => {
-                let bytes = game.read(&decal.texture);
-                let read = bytes
-                    .and_then(|b| textures::decode(&b, &decal.texture, self.formats.0, false))
+                let read = textures::read(game, &decal.texture, self.formats.0, false)
                     .map(|i| self.images.add(i));
                 cache.pictures.insert(decal.texture.clone(), read.clone());
                 read
@@ -169,7 +167,7 @@ impl MapAssets<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terrain::world;
+    use crate::space::world;
 
     #[test]
     fn decals_sort_under_all_else_yet_lie_over_the_ground_by_layer() {

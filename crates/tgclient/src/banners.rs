@@ -13,7 +13,7 @@ use tgdata::{GameData, Id};
 use tgmap::Division;
 use tgrender::camera::RtsCamera;
 use tgrender::overlay::BannerImages;
-use tgrender::terrain::world;
+use tgrender::space::world;
 
 use crate::marks::tint;
 use crate::ui::visible;

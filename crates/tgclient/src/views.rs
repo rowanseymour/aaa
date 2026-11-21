@@ -11,7 +11,7 @@ use tgmap::{Ground, Shape};
 use tgrender::MapObject;
 use tgrender::camera::{self, RtsCamera};
 use tgrender::models::{ModelAssets, Models, pose};
-use tgrender::terrain::world;
+use tgrender::space::world;
 use tgrender::{MapAssets, Playing};
 use tgsim::{State, TICK};
 

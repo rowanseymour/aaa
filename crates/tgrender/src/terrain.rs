@@ -2,18 +2,16 @@
 
 use std::collections::HashMap;
 
-use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use tgck::map::{CELL_SIZE, Terrain};
 use tgdata::{DepthColor, GameData, Id, TextureAnimation};
 use tgmap::Ground;
 
 use crate::blend::{self, Blend, GroundMaterial};
-use crate::textures;
+use crate::space::world;
 use crate::water::{Water, WaterMaterial};
+use crate::{meshes, textures};
 
 /// Tile corners, counter-clockwise seen from above.
 const CORNERS: [(usize, usize); 4] = [(0, 0), (1, 0), (1, 1), (0, 1)];
@@ -46,16 +44,6 @@ fn normal(ground: &Ground, x: usize, y: usize) -> [f32; 3] {
     let dx = slope((x.saturating_sub(1), y), ((x + 1).min(last), y));
     let dy = slope((x, y.saturating_sub(1)), (x, (y + 1).min(last)));
     Vec3::new(-dx, 1.0, dy).normalize().to_array()
-}
-
-/// Game space (x east, y north, z up) to Bevy's (x east, y up, -z north).
-pub fn world(x: f32, y: f32, height: f32) -> Vec3 {
-    Vec3::new(x, height, -y)
-}
-
-/// Bevy's space back to game space's x and y; the inverse of [`world`].
-pub fn map_point(v: Vec3) -> [f32; 2] {
-    [v.x, -v.z]
 }
 
 /// The ground, blended across terrain types, and the water surface.
@@ -226,7 +214,7 @@ pub fn prepare(game: &GameData, ground: &Ground, terrain: &Terrain, fade: f32) -
         PreparedWater {
             mesh: water_mesh(ground, &water, &colors, fade),
             animation: Vec4::new(WATER_REPEAT, WATER_REPEAT, fps, count),
-            frames: blend::texture_array(frames),
+            frames: textures::texture_array(frames),
         }
     });
     if kinds.is_empty() {
@@ -251,7 +239,7 @@ pub fn prepare(game: &GameData, ground: &Ground, terrain: &Terrain, fade: f32) -
     for (r, k) in repeats.iter_mut().zip(&kinds) {
         *r = Vec4::new(k.repeat[0], k.repeat[1], 0.0, 0.0);
     }
-    let textures = blend::texture_array(kinds.into_iter().map(|k| k.image).collect());
+    let textures = textures::texture_array(kinds.into_iter().map(|k| k.image).collect());
     Prepared {
         shade: game.shadow_shade(),
         ground: Some(PreparedGround {
@@ -385,7 +373,7 @@ fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor], 
             vertex_colors.push([r * lit, g * lit, b * lit, a + (1.0 - a) * (1.0 - lit)]);
         }
     }
-    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    let normals = meshes::up(positions.len());
     let uvs = vec![[0.0, 0.0]; positions.len()];
     let flips: Vec<bool> = tiles.iter().map(|&(x, y)| flip(ground, x, y)).collect();
     quads(positions, normals, uvs, &flips)
@@ -440,14 +428,7 @@ fn quads(
             true => [i, i + 1, i + 3, i + 1, i + 2, i + 3],
         })
         .collect();
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-    .with_inserted_indices(Indices::U32(indices))
+    meshes::triangles(positions, normals, uvs, indices)
 }
 
 /// Every frame of a water animation, as array layers.
@@ -487,60 +468,13 @@ fn load_texture(bytes: &[u8], name: &str, n: usize) -> Option<Image> {
             [src[p], src[p + 1], src[p + 2], src[p + 3]]
         })
         .collect();
-    Some(layer_image(data, n))
+    Some(textures::layer_image(data, n))
 }
 
 /// A single-colour array layer of side `n`, for a missing texture.
 fn solid(color: [f32; 3], n: usize) -> Image {
     let [r, g, b] = color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-    layer_image([r, g, b, 255].repeat(n * n), n)
-}
-
-pub(crate) fn layer_image(data: Vec<u8>, n: usize) -> Image {
-    let n = n as u32;
-    let mut image = Image::new(
-        Extent3d {
-            width: n,
-            height: n,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        // Stored colour values: see crate::stored.
-        TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    generate_mipmaps(&mut image);
-    image
-}
-
-/// Appends box-filtered mip levels to an RGBA8 image.
-fn generate_mipmaps(image: &mut Image) {
-    let (mut w, mut h) = (image.width() as usize, image.height() as usize);
-    let Some(data) = image.data.as_mut() else {
-        return;
-    };
-    let mut level = data.clone();
-    let mut count = 1;
-    while w > 1 && h > 1 && w % 2 == 0 && h % 2 == 0 {
-        let (nw, nh) = (w / 2, h / 2);
-        let mut next = vec![0u8; nw * nh * 4];
-        for y in 0..nh {
-            for x in 0..nw {
-                for c in 0..4 {
-                    let p = |dx: usize, dy: usize| {
-                        level[((2 * y + dy) * w + 2 * x + dx) * 4 + c] as u32
-                    };
-                    next[(y * nw + x) * 4 + c] =
-                        ((p(0, 0) + p(1, 0) + p(0, 1) + p(1, 1)) / 4) as u8;
-                }
-            }
-        }
-        data.extend_from_slice(&next);
-        (level, w, h) = (next, nw, nh);
-        count += 1;
-    }
-    image.texture_descriptor.mip_level_count = count;
+    textures::layer_image([r, g, b, 255].repeat(n * n), n)
 }
 
 #[cfg(test)]

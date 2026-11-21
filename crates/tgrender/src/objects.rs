@@ -10,7 +10,7 @@ use tgck::map::Thing;
 use tgdata::Id;
 use tgmap::Ground;
 
-use crate::terrain::world;
+use crate::space::world;
 use crate::{MapObject, Models};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

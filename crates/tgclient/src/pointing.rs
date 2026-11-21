@@ -6,7 +6,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 use tgmap::Ground;
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::map_point;
+use tgrender::space::map_point;
 use tgsim::World;
 
 use crate::{Focus, Loaded, Sim, banners, fog, minimap, ui};

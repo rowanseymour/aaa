@@ -10,19 +10,18 @@ use bevy::image::CompressedImageFormats;
 use bevy::math::Affine2;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{Face, TextureFormat};
 use nif::{Nif, PixelFormat, VertexColors};
 use tgdata::{GameData, View};
 
+use crate::cache::cached;
 use crate::glow::{Glow, GlowMaterial};
-use crate::models::{
-    Animation, ModelAssets, Part, PartMaterial, cached, motion, painting, uv_transform,
-};
+use crate::models::{Animation, ModelAssets, Part, PartMaterial, motion, painting, uv_transform};
 use crate::particles::{self, Blend, Frames, Look, System};
 use crate::rig::Nodes;
 use crate::solid::{Solid, SolidMaterial};
+use crate::space::in_world;
 use crate::team;
-use crate::terrain::world;
 use crate::textures;
 
 /// Textures loaded for models: from files by archive path, and those
@@ -405,7 +404,11 @@ impl Source<'_> {
     /// Its texture, as an image `formats` can sample.
     fn load(&self, game: &GameData, formats: CompressedImageFormats) -> Option<Image> {
         match self {
-            Source::File(path) => load_image(&game.read(path)?, path, formats),
+            Source::File(path) => {
+                let mut image = textures::read(game, path, formats, false)?;
+                image.sampler = textures::repeating();
+                Some(image)
+            }
             Source::Embedded { model, pixels, .. } => {
                 let image = embedded_image(pixels, formats, false);
                 if image.is_none() {
@@ -445,7 +448,7 @@ fn mesh(
     if g.positions.is_empty() || g.triangles.is_empty() {
         return None;
     }
-    let to_bevy = |[x, y, z]: [f32; 3]| world(x, y, z).to_array();
+    let to_bevy = |p| in_world(p).to_array();
     let positions: Vec<[f32; 3]> = g
         .positions
         .iter()
@@ -491,11 +494,7 @@ pub(crate) fn embedded_image(
     srgb: bool,
 ) -> Option<Image> {
     let &[width, height, offset] = p.mipmaps.first()?;
-    let size = Extent3d {
-        width,
-        height,
-        depth_or_array_layers: 1,
-    };
+    let size = UVec2::new(width, height);
     let pixels = (width * height) as usize;
     let (format, data, levels) = match p.pixel_format() {
         f @ (PixelFormat::Rgb | PixelFormat::Rgba) => {
@@ -505,11 +504,7 @@ pub(crate) fn embedded_image(
                 .chunks_exact(n)
                 .flat_map(|c| [c[0], c[1], c[2], if n == 4 { c[3] } else { 255 }])
                 .collect();
-            let format = match srgb {
-                true => TextureFormat::Rgba8UnormSrgb,
-                false => TextureFormat::Rgba8Unorm,
-            };
-            (format, rgba, 1)
+            (textures::rgba8_format(srgb), rgba, 1)
         }
         bc @ (PixelFormat::Dxt1 | PixelFormat::Dxt3 | PixelFormat::Dxt5)
             if formats.contains(CompressedImageFormats::BC) =>
@@ -526,20 +521,7 @@ pub(crate) fn embedded_image(
         }
         _ => return None,
     };
-    let mut image = Image::new_uninit(
-        size,
-        TextureDimension::D2,
-        format,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.data = Some(data);
-    image.texture_descriptor.mip_level_count = levels;
-    image.sampler = textures::repeating();
-    Some(image)
-}
-
-fn load_image(bytes: &[u8], name: &str, formats: CompressedImageFormats) -> Option<Image> {
-    let mut image = textures::decode(bytes, name, formats, false)?;
+    let mut image = textures::mipmapped(size, 1, levels, data, format);
     image.sampler = textures::repeating();
     Some(image)
 }

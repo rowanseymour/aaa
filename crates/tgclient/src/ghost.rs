@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use tgrender::MapAssets;
 use tgrender::models::repaint;
-use tgrender::terrain::world;
+use tgrender::space::world;
 
 use crate::actions::{self, Aim, Page};
 use crate::pointing::{Pointer, Pointing};

@@ -4,14 +4,10 @@
 //! whole, then each higher one through an alpha mask chosen by which edges
 //! and corners hold exactly that terrain.
 
-use bevy::asset::RenderAssetUsages;
-use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::image::CompressedImageFormats;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
-use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat, TextureViewDescriptor,
-    TextureViewDimension,
-};
+use bevy::render::render_resource::{AsBindGroup, ShaderType, TextureFormat};
 use bevy::shader::ShaderRef;
 
 use crate::textures;
@@ -103,22 +99,9 @@ pub fn mask_array(files: &[(String, Vec<u8>)]) -> Option<Image> {
     }
     data.extend(std::iter::repeat_n(0, MASK_SIZE * MASK_SIZE));
 
-    let mut image = Image::new(
-        Extent3d {
-            width: MASK_SIZE as u32,
-            height: MASK_SIZE as u32,
-            depth_or_array_layers: EMPTY_MASK + 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::R8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::ClampToEdge,
-        address_mode_v: ImageAddressMode::ClampToEdge,
-        ..ImageSamplerDescriptor::linear()
-    });
+    let size = UVec2::splat(MASK_SIZE as u32);
+    let mut image = textures::image_2d(size, EMPTY_MASK + 1, data, TextureFormat::R8Unorm);
+    image.sampler = textures::clamped();
     Some(image)
 }
 
@@ -142,16 +125,12 @@ pub fn fill_sides(p: u8) -> u8 {
 
 /// A mask array with every mask empty, for when the masks are missing.
 pub fn empty_masks() -> Image {
-    Image::new_fill(
-        Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: EMPTY_MASK + 1,
-        },
-        TextureDimension::D2,
-        &[0],
+    let layers = EMPTY_MASK + 1;
+    textures::image_2d(
+        UVec2::ONE,
+        layers,
+        vec![0; layers as usize],
         TextureFormat::R8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
     )
 }
 
@@ -159,23 +138,9 @@ pub fn empty_masks() -> Image {
 /// each tile shows, row-major from the south-west corner: 255 for as it
 /// is.
 pub fn fog_image(side: usize, light: Vec<u8>) -> Image {
-    let side = side.max(1) as u32;
-    let mut image = Image::new(
-        Extent3d {
-            width: side,
-            height: side,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        light,
-        TextureFormat::R8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::ClampToEdge,
-        address_mode_v: ImageAddressMode::ClampToEdge,
-        ..ImageSamplerDescriptor::linear()
-    });
+    let size = UVec2::splat(side.max(1) as u32);
+    let mut image = textures::image_2d(size, 1, light, TextureFormat::R8Unorm);
+    image.sampler = textures::clamped();
     image
 }
 
@@ -285,48 +250,6 @@ fn derive(bases: &[(u8, Vec<u8>)]) -> Vec<Option<Vec<u8>>> {
         }
     }
     out
-}
-
-/// Stacks equally sized RGBA8 images, each with the same mip chain, into one
-/// array texture with a repeating sampler.
-pub fn texture_array(layers: Vec<Image>) -> Image {
-    let first = &layers[0];
-    let size = (first.width(), first.height());
-    let mips = first.texture_descriptor.mip_level_count;
-    let format = first.texture_descriptor.format;
-    let count = layers.len() as u32;
-    let data = layers.into_iter().flat_map(|l| l.data.unwrap()).collect();
-    array_image(data, size, mips, format, count)
-}
-
-/// An array texture with a repeating sampler, of `count` layers of `size`,
-/// each with `mips` levels, from their data one after another.
-pub fn array_image(
-    data: Vec<u8>,
-    (width, height): (u32, u32),
-    mips: u32,
-    format: TextureFormat,
-    count: u32,
-) -> Image {
-    let mut image = Image::new_uninit(
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: count,
-        },
-        TextureDimension::D2,
-        format,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.data = Some(data);
-    image.texture_descriptor.mip_level_count = mips;
-    // Otherwise a single layer would be viewed as a plain 2D texture.
-    image.texture_view_descriptor = Some(TextureViewDescriptor {
-        dimension: Some(TextureViewDimension::D2Array),
-        ..default()
-    });
-    image.sampler = textures::repeating();
-    image
 }
 
 #[cfg(test)]

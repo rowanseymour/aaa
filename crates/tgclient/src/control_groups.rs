@@ -5,7 +5,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::world;
+use tgrender::space::world;
 
 use crate::intent::{Asked, Intent};
 use crate::{Loaded, Local, Selected, SelectedBuilding, Sim};

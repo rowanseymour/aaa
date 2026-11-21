@@ -6,12 +6,11 @@
 
 use std::f32::consts::FRAC_PI_4;
 
-use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use tgmap::Ground;
 
-use crate::terrain::world;
+use crate::space::world;
 
 const GAME_YAW: f32 = FRAC_PI_4;
 const GAME_PITCH: f32 = 40f32.to_radians();
@@ -111,14 +110,9 @@ impl RtsCamera {
 
 /// Spawns the camera that looks at a map.
 pub fn spawn(commands: &mut Commands, cam: RtsCamera) -> Entity {
-    // For crate::color_lights.
     commands
         .spawn((
-            Camera3d::default(),
-            Tonemapping::None,
-            // Dithering only runs as part of tonemapping.
-            DebandDither::Disabled,
-            crate::stored::StoredColours::default(),
+            crate::stored::world_camera(),
             cam.projection(),
             cam.transform(),
             cam,

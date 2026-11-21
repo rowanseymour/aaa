@@ -4,7 +4,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::{map_point, world as point};
+use tgrender::space::{map_point, world as point};
 
 use crate::Loaded;
 

@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use tgdata::{Decal, Id, Shape, Targets, Vfx, VfxCue};
 use tgrender::camera::RtsCamera;
 use tgrender::models::{Footprint, Rate};
-use tgrender::terrain::map_point;
+use tgrender::space::map_point;
 use tgrender::{MapAssets, MapObject};
 use tgsim::{State, Target, World};
 
