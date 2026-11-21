@@ -306,7 +306,7 @@ pub struct Organization {
     /// for those lost or yet to arrive.
     pub replacing: Vec<f32>,
     /// Whether it's carrying out an order to bombard, which makes its
-    /// shots bombardment and keeps it from resupplying.
+    /// shots bombardment.
     pub bombarding: bool,
     /// What has bombarded it lately, which keeps it out of supply.
     pub bombarded: Vec<Bombarder>,

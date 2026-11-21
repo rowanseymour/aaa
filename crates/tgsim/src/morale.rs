@@ -104,6 +104,33 @@ impl World {
         (mind.or(chasing)).or_else(|| self.resting(r).then_some(tgmap::RESTING))
     }
 
+    /// What the organization at `r` is doing, as the data's actor state id
+    /// for it, e.g. `mind_resting`.
+    pub fn activity(&self, r: usize) -> &'static str {
+        let organization = &self.organizations[r];
+        let mending = organization.mending.filter(|_| !self.underway(r));
+        match organization.mind {
+            Mind::Routing { .. } => "mind_routing",
+            Mind::Exhausted => "mind_exhausted",
+            _ if !organization.engaged.is_empty() => "mind_engaged",
+            Mind::Reforming { .. } => "mind_reforming",
+            _ if organization.chasing() => "mind_chasing",
+            _ if matches!(organization.order, Order::Pursue(_)) => "mind_attacking",
+            _ if organization.guarding() => "mind_guarding",
+            _ if organization.bombarding => "mind_bombard",
+            _ if self.underway(r) || organization.unpack_at.is_some() => match organization.order {
+                Order::Run => "mind_retreating",
+                Order::Attack | Order::Pursue(_) => "mind_attacking",
+                Order::Move => "mind_moving",
+            },
+            _ => match mending {
+                Some(Piece::Building(b)) if self.buildings[b].constructing => "mind_building",
+                Some(_) => "mind_repairing",
+                None => "mind_resting",
+            },
+        }
+    }
+
     /// What bears on the morale of the organization at `r`: the properties
     /// of its template and those it has for a time, its side's
     /// technologies that are on its kind, its experience level's and its

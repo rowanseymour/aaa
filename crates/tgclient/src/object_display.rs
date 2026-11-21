@@ -40,7 +40,7 @@ use tgdata::{GUARDING, GameData, Id, PropertyLook};
 use tgrender::MapAssets;
 use tgrender::overlay::BannerImages;
 use tgrender::portrait::{Sitter, Stage};
-use tgsim::{Ledger, Order, Pause, Piece, Relation, State, Target, World};
+use tgsim::{Ledger, Pause, Piece, Relation, State, Target, World};
 
 use crate::banners::{self, Badges};
 use crate::marks::tint;
@@ -1412,24 +1412,11 @@ fn organization_state(sim: &World, r: usize) -> Option<&'static str> {
 /// not it has members standing, as an HQ unpacked into its building has
 /// none.
 fn doing(sim: &World, r: usize) -> &'static str {
-    let organization = &sim.organizations[r];
-    match organization.mind {
-        tgsim::Mind::Routing { .. } => "mind_routing",
-        tgsim::Mind::Exhausted => "mind_exhausted",
-        _ if !organization.engaged.is_empty() => "mind_engaged",
-        tgsim::Mind::Reforming { .. } => "mind_reforming",
-        _ if organization.chasing() => "mind_chasing",
-        _ if matches!(organization.order, Order::Pursue(_)) => "mind_attacking",
-        _ if organization.guarding() => "mind_guarding",
-        _ if sim.underway(r) || organization.unpack_at.is_some() => match organization.order {
-            Order::Run => "mind_retreating",
-            Order::Attack | Order::Pursue(_) => "mind_attacking",
-            Order::Move => "mind_moving",
-        },
+    match sim.activity(r) {
         // Weightier than resting, lighter than anything it's doing.
-        _ if sim.lacks_supply(r) => "out_of_supply",
-        _ if sim.entrenched(r) => tgdata::ENTRENCHED,
-        _ => "mind_resting",
+        "mind_resting" if sim.lacks_supply(r) => "out_of_supply",
+        "mind_resting" if sim.entrenched(r) => tgdata::ENTRENCHED,
+        activity => activity,
     }
 }
 
