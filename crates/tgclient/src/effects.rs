@@ -26,7 +26,8 @@ use tgsim::{Landing, Operated, State, Target, World};
 
 use crate::random::Random;
 use crate::ui::visible;
-use crate::{BuildingView, Drawn, Loaded, Screen, Sim, UnitView};
+use crate::views::{BuildingView, UnitView};
+use crate::{Drawn, Loaded, Screen, Sim};
 
 #[derive(Resource)]
 pub struct Effects {
@@ -652,9 +653,9 @@ impl Plugin for EffectsPlugin {
             Update,
             (notice, play, follow, show_by_night, fade, tint_units)
                 .chain()
-                .after(crate::show_packing)
-                .after(crate::show_units)
-                .after(crate::show_buildings)
+                .after(crate::views::show_packing)
+                .after(crate::views::show_units)
+                .after(crate::views::show_buildings)
                 .after(crate::fog::hide_buildings)
                 .run_if(in_state(Screen::Match))
                 .run_if(resource_exists::<Effects>),

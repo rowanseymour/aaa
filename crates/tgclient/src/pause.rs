@@ -5,9 +5,11 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::actions::Page;
+use crate::loading::LoadingScreen;
+use crate::marks::SelectionBox;
 use crate::options::Options;
 use crate::ui::{self, Font};
-use crate::{Focus, LoadingScreen, Local, Orders, Screen, SelectionBox, Sim, console};
+use crate::{Focus, Local, Orders, Screen, Sim, console};
 use crate::{confirm, menu};
 use tgsim::Action;
 
@@ -266,10 +268,10 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .insert_state(Screen::Match)
             .insert_resource(crate::hud::Hud::Original)
-            .insert_resource(crate::UiScaleSetting(1.0))
+            .insert_resource(crate::ui_scale::UiScaleSetting(1.0))
             .init_resource::<UiScale>()
             .init_resource::<PauseMenu>()
-            .add_systems(Update, crate::fit_ui);
+            .add_systems(Update, crate::ui_scale::fit_ui);
         crate::hud::add_states(&mut app);
         let scale = |app: &mut App, open| {
             app.world_mut().resource_mut::<PauseMenu>().open = open;
@@ -278,7 +280,7 @@ mod tests {
         };
         let size = crate::shot::SIZE.as_vec2();
         let original = crate::hud::original::layout_scale(size);
-        let setting = crate::fitted(1.0, size);
+        let setting = crate::ui_scale::fitted(1.0, size);
         assert_ne!(original, setting);
         assert_eq!(scale(&mut app, false), original);
         assert_eq!(scale(&mut app, true), setting);

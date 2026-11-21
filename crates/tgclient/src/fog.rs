@@ -10,7 +10,8 @@ use tgrender::GroundFog;
 use tgrender::blend::{self, GroundMaterial};
 use tgsim::{Seen, World};
 
-use crate::{BuildingView, Loaded, Local, Sim, UnitView};
+use crate::views::{BuildingView, UnitView};
+use crate::{Loaded, Local, Sim};
 
 /// How bright ground explored but not seen now looks, of its full
 /// brightness.
@@ -191,7 +192,7 @@ pub fn hide_buildings(fog: Res<Fog>, mut views: Query<(&BuildingView, &mut Visib
 pub type IsScenery = (
     Without<UnitView>,
     Without<BuildingView>,
-    Without<crate::TrailerView>,
+    Without<crate::views::TrailerView>,
     // Placeholders stay hidden as they were spawned.
     Without<tgrender::objects::Marker>,
 );

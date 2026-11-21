@@ -9,7 +9,9 @@ use tgrender::models::repaint;
 use tgrender::terrain::world;
 
 use crate::actions::{self, Aim, Page};
-use crate::{Drawn, Loaded, Local, Pointer, Pointing, Screen, Selected, Sim, thing_at};
+use crate::pointing::{Pointer, Pointing};
+use crate::views::thing_at;
+use crate::{Drawn, Loaded, Local, Screen, Selected, Sim};
 
 /// The preview shown.
 #[derive(Resource, Default)]

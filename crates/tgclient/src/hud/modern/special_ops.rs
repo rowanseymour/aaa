@@ -35,8 +35,8 @@ const MEDAL_GLYPH: &str = "FactionExperience";
 /// How far right of the left edge, and down from the top, the panel
 /// leaves clear for what shares the corner with it.
 const CLEAR: Vec2 = Vec2::new(
-    crate::MARGIN + TRAY + 2.0 * GAP,
-    crate::MARGIN + ROW + 2.0 * GAP,
+    crate::ui_scale::MARGIN + TRAY + 2.0 * GAP,
+    crate::ui_scale::MARGIN + ROW + 2.0 * GAP,
 );
 
 /// Where what shares the top left corner starts: clear of the panel,
@@ -45,7 +45,7 @@ pub fn corner(local: &Local, leaders: &Leaders) -> Vec2 {
     let led = local.0.is_some_and(|p| leaders.0.contains_key(&p));
     match led {
         true => CLEAR,
-        false => Vec2::splat(crate::MARGIN),
+        false => Vec2::splat(crate::ui_scale::MARGIN),
     }
 }
 
@@ -120,8 +120,8 @@ pub fn spawn(
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: px(crate::MARGIN),
-                left: px(crate::MARGIN),
+                top: px(crate::ui_scale::MARGIN),
+                left: px(crate::ui_scale::MARGIN),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Start,
                 row_gap: px(GAP),

@@ -16,7 +16,8 @@ use tgrender::{Tint, overlay};
 use crate::effects::Effects;
 use crate::intent::{Intent, asked};
 use crate::keys;
-use crate::{BuildingView, Loaded, Local, Screen, Selected, SelectedBuilding, Sim};
+use crate::views::BuildingView;
+use crate::{Loaded, Local, Screen, Selected, SelectedBuilding, Sim};
 
 /// The tint a building out of supply is drawn in.
 const OUT_OF_SUPPLY: &str = "out_of_supply_vfx";

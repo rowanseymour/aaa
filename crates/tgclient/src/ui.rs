@@ -93,7 +93,7 @@ impl From<Palette> for Theme {
             tint,
             light,
             accent,
-            lit: crate::OWN,
+            lit: crate::marks::OWN,
             short: None,
             key: None,
         }

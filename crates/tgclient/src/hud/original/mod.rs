@@ -219,7 +219,7 @@ pub fn fit_view(
         }
         for mut node in &mut frames {
             let mut placed = node.clone();
-            crate::place_on_map(
+            crate::ui_scale::place_on_map(
                 &mut placed,
                 at.as_vec2() / scale,
                 size.as_vec2() / scale,

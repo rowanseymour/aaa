@@ -145,7 +145,7 @@ pub fn spawn(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 left: px(0),
                 right: px(0),
-                bottom: px(crate::MARGIN),
+                bottom: px(crate::ui_scale::MARGIN),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 row_gap: px(super::actions::PAD),

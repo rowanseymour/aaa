@@ -11,6 +11,7 @@ use tgdata::{Faction, Handicap, Id, Nation, RuleValues};
 use tgmap::{Brief, Player};
 
 use crate::lan::Staged;
+use crate::loading::Pending;
 use crate::menu::{MenuPage, open};
 use crate::presets::Preset;
 use crate::ui::GLYPH_DIR;
@@ -18,7 +19,7 @@ use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Shown, Surface, button, called, card, clickable, dropdown,
     inert, label, opener, padded, panel, slug, switch, text,
 };
-use crate::{Data, Pending, Screen, Seed, Side, confirm};
+use crate::{Data, Screen, Seed, Side, confirm};
 
 /// Who plays a side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

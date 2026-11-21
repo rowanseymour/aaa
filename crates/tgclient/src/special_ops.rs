@@ -280,7 +280,7 @@ pub fn act(mut intents: MessageReader<Intent>, mut user: User) {
 #[allow(clippy::too_many_arguments)]
 pub fn give(
     buttons: Res<ButtonInput<MouseButton>>,
-    pointer: crate::Pointer,
+    pointer: crate::pointing::Pointer,
     loaded: Res<Loaded>,
     focus: Res<crate::Focus>,
     mut user: User,
@@ -320,14 +320,16 @@ fn clicked(
     sim: &tgsim::World,
     player: u32,
     i: usize,
-    at: crate::Pointing,
+    at: crate::pointing::Pointing,
     focus: crate::Focus,
 ) -> Option<tgsim::Command> {
     let on = match (at, focus) {
-        (crate::Pointing::Ground(_), crate::Focus::Organization(r)) => {
+        (crate::pointing::Pointing::Ground(_), crate::Focus::Organization(r)) => {
             Some(tgsim::Piece::Organization(r))
         }
-        (crate::Pointing::Ground(_), crate::Focus::Building(b)) => Some(tgsim::Piece::Building(b)),
+        (crate::pointing::Pointing::Ground(_), crate::Focus::Building(b)) => {
+            Some(tgsim::Piece::Building(b))
+        }
         _ => None,
     };
     let to = sim.operation_aim(player, i, on, at.point())?;
@@ -355,13 +357,13 @@ struct Marking {
 fn marked(
     armed: Option<usize>,
     panel: &Panel,
-    at: Option<crate::Pointing>,
+    at: Option<crate::pointing::Pointing>,
 ) -> Option<(usize, [f32; 2])> {
     let i = armed?;
     panel.operation(i)?.marker.as_ref()?;
     match at? {
-        crate::Pointing::Ground(p) => Some((i, p)),
-        crate::Pointing::Minimap(_) => None,
+        crate::pointing::Pointing::Ground(p) => Some((i, p)),
+        crate::pointing::Pointing::Minimap(_) => None,
     }
 }
 
@@ -373,7 +375,7 @@ fn mark(
     mut commands: Commands,
     armed: Res<Armed>,
     panel: Res<Panel>,
-    pointer: crate::Pointer,
+    pointer: crate::pointing::Pointer,
     loaded: Res<Loaded>,
     mut assets: MapAssets,
     mut marking: bevy::prelude::Local<Marking>,
@@ -502,7 +504,7 @@ pub(crate) mod tests {
         let mut sim = tgsim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
         let op = tgsim::SpecialOp::new(Id::from("resupply"), 0.0, 0.0);
         sim.lead(1, 0.0, None, vec![op]);
-        let ground = crate::Pointing::Ground([3.0, 4.0]);
+        let ground = crate::pointing::Pointing::Ground([3.0, 4.0]);
         let operate = |at| {
             Some(tgsim::Command::Operate {
                 operation: 0,
@@ -517,7 +519,7 @@ pub(crate) mod tests {
         // A building isn't an organization, so the click gives nothing.
         assert_eq!(clicked(&sim, 1, 0, ground, crate::Focus::Building(0)), None);
         // On the minimap, what's under the cursor on the map plays no part.
-        let minimap = crate::Pointing::Minimap([5.0, 6.0]);
+        let minimap = crate::pointing::Pointing::Minimap([5.0, 6.0]);
         assert_eq!(
             clicked(&sim, 1, 0, minimap, crate::Focus::Building(0)),
             operate([5.0, 6.0])
@@ -543,11 +545,11 @@ pub(crate) mod tests {
             layer: 4,
         });
         panel.operations.push(without);
-        let ground = Some(crate::Pointing::Ground([3.0, 4.0]));
+        let ground = Some(crate::pointing::Pointing::Ground([3.0, 4.0]));
         assert_eq!(marked(Some(0), &panel, ground), Some((0, [3.0, 4.0])));
         assert_eq!(marked(None, &panel, ground), None);
         assert_eq!(marked(Some(1), &panel, ground), None);
-        let minimap = Some(crate::Pointing::Minimap([3.0, 4.0]));
+        let minimap = Some(crate::pointing::Pointing::Minimap([3.0, 4.0]));
         assert_eq!(marked(Some(0), &panel, minimap), None);
         assert_eq!(marked(Some(0), &panel, None), None);
     }
