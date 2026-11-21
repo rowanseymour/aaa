@@ -985,7 +985,11 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
                     fill(self, "Health", Some(Fill::Organization(r)));
                     fill(self, "Morale", Some(Fill::Morale(r)));
                 }
-                shown::Holding::Queued(b, n, picture) => {
+                shown::Holding::Queued {
+                    building: b,
+                    place: n,
+                    picture,
+                } => {
                     self.show(&parts, "Button/ButtonDecal/Decal", picture);
                     // Only the first is under way.
                     fill(

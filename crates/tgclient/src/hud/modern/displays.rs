@@ -181,13 +181,26 @@ pub type RimLook = (
     &'static Children,
 );
 
-/// Lights a [`rim_button`]'s edge and glyph while `lit`, its edge while
-/// it's hovered and its face while it's held down, greyed unless
-/// `usable`. Its glyph's only recoloured on a `restyle`, when what lights
-/// it or the theme may have changed.
+/// How [`light`] shows a [`rim_button`].
+pub struct Lighting {
+    /// Its edge and glyph are lit, as while what it's for is on.
+    pub lit: bool,
+    /// It can be pressed; it's greyed if not.
+    pub usable: bool,
+    /// What lights it, or the theme, may have changed, so its glyph's
+    /// recoloured.
+    pub restyle: bool,
+}
+
+/// Lights a [`rim_button`] as `lighting` says, its edge while it's
+/// hovered and its face while it's held down.
 pub fn light(
     (hovered, pressed, mut edge, mut surface, children): QueryItem<RimLook>,
-    (lit, usable, restyle): (bool, bool, bool),
+    Lighting {
+        lit,
+        usable,
+        restyle,
+    }: Lighting,
     theme: &Theme,
     glyphs: &mut Query<&mut ImageNode, With<Glyph>>,
 ) {
@@ -226,6 +239,11 @@ pub fn light_buttons(
     for (button, look) in &mut buttons {
         let open = displays.is_open(button.0);
         let restyle = restyle || button.is_added();
-        light(look, (open, true, restyle), &theme, &mut glyphs);
+        let lighting = Lighting {
+            lit: open,
+            usable: true,
+            restyle,
+        };
+        light(look, lighting, &theme, &mut glyphs);
     }
 }

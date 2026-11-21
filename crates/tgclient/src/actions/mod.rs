@@ -246,7 +246,7 @@ pub struct Slot(pub usize);
 #[derive(Resource, Default, PartialEq)]
 pub struct Shown {
     /// Whether the selection is the player's to command, so has a grid.
-    pub commanded: bool,
+    pub(crate) commanded: bool,
     /// What each slot holds.
     pub(crate) entries: [Option<Entry>; SLOTS],
     /// How each slot's button shows.

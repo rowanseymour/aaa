@@ -3,7 +3,7 @@
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
-use super::displays::{Glyph, Rim, RimLook, light, rim_button};
+use super::displays::{Glyph, Lighting, Rim, RimLook, light, rim_button};
 use crate::Loaded;
 use crate::clock::{PAUSE, PAUSE_BUTTON, PauseState, Pauses};
 use crate::displays;
@@ -49,6 +49,11 @@ pub fn light_button(
     let PauseState { paused, usable } = *state;
     for (button, look) in &mut buttons {
         let restyle = state.is_changed() || theme.is_changed() || button.is_added();
-        light(look, (paused, usable, restyle), &theme, &mut glyphs);
+        let lighting = Lighting {
+            lit: paused,
+            usable,
+            restyle,
+        };
+        light(look, lighting, &theme, &mut glyphs);
     }
 }

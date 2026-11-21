@@ -771,9 +771,12 @@ pub(crate) struct Owner {
 pub(crate) enum Holding {
     /// The organization at this index, with its banner.
     Organization(usize),
-    /// The building's commission at this place in its queue, by its
-    /// picture.
-    Queued(usize, usize, Option<Handle<Image>>),
+    /// The commission at `place` in `building`'s queue, by its picture.
+    Queued {
+        building: usize,
+        place: usize,
+        picture: Option<Handle<Image>>,
+    },
     /// An organization on its way by air: its picture and its name.
     Flown(Option<Handle<Image>>, String),
     /// Nothing, saying so.
@@ -791,7 +794,9 @@ impl Holding {
                 card.insert((Button, id, Pick(r), of, Pickable::default()))
                     .observe(pick);
             }
-            &Holding::Queued(building, place, _) => {
+            &Holding::Queued {
+                building, place, ..
+            } => {
                 let of = Says::Queued {
                     building,
                     place,
@@ -928,7 +933,11 @@ impl Shows<'_> {
                 let queue = &self.sim.buildings[b].queue;
                 let template = queue.get(n).map(|c| c.template().to_string());
                 let picture = template.and_then(|t| self.picture(&t));
-                Holding::Queued(b, n, picture)
+                Holding::Queued {
+                    building: b,
+                    place: n,
+                    picture,
+                }
             }
             (Place::Flown(d), _) => {
                 let template = self.sim.deliveries[d].template.to_string();

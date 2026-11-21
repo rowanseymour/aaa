@@ -503,7 +503,11 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                         );
                     });
                 }
-                Holding::Queued(b, n, picture) => {
+                Holding::Queued {
+                    building: b,
+                    place: n,
+                    picture,
+                } => {
                     card.with_children(|card| {
                         card.spawn((inside, picture_node(picture), Pickable::IGNORE));
                         let [left, top, width, height] = SLOT_PROGRESS;
