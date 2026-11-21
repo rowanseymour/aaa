@@ -5,7 +5,7 @@ use crate::hud::modern;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use tgrender::camera::RtsCamera;
-use tgrender::shot::{self};
+use tgrender::shot;
 
 use crate::{Screen, connection, hud, pause};
 
