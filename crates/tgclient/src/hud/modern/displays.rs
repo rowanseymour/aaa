@@ -102,7 +102,7 @@ pub fn spawn_buttons(
                 ],
             ),
             Panel::MessageLog => (
-                Rim::BottomRight,
+                Rim::TopLeft,
                 icon!("message-log"),
                 [
                     "control_panel_ButtonMessageLog_ToolTip",

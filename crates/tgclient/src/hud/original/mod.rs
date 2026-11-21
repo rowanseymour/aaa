@@ -21,7 +21,7 @@ use bevy::picking::hover::Hovered;
 use bevy::ui_widgets::Button;
 
 mod bars;
-mod lettering;
+pub(crate) mod lettering;
 mod object;
 mod tips;
 

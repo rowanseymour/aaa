@@ -30,7 +30,7 @@ pub fn spawn(
     let help = said("control_panel_ButtonPause_tooltip_2", "Pauses the game.");
     let glyph = icons.get(displays::icon!("pause"), &mut images, formats.0);
     commands.spawn((
-        rim_button(Rim::TopLeft, glyph, Click::TOGGLE),
+        rim_button(Rim::BottomRight, glyph, Click::TOGGLE),
         Named::new(&bindings, PAUSE, name),
         (Asks::new(PAUSE), Hint(help)),
         crate::ui::called(PAUSE_BUTTON),

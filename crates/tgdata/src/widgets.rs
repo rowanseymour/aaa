@@ -338,6 +338,26 @@ impl GameData {
         })
     }
 
+    /// The widget `name` defined at the top level of the layout `file`,
+    /// placed against the whole screen as [`game_widgets`](Self::game_widgets)
+    /// are, with the in-match interface's templates.
+    pub fn screen_widget(&self, file: &str, name: &str) -> Option<Widget> {
+        let mut names = Vec::new();
+        for list in GAME_LISTS {
+            self.take_ui_list(list, &mut Vec::new(), &mut names);
+        }
+        names.push(file.to_string());
+        let files = self.parse_named(names.iter().map(String::as_str));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let (_, parsed) = files
+            .iter()
+            .rev()
+            .find(|(n, _)| n.eq_ignore_ascii_case(file))?;
+        (parsed.root.blocks())
+            .find(|b| b.kind().is_some_and(|k| k.eq_ignore_ascii_case(name)))
+            .and_then(|b| widget(&templates.resolve(b), &templates))
+    }
+
     /// Adds the archive paths of the `.tgi` files a list of the interface's
     /// names to `out`, in order. Its lines are paths from its own folder,
     /// or from the archive's root where they start with `/`, and may name

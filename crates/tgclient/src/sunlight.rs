@@ -30,8 +30,10 @@ pub(crate) struct Sunlight {
     /// How many of the match's changes come before the start, and so don't
     /// count.
     skipped: usize,
-    /// What was last shown.
-    shown: Option<Colours>,
+    /// What the light is multiplied by while the match is paused.
+    paused: f32,
+    /// What was last shown, and whether paused.
+    shown: Option<(Colours, bool)>,
 }
 
 impl Sunlight {
@@ -50,6 +52,7 @@ impl Sunlight {
             start: [sun.diffuse, sun.ambient, sun.specular],
             heading,
             skipped: 0,
+            paused: game.paused_dimmer(),
             shown: None,
         }
     }
@@ -60,7 +63,7 @@ impl Sunlight {
         self.start = colours;
         self.heading = None;
         self.skipped = changes;
-        self.shown = Some(colours);
+        self.shown = None;
     }
 
     /// The colours shown `now` seconds into the match, given its changes,
@@ -89,15 +92,23 @@ impl Sunlight {
     }
 }
 
+/// `colours` with all their light multiplied `by` a dimmer.
+fn dimmed(colours: Colours, by: f32) -> Colours {
+    colours.map(|c| c.map(|v| v * by))
+}
+
 /// `a` moved `t` of the way to `b`.
 fn mix(a: Colours, b: Colours, t: f32) -> Colours {
     std::array::from_fn(|i| std::array::from_fn(|c| a[i][c] + (b[i][c] - a[i][c]) * t))
 }
 
 /// Lights the match with the sun's colours as its changes have left them,
-/// showing night effects while it's dark enough.
+/// showing night effects while it's dark enough, and darker while it's
+/// paused.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn follow(
     sim: Res<Sim>,
+    orders: Option<Res<crate::Orders>>,
     mut loaded: ResMut<Loaded>,
     mut sunlight: ResMut<Sunlight>,
     mut effects: ResMut<crate::effects::Effects>,
@@ -111,15 +122,19 @@ pub(crate) fn follow(
 ) {
     let now = (sim.0.ticks as f32 + fixed.overstep_fraction()) * tgsim::TICK;
     let (shown, heading) = sunlight.at(&sim.0.triggers.suns, now);
-    if sunlight.shown == Some(shown) {
+    let paused = orders.is_some_and(|o| o.paused());
+    if sunlight.shown == Some((shown, paused)) {
         return;
     }
-    sunlight.shown = Some(shown);
+    sunlight.shown = Some((shown, paused));
     let [diffuse, ambient_color, specular] = shown;
     let sun = &mut loaded.map.sun;
     (sun.diffuse, sun.ambient, sun.specular) = (diffuse, ambient_color, specular);
     [sun.target_diffuse, sun.target_ambient, sun.target_specular] = heading;
     effects.set_night(loaded.game.night(diffuse));
+    // Night effects go by the sun itself, not by how a pause dims it.
+    let by = if paused { sunlight.paused } else { 1.0 };
+    let [diffuse, ambient_color, _] = dimmed(shown, by);
     for mut light in &mut lights {
         tgrender::light::color_lights(&mut light, &mut ambient, diffuse, ambient_color);
     }
@@ -139,6 +154,7 @@ mod tests {
             start: DAY,
             heading: None,
             skipped: 0,
+            paused: 0.8,
             shown: None,
         }
     }
@@ -153,6 +169,12 @@ mod tests {
 
     fn near(a: Colours, b: Colours) -> bool {
         (a.iter().flatten().zip(b.iter().flatten())).all(|(x, y)| (x - y).abs() < 1e-4)
+    }
+
+    #[test]
+    fn a_dimmer_scales_every_colour() {
+        assert!(near(dimmed(DAY, 0.8), [[0.8; 3], [0.64; 3], [0.0; 3]]));
+        assert!(near(dimmed(DUSK, 1.0), DUSK));
     }
 
     #[test]
