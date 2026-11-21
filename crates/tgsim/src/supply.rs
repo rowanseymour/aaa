@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use tgmap::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
 
 use crate::{
-    Building, Held, Order, Piece, Refused, Relation, SECOND, State, TICK, Target, World,
-    deploy_point, distance,
+    Building, Held, Piece, Refused, Relation, SECOND, State, TICK, Target, World, deploy_point,
+    distance,
 };
 
 /// Ticks between looks at whether a building gives supply, each building
@@ -496,10 +496,9 @@ impl World {
                 && organization.bombarded.is_empty()
                 && (organization.hq.is_some() || logistics.detached || flagged)
                 && (flagged && short.is_none() || self.supplied(owner, self.leader_position(r)));
+            let activity = Id::from(self.activity(r));
             let resting = organization.engaged.is_empty()
-                && !organization.routing()
-                && !organization.bombarding
-                && !matches!(organization.order, Order::Pursue(_));
+                && (self.rules.resupplying.get(&activity)).is_none_or(|&allowed| allowed);
             self.organizations[r].in_supply = in_supply;
             match (in_supply, short) {
                 (true, _) if resting => {
@@ -947,6 +946,34 @@ mod tests {
         run(&mut w, 2.0);
         assert!(!w.organizations[1].in_supply);
         assert_eq!(w.units[a].health, 20.0);
+    }
+
+    #[test]
+    fn organizations_resupply_only_doing_what_lets_them() {
+        let mut w = division();
+        w.rules.resupplying = [("mind_bombard", false), ("mind_attacking", true)]
+            .map(|(id, allowed)| (Id::from(id), allowed))
+            .into();
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        let a = w.organizations[1].units[0];
+        w.units[a].health = 20.0;
+        w.organizations[1].bombarding = true;
+        assert_eq!(w.activity(1), "mind_bombard");
+        run(&mut w, 2.0);
+        assert!(w.organizations[1].in_supply);
+        assert_eq!(w.units[a].health, 20.0);
+        // On its way to attack it may.
+        w.organizations[1].bombarding = false;
+        let to = w.organizations[1].position;
+        let attack = Command::Attack {
+            organization: 1,
+            to: [to[0] + 5.0, to[1]],
+        };
+        w.apply(1, attack).unwrap();
+        run(&mut w, 1.0);
+        assert_eq!(w.activity(1), "mind_attacking");
+        assert!(w.organizations[1].in_supply);
+        assert!(w.units[a].health > 20.0);
     }
 
     #[test]

@@ -531,6 +531,8 @@ pub struct PropertiesComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActorState {
     pub ids: Option<Id>,
+    /// Whether a regiment doing this may resupply.
+    pub resupply: Option<bool>,
     /// The shared [`Property`]s it gives what's in it.
     #[serde(default)]
     pub property: Vec<PropertyRef>,

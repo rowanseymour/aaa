@@ -141,6 +141,10 @@ pub struct Rules {
     /// The share of its health each template gets back a second in
     /// supply, by template.
     pub resupply_rates: HashMap<Id, f32>,
+    /// Whether a regiment may resupply doing each activity, by the
+    /// [`World::activity`](crate::World::activity) naming it. One not
+    /// listed allows it.
+    pub resupplying: HashMap<Id, bool>,
     /// The organization templates each building template recruits, which are
     /// those that can attach to it as an HQ.
     pub recruit_lists: HashMap<Id, Vec<Id>>,
@@ -243,6 +247,7 @@ impl Default for Rules {
             decays: HashMap::new(),
             logistics: HashMap::new(),
             resupply_rates: HashMap::new(),
+            resupplying: HashMap::new(),
             recruit_lists: HashMap::new(),
             heroes: Vec::new(),
             faction_groups: HashMap::new(),

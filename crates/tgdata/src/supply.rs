@@ -223,6 +223,18 @@ fn effect(p: &defs::Property) -> Option<SupplyEffect> {
     (out.range != 0.0 || out.resupply != 0.0 || out.supplied).then_some(out)
 }
 
+/// Whether each of `states` that says lets a regiment resupply, the first
+/// for each id.
+fn resupplying(states: impl Iterator<Item = defs::ActorState>) -> HashMap<Id, bool> {
+    let mut out = HashMap::new();
+    for state in states {
+        if let (Some(id), Some(resupply)) = (state.ids, state.resupply) {
+            out.entry(id).or_insert(resupply);
+        }
+    }
+    out
+}
+
 /// The properties a template's abilities give what they land on.
 fn enchantments(t: &defs::Thing) -> impl Iterator<Item = &defs::Property> {
     let performs = t.performer_component.iter().flat_map(|p| &p.ability);
@@ -249,6 +261,14 @@ impl GameData {
             ),
             morale_bonus: of(|v| v.morale_supply_bonus, default.morale_bonus),
         }
+    }
+
+    /// Whether a regiment may resupply while doing each activity, by its
+    /// actor state id, as the first of the state files to say so has it.
+    pub fn resupplying(&self) -> HashMap<Id, bool> {
+        let files = self.parse_tgis(|n| n.starts_with("game/actor_states"));
+        let files = crate::scoped(&files);
+        resupplying(files.iter().flat_map(|f| f.read("ActorState")))
     }
 
     /// What each property does to supply, for those that do anything to
@@ -374,6 +394,23 @@ mod tests {
         let templates = tgi::Templates::new([&parsed.root]);
         let block = parsed.root.blocks_of("AbilityDefinition").next().unwrap();
         templates.deserialize(block).unwrap()
+    }
+
+    #[test]
+    fn activities_say_whether_regiments_resupply_doing_them_the_first_saying_so() {
+        let parsed = tgi::parse(
+            "[ActorState]\n{\n\tIDS = mind_moving\n\tresupply = true\n}\n\
+             [ActorState]\n{\n\tIDS = mind_bombard\n\tresupply = false\n}\n\
+             [ActorState]\n{\n\tIDS = mind_bombard\n\tresupply = true\n}\n\
+             [ActorState]\n{\n\tIDS = under_siege\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let states = (parsed.root.blocks_of("ActorState"))
+            .map(|b| templates.deserialize::<defs::ActorState>(b).unwrap());
+        let found = resupplying(states);
+        assert_eq!(found.len(), 2);
+        assert!(found[&Id::from("mind_moving")]);
+        assert!(!found[&Id::from("mind_bombard")]);
     }
 
     #[test]
