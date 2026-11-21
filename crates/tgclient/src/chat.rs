@@ -19,7 +19,7 @@ use crate::{Leaders, Local, Orders, Screen, Sim};
 const AT: Vec2 = Vec2::new(318.0, 496.0);
 const WIDTH: f32 = 461.0;
 /// What opens the bar, as the hotkey files name it.
-const ACTIVATE: &str = "ChatActivate";
+pub(crate) const ACTIVATE: &str = "ChatActivate";
 
 /// What the bar says.
 #[derive(Resource, Clone)]
@@ -188,6 +188,14 @@ pub fn keys(
         if activate {
             open(&mut chat, &orders, &sim.0, local);
         }
+        return;
+    }
+    // Only the chat button asks while the bar is open, as the bar holds
+    // the keys, and it switches the bar off as it switched it on.
+    if activate {
+        presses.clear();
+        chat.open = false;
+        chat.recall = None;
         return;
     }
     let step = |chat: &mut Chat, by: isize| {
@@ -528,6 +536,21 @@ mod tests {
         world.resource_mut::<Orders>().carry_out(&mut sim.0);
         world.insert_resource(sim);
         crate::orders::testing::asked(world.resource::<Orders>().record())
+    }
+
+    #[test]
+    fn the_chat_button_closes_the_bar_it_opened_sending_nothing() {
+        let mut app = app();
+        let ask = |app: &mut App| {
+            let activate = crate::intent::Intent::from(ACTIVATE);
+            app.world_mut().write_message(activate);
+            app.update();
+            app.world().resource::<Chat>().is_open()
+        };
+        assert!(ask(&mut app));
+        press(&mut app, "h");
+        assert!(!ask(&mut app));
+        assert!(asked(&mut app).is_empty());
     }
 
     #[test]

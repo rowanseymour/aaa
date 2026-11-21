@@ -2,8 +2,8 @@
 //! (see [`tgdata::widgets`]), over a view of their 4:3 shape. They're
 //! their pictures as they look at rest, the command grid's buttons, which
 //! show what [`actions::Shown`](crate::actions::Shown) holds and ask for
-//! their widget by name when pressed, other buttons that ask for what our
-//! interface's do, such as pausing, the resource bars, the object display,
+//! their widget by name when pressed, other buttons that ask for what
+//! their keys do, such as pausing, the resource bars, the object display,
 //! and the one pane every tooltip is said in. What they show is shared
 //! with ours; only the drawing is their own.
 
@@ -75,7 +75,7 @@ impl Plugin for OriginalHudPlugin {
                 )
                     .chain(),
                 (
-                    (select_pause_button, show_pressables).chain(),
+                    (select_toggles, show_pressables).chain(),
                     (show_grid, tips::show).chain(),
                     bars::slide,
                 )
@@ -277,43 +277,93 @@ const OPTIONAL: [(&str, Flag); 2] = [
     ("ButtonPause", |f| f.pause_button),
 ];
 
-/// One of the control panel's buttons that asks for what one of ours does.
+/// One of the control panel's buttons that asks for what its key does.
 struct Press {
     widget: &'static str,
     asks: &'static str,
-    /// What ours is [`called`](crate::ui::called), so a script works with
-    /// either.
+    /// What it's [`called`](crate::ui::called): where ours has the same
+    /// button, what ours is, so a script works with either.
     called: &'static str,
     click: crate::ui::Click,
-    /// Marks it as a button of its subject's, which keeps its state.
-    subject: fn(&mut EntityCommands),
+    /// What it's switched on while, for one that stays on or off.
+    follows: Option<Follows>,
 }
 
 impl Press {
+    /// A button pushed to ask for `asks`.
+    const fn push(widget: &'static str, asks: &'static str, called: &'static str) -> Press {
+        Press {
+            widget,
+            asks,
+            called,
+            click: crate::ui::Click::PUSH,
+            follows: None,
+        }
+    }
+
     /// The button that opens `panel`, which asks for it by its own name.
     const fn panel(panel: crate::displays::Panel) -> Press {
+        Press::push(panel.keys().0, panel.keys().0, panel.called())
+    }
+
+    /// A button that stays on while what it `follows` is.
+    const fn toggle(
+        widget: &'static str,
+        asks: &'static str,
+        called: &'static str,
+        follows: Follows,
+    ) -> Press {
         Press {
-            widget: panel.keys().0,
-            asks: panel.keys().0,
-            called: panel.called(),
-            click: crate::ui::Click::PUSH,
-            subject: |_| {},
+            widget,
+            asks,
+            called,
+            click: crate::ui::Click::TOGGLE,
+            follows: Some(follows),
         }
     }
 }
 
-static PRESSABLE: [Press; 4] = [
-    Press {
-        widget: "ButtonPause",
-        asks: crate::clock::PAUSE,
-        called: crate::clock::PAUSE_BUTTON,
-        click: crate::ui::Click::TOGGLE,
-        subject: |button| _ = button.insert(crate::clock::Pauses),
-    },
+static PRESSABLE: [Press; 9] = [
+    Press::push("ButtonMenu", crate::pause::MENU, "control.menu"),
+    Press::toggle(
+        "ButtonPause",
+        crate::clock::PAUSE,
+        crate::clock::PAUSE_BUTTON,
+        Follows::Pause,
+    ),
+    Press::toggle(
+        "ButtonSupplyBorder",
+        crate::keys::SUPPLY_BORDER,
+        "control.supply-border",
+        Follows::Border,
+    ),
+    Press::toggle(
+        "ButtonChat",
+        crate::chat::ACTIVATE,
+        "control.chat",
+        Follows::Chat,
+    ),
+    Press::push(
+        "ButtonSpeedDown",
+        crate::clock::SPEED_DOWN,
+        "control.slower",
+    ),
+    Press::push("ButtonSpeedUp", crate::clock::SPEED_UP, "control.faster"),
     Press::panel(crate::displays::Panel::Objectives),
     Press::panel(crate::displays::Panel::Technologies),
     Press::panel(crate::displays::Panel::MessageLog),
 ];
+
+/// What a [`Pressable`] that stays on or off is switched on while.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Follows {
+    /// The match is paused.
+    Pause,
+    /// The supply border is drawn.
+    Border,
+    /// The chat bar is open.
+    Chat,
+}
 
 /// The widgets the interface repeats once for each entry a panel lists,
 /// such as a group or a command: templates, not shown themselves, and
@@ -895,7 +945,13 @@ impl BuiltPressable {
             Blocks,
             RelativeCursorPosition::default(),
         ));
-        (press.subject)(&mut button);
+        if let Some(follows) = press.follows {
+            button.insert(follows);
+            // The pause button's greyed for those who may not pause.
+            if follows == Follows::Pause {
+                button.insert(crate::clock::Pauses);
+            }
+        }
         button.with_children(|button| {
             for face in self.faces {
                 // Placed within the button, as a share of its size.
@@ -923,14 +979,22 @@ impl BuiltPressable {
     }
 }
 
-/// Switches the pause button on while the match is paused.
-pub fn select_pause_button(
-    state: Res<crate::clock::PauseState>,
-    mut buttons: Query<(Ref<crate::clock::Pauses>, &mut Pressable)>,
+/// Switches each button that stays on or off on while what it
+/// [`Follows`] is.
+pub fn select_toggles(
+    pause: Res<crate::clock::PauseState>,
+    border: Res<crate::supply::Border>,
+    chat: Res<crate::chat::Chat>,
+    mut buttons: Query<(&Follows, &mut Pressable)>,
 ) {
-    for (pauses, mut button) in &mut buttons {
-        if state.is_changed() || pauses.is_added() {
-            button.selected = state.paused;
+    for (follows, mut button) in &mut buttons {
+        let on = match follows {
+            Follows::Pause => pause.paused,
+            Follows::Border => border.0,
+            Follows::Chat => chat.is_open(),
+        };
+        if button.selected != on {
+            button.selected = on;
         }
     }
 }
@@ -1238,8 +1302,11 @@ mod tests {
     fn the_pause_button_follows_the_pause_and_who_may_pause() {
         let mut app = App::new();
         app.init_resource::<PauseState>()
-            .add_systems(Update, (disable_buttons, select_pause_button));
-        let button = app.world_mut().spawn((Pauses, Pressable::default())).id();
+            .init_resource::<crate::supply::Border>()
+            .init_resource::<crate::chat::Chat>()
+            .add_systems(Update, (disable_buttons, select_toggles));
+        let button = (Pauses, Follows::Pause, Pressable::default());
+        let button = app.world_mut().spawn(button).id();
         let set = |app: &mut App, paused, usable| {
             *app.world_mut().resource_mut::<PauseState>() = PauseState { paused, usable };
             app.update();
@@ -1250,6 +1317,41 @@ mod tests {
         assert_eq!(set(&mut app, true, true), (true, false));
         assert_eq!(set(&mut app, false, false), (false, true));
         assert_eq!(set(&mut app, true, true), (true, false));
+    }
+
+    #[test]
+    fn the_supply_border_button_is_on_while_the_border_is_drawn() {
+        let mut app = App::new();
+        app.init_resource::<PauseState>()
+            .insert_resource(crate::supply::Border(true))
+            .init_resource::<crate::chat::Chat>()
+            .add_systems(Update, select_toggles);
+        let border = (Follows::Border, Pressable::default());
+        let border = app.world_mut().spawn(border).id();
+        let chat = (Follows::Chat, Pressable::default());
+        let chat = app.world_mut().spawn(chat).id();
+        let selected = |app: &mut App| {
+            app.update();
+            let on = |e| app.world().get::<Pressable>(e).unwrap().selected;
+            (on(border), on(chat))
+        };
+        assert_eq!(selected(&mut app), (true, false));
+        app.world_mut().resource_mut::<crate::supply::Border>().0 = false;
+        assert_eq!(selected(&mut app), (false, false));
+    }
+
+    #[test]
+    fn each_control_panel_button_asks_for_what_its_key_does() {
+        let asks = |widget: &str| {
+            let press = PRESSABLE.iter().find(|p| p.widget == widget);
+            press.map(|p| p.asks)
+        };
+        // As the hotkey files name what each key gives.
+        assert_eq!(asks("ButtonMenu"), Some("ButtonMenu"));
+        assert_eq!(asks("ButtonSupplyBorder"), Some("ButtonSupplyBorder"));
+        assert_eq!(asks("ButtonChat"), Some("ChatActivate"));
+        assert_eq!(asks("ButtonSpeedUp"), Some("SpeedUp"));
+        assert_eq!(asks("ButtonSpeedDown"), Some("SpeedDown"));
     }
 
     #[test]

@@ -359,6 +359,7 @@ mod tests {
             hotkey("f2", "TechnologyDisplay", Some("TechnologyDisplayClose")),
             hotkey("f3", "SideMessageLogPanel", Some("MessageLogToggle")),
             hotkey("esc", "TechnologyDisplay", Some("TechnologyDisplayClose")),
+            hotkey("esc", pause::MENU, None),
             hotkey("backspace", "TechnologyDisplay|1", Some(CLOSE_ALL)),
             hotkey("m", "game|action|verify", Some(MOVE)),
         ];
@@ -378,9 +379,11 @@ mod tests {
             .add_observer(crate::intent::send)
             .add_systems(
                 Update,
-                (crate::keys::send.run_if(crate::keys_heard), (keys, record))
-                    .chain()
-                    .after(pause::Toggle),
+                (
+                    crate::keys::send.run_if(crate::keys_heard),
+                    (keys, record).chain().after(pause::Toggle),
+                )
+                    .chain(),
             );
         for panel in [Panel::Technologies, Panel::MessageLog] {
             app.world_mut().spawn((PanelWindow(panel), Node::default()));
