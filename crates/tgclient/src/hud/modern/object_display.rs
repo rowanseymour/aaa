@@ -446,27 +446,34 @@ impl Ui<'_> {
         }
     }
 
-    /// An icon for each property that shows.
+    /// An icon for each property that shows, and a marker listing any
+    /// more than there are places for.
     fn icons(&mut self, commands: &mut Commands, row: Entity) {
-        for id in self.detail.properties.iter().take(MAX_PROPERTIES) {
-            let Some(look) = self.looks.properties.get(id).cloned() else {
-                continue;
-            };
-            let icon = self.looks.image(self.game, self.images, Some(&look.icon));
-            let said = std::iter::once(look.name).chain(look.lines);
-            let node = Node {
-                width: px(PROPERTY * SCALE),
-                height: px(PROPERTY * SCALE),
-                ..default()
-            };
-            let mut icon = commands.spawn((
-                node,
-                picture_node(icon),
-                Hint(said.collect::<Vec<_>>().join("\n")),
+        let (tips, more) = self.looks.property_tips(&self.detail.properties);
+        let seen = self.detail.seen_as.map(WhileSeen);
+        let square = || Node {
+            width: px(PROPERTY * SCALE),
+            height: px(PROPERTY * SCALE),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        };
+        for (icon, tip) in tips {
+            let icon = self.looks.image(self.game, self.images, Some(&icon));
+            let mut icon = commands.spawn((square(), picture_node(icon), Hint(tip), ChildOf(row)));
+            if let Some(seen) = seen {
+                icon.insert(seen);
+            }
+        }
+        if let Some(tip) = more {
+            let mut marker = commands.spawn((
+                square(),
+                Hint(tip),
                 ChildOf(row),
+                children![(label("+", Font::HudTitle, Ink::Body), Pickable::IGNORE)],
             ));
-            if let Some(of) = self.detail.seen_as {
-                icon.insert(WhileSeen(of));
+            if let Some(seen) = seen {
+                marker.insert(seen);
             }
         }
     }
@@ -946,7 +953,7 @@ impl Ui<'_> {
         // Commissions are trucks, which show their building's button.
         let pictures: Vec<_> = queue.iter().map(|t| self.picture(t)).collect();
         commands.entity(root).with_children(|display| {
-            for (i, picture) in pictures.into_iter().enumerate().take(6) {
+            for (i, picture) in pictures.into_iter().enumerate().take(MAX_QUEUED) {
                 let node = match i {
                     0 => at(240.0, 44.0, 64.0, 64.0),
                     _ => {
@@ -976,6 +983,15 @@ impl Ui<'_> {
                 };
                 let node = at(240.0, 110.0, 64.0, 4.0);
                 bar(display, node, Fill::Progress(b), Some(of));
+            }
+            // How many more are waiting than there are places for.
+            if let Some(more) = queue.len().checked_sub(MAX_QUEUED).filter(|n| *n > 0) {
+                let node = Node {
+                    justify_content: JustifyContent::End,
+                    ..at(313.0, 112.0, 98.0, 14.0)
+                };
+                let more = label(format!("+{more}"), Font::Small, Ink::Body);
+                display.spawn((node, Pickable::IGNORE, children![more]));
             }
         });
     }

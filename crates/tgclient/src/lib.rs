@@ -593,6 +593,7 @@ pub fn run(program: Program) -> ExitCode {
                     actions::act.after(keys::send),
                     actions::back_out,
                     actions::fill_slots,
+                    actions::sound_slots,
                     actions::hover,
                     actions::tell,
                 )

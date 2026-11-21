@@ -34,11 +34,21 @@ pub enum Panel {
 impl Panel {
     /// What the keys that open it, and close it while it's up, are bound
     /// to.
-    pub fn keys(self) -> (&'static str, &'static str) {
+    pub const fn keys(self) -> (&'static str, &'static str) {
         match self {
             Panel::Objectives => ("ButtonObjectives", "ObjectivesDisplayClose"),
             Panel::Technologies => ("ButtonTechnology", "TechnologyDisplayClose"),
             Panel::MessageLog => ("ButtonMessageLog", "MessageLogToggle"),
+        }
+    }
+
+    /// What either interface's button that opens it is
+    /// [`called`](crate::ui::called), so a script works with both.
+    pub const fn called(self) -> &'static str {
+        match self {
+            Panel::Objectives => "panel.objectives",
+            Panel::Technologies => "panel.technologies",
+            Panel::MessageLog => "panel.messages",
         }
     }
 

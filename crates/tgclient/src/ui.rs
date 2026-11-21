@@ -906,7 +906,7 @@ pub struct Chosen(pub bool);
 /// The interface audio a button plays as it's pressed, as the game's
 /// widget templates give each kind of widget, and whether a right press
 /// sounds it as well as a left.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub struct Click {
     audio: &'static str,
     right: bool,

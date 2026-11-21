@@ -146,11 +146,7 @@ fn spawn_button(
         RelativeCursorPosition::default(),
         bindings.marked(panel.keys().0, &name),
         (Asks::new(panel.keys().0), Hint(help)),
-        ui::called(match panel {
-            Panel::Objectives => "panel.objectives",
-            Panel::Technologies => "panel.technologies",
-            Panel::MessageLog => "panel.messages",
-        }),
+        ui::called(panel.called()),
         PanelButton { panel, name },
         rim.node(),
         Surface::Clear,
