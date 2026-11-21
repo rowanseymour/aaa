@@ -8,9 +8,11 @@ use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use tgsim::Action;
 
+use crate::Loaded;
 use crate::displays::Displays;
 use crate::intent::{Asked, Intent};
-use crate::{Loaded, Orders};
+use crate::loading::LoadingScreen;
+use crate::orders::Orders;
 
 /// What the hotkey files call pausing or unpausing, stepping the speed up
 /// or down, and setting it.
@@ -127,9 +129,65 @@ pub fn disable_buttons(
     }
 }
 
+/// Runs the game's clock as the match has been told to play: held while
+/// it's paused, and at its speed. The loading screen holds the clock
+/// itself until the match is started.
+pub(crate) fn keep_time(
+    orders: Res<Orders>,
+    mut time: ResMut<Time<Virtual>>,
+    loading: Query<(), With<LoadingScreen>>,
+) {
+    if !loading.is_empty() {
+        return;
+    }
+    match (orders.paused(), time.is_paused()) {
+        (true, false) => time.pause(),
+        (false, true) => time.unpause(),
+        _ => {}
+    }
+    if time.relative_speed() != orders.speed() {
+        time.set_relative_speed(orders.speed());
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use tgsim::World;
+
     use super::*;
+    use crate::Sim;
+    use crate::ticking::carry_out;
+
+    #[test]
+    fn the_clock_follows_the_pause_and_speed_the_match_is_given() {
+        let pathing = tgmap::Pathing::uniform(4, tgmap::Domain::Land);
+        let sim = World::from_organizations(Default::default(), pathing, &[]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Sim(sim))
+            .init_resource::<Orders>()
+            .add_systems(Update, (carry_out, keep_time).chain());
+        let clock = |app: &App| {
+            let time = app.world().resource::<Time<Virtual>>();
+            (time.is_paused(), time.relative_speed())
+        };
+        app.update();
+        assert_eq!(clock(&app), (false, 1.0));
+        let mut orders = app.world_mut().resource_mut::<Orders>();
+        orders.act(tgsim::Action::Pause(true));
+        orders.act(tgsim::Action::Speed(2.0));
+        app.update();
+        assert_eq!(clock(&app), (true, 2.0));
+        assert_eq!(app.world().resource::<Orders>().record().given.len(), 2);
+        // While the loading screen is up the clock is its to hold.
+        let loading = app.world_mut().spawn(LoadingScreen).id();
+        (app.world_mut().resource_mut::<Orders>()).act(tgsim::Action::Pause(false));
+        app.update();
+        assert!(clock(&app).0);
+        app.world_mut().despawn(loading);
+        app.update();
+        assert!(!clock(&app).0);
+    }
 
     #[test]
     fn each_key_asks_for_its_pause_or_speed() {

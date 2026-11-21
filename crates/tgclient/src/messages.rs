@@ -628,8 +628,8 @@ pub fn spawn(mut commands: Commands, loaded: Res<Loaded>, mut log: ResMut<Messag
         LogBox,
         Node {
             position_type: PositionType::Absolute,
-            top: px(crate::MARGIN),
-            left: px(crate::MARGIN),
+            top: px(crate::ui_scale::MARGIN),
+            left: px(crate::ui_scale::MARGIN),
             width: px(WIDTH),
             flex_direction: FlexDirection::Column,
             row_gap: px(LINE_GAP),

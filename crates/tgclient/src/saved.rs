@@ -14,13 +14,14 @@ use bevy::window::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::Nickname;
 use crate::hud::Hud;
 use crate::options::{
     AntiAliasing, Display, Options, Page, WindowedSize, fitting, on_wayland, room, size_of,
 };
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
-use crate::{Nickname, UI_SCALES, UiScaleSetting};
+use crate::ui_scale::{UI_SCALES, UiScaleSetting};
 
 /// The options file's name, in the program's own folder for its
 /// configuration.

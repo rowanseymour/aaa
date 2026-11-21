@@ -30,7 +30,7 @@ pub enum Rim {
 impl Rim {
     /// Where a round button sits there.
     pub fn node(self) -> Node {
-        let centre = crate::MARGIN + minimap::DISC / 2.0 - minimap::RIM_BUTTON / 2.0;
+        let centre = crate::ui_scale::MARGIN + minimap::DISC / 2.0 - minimap::RIM_BUTTON / 2.0;
         let near = px(centre - minimap::BOLT);
         let far = px(centre + minimap::BOLT);
         let (left, bottom) = match self {

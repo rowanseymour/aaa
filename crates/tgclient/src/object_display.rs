@@ -43,9 +43,10 @@ use tgrender::portrait::{Sitter, Stage};
 use tgsim::{Ledger, Order, Pause, Piece, Relation, State, Target, World};
 
 use crate::banners::{self, Badges};
+use crate::marks::tint;
 use crate::ui::{self, Hint, Ink, Meter, Shade, visible};
 use crate::{
-    Drawn, Leaders, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint,
+    Drawn, Leaders, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS,
 };
 
 /// How many organizations can be selected at once, as many as the group

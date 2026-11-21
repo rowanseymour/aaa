@@ -5,7 +5,8 @@
 use bevy::prelude::*;
 
 use crate::actions::{self, Page};
-use crate::{Loaded, Local, Orders, Pointer, Pointing, Selected, Sim};
+use crate::pointing::{Pointer, Pointing};
+use crate::{Loaded, Local, Orders, Selected, Sim};
 
 /// How far a drag has to go before it turns the building.
 const TURNING: f32 = 1.0;
@@ -109,7 +110,9 @@ pub fn place(
         facing,
     };
     match orders.give(&sim.0, player, build) {
-        Ok(()) => crate::acknowledge(&sim.0, &mut sounds, &time, player, &[organization]),
+        Ok(()) => {
+            crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &[organization])
+        }
         Err(e) => debug!("can't build: {e:?}"),
     }
     *page = Page::Orders;

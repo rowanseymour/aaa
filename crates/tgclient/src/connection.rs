@@ -13,8 +13,9 @@ use bevy::ui_widgets::Activate;
 use tgdata::PingLook;
 use tgserver::protocol::{Seated, Standing, Status};
 
+use crate::loading::LoadingScreen;
 use crate::ui::{self, Font, Ink};
-use crate::{LoadingScreen, Orders, Screen, Sim, confirm, menu, messages};
+use crate::{Orders, Screen, Sim, confirm, menu, messages};
 
 /// How long the match is held before the dialog opens by itself, so that
 /// a moment's hold doesn't flash it.

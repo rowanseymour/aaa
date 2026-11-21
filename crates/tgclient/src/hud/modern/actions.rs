@@ -54,8 +54,8 @@ pub fn spawn(mut commands: Commands) {
             Panel,
             Node {
                 position_type: PositionType::Absolute,
-                right: px(crate::MARGIN),
-                bottom: px(crate::MARGIN),
+                right: px(crate::ui_scale::MARGIN),
+                bottom: px(crate::ui_scale::MARGIN),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::End,
                 row_gap: px(PAD),

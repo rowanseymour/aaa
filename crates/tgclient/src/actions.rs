@@ -1744,7 +1744,7 @@ impl Presser<'_, '_> {
             Some(CardOrder::Rout) => {
                 let rout = tgsim::Command::Rout { organization: r };
                 if self.orders.give(sim, player, rout).is_ok() {
-                    crate::acknowledge(sim, &mut self.sounds, &self.time, player, &[r]);
+                    crate::commanding::acknowledge(sim, &mut self.sounds, &self.time, player, &[r]);
                 }
             }
             None => {}
@@ -1766,7 +1766,13 @@ impl Presser<'_, '_> {
                 }
                 Some(Give::Stop) => {
                     let selected = &self.selected.0;
-                    crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
+                    crate::commanding::acknowledge(
+                        sim,
+                        &mut self.sounds,
+                        &self.time,
+                        player,
+                        selected,
+                    );
                     if self.groups.grouping(selected) {
                         self.orders.gather(player);
                     }
@@ -1786,7 +1792,13 @@ impl Presser<'_, '_> {
                     // An order refused outright gets no reply.
                     if given {
                         let selected = &self.selected.0;
-                        crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
+                        crate::commanding::acknowledge(
+                            sim,
+                            &mut self.sounds,
+                            &self.time,
+                            player,
+                            selected,
+                        );
                     }
                 }
                 // A side with no heroes is refused without a word.
@@ -2148,7 +2160,7 @@ fn guard_at(
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
     buttons: Res<ButtonInput<MouseButton>>,
-    pointer: crate::Pointer,
+    pointer: crate::pointing::Pointer,
     scenery: Res<crate::banners::Scenery>,
     loaded: Res<Loaded>,
     local: Res<Local>,
@@ -2186,7 +2198,7 @@ pub fn aim(
         // Only the map aims one, and a place it can't land goes on
         // being aimed.
         let organization = menus.delivered(&sim.0, chosen.0, *page);
-        let (Some(b), Some(organization), crate::Pointing::Ground(_)) =
+        let (Some(b), Some(organization), crate::pointing::Pointing::Ground(_)) =
             (chosen.0, organization, at)
         else {
             return;
@@ -2220,11 +2232,11 @@ pub fn aim(
         return;
     }
     let focus = match at {
-        crate::Pointing::Ground(_) => *focus,
+        crate::pointing::Pointing::Ground(_) => *focus,
         // The minimap's marks are too close together to pick out friends,
         // so a click there is only ever on an enemy or the ground.
-        crate::Pointing::Minimap(p) => {
-            crate::nearest_organization(&sim.0, p, pointer.minimap.reach(), |r| {
+        crate::pointing::Pointing::Minimap(p) => {
+            crate::pointing::nearest_organization(&sim.0, p, pointer.minimap.reach(), |r| {
                 !scenery.has(&sim.0, r)
                     && sim.0.sides.relation(player, sim.0.organizations[r].owner)
                         == tgsim::Relation::Enemy
@@ -2265,7 +2277,7 @@ pub fn aim(
             return;
         };
         let (organizations, _) =
-            crate::give_each(&sim.0, &mut orders, player, &given, point, |r| {
+            crate::commanding::give_each(&sim.0, &mut orders, player, &given, point, |r| {
                 tgsim::Command::Repair {
                     organization: r,
                     piece,
@@ -2278,7 +2290,7 @@ pub fn aim(
             });
             return;
         }
-        crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
+        crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
         sent.write(crate::waypoints::Sent {
             to: None,
             aim,
@@ -2303,7 +2315,8 @@ pub fn aim(
             }
             Struck::Ground => {}
             Struck::Enemy(e) => {
-                let (pursuing, rest) = crate::pursue(&sim.0, &mut orders, player, &given, e);
+                let (pursuing, rest) =
+                    crate::commanding::pursue(&sim.0, &mut orders, player, &given, e);
                 // An enemy none of them can attack is no target either.
                 if pursuing.is_empty() {
                     let about = About::Organization(e);
@@ -2312,7 +2325,7 @@ pub fn aim(
                     return;
                 }
                 // Those with nothing to fire go there as they would anywhere.
-                let organizations = crate::send(
+                let organizations = crate::commanding::send(
                     &sim.0,
                     &mut orders,
                     player,
@@ -2321,7 +2334,7 @@ pub fn aim(
                     (aim, looks.together(aim)),
                     loaded.map.ground.size(),
                 );
-                crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
+                crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
                 sent.write(crate::waypoints::Sent {
                     to: None,
                     aim,
@@ -2340,7 +2353,7 @@ pub fn aim(
     // Enemy marks are all a minimap click picks out, to attack; guarding
     // there guards the place.
     if aim == Aim::Guard
-        && matches!(at, crate::Pointing::Ground(_))
+        && matches!(at, crate::pointing::Pointing::Ground(_))
         && let Some(about) = enemy_at(&sim.0, player, focus)
     {
         refused.write(Refused {
@@ -2354,7 +2367,7 @@ pub fn aim(
         && let Some(piece) = guard_at(&sim.0, player, &given, focus)
     {
         let (organizations, _) =
-            crate::give_each(&sim.0, &mut orders, player, &given, point, |r| {
+            crate::commanding::give_each(&sim.0, &mut orders, player, &given, point, |r| {
                 tgsim::Command::GuardPiece {
                     organization: r,
                     piece,
@@ -2363,7 +2376,7 @@ pub fn aim(
         if organizations.is_empty() {
             return;
         }
-        crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
+        crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
         sent.write(crate::waypoints::Sent {
             to: None,
             aim,
@@ -2386,14 +2399,14 @@ pub fn aim(
                 return;
             }
             let at = tgsim::unpack_site(point);
-            crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
+            crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
             vec![(r, at)]
         }
         // Given on a thing, above.
         Aim::Repair => return,
         Aim::Move | Aim::Attack | Aim::Run | Aim::Guard => {
-            crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
-            crate::send(
+            crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
+            crate::commanding::send(
                 &sim.0,
                 &mut orders,
                 player,

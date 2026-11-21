@@ -831,13 +831,13 @@ fn game_speed(world: &mut World, args: &[&str]) -> Reply {
 
 fn ui_scale(world: &mut World, args: &[&str]) -> Reply {
     let drawn = world.resource::<UiScale>().0;
-    let mut scale = world.resource_mut::<crate::UiScaleSetting>();
+    let mut scale = world.resource_mut::<crate::ui_scale::UiScaleSetting>();
     match args {
         [] => Ok(format!("{} (drawn at {drawn})", scale.0)),
         [n] => {
             let n = number(n)?;
-            if !crate::UI_SCALES.contains(&n) {
-                let (low, high) = crate::UI_SCALES.into_inner();
+            if !crate::ui_scale::UI_SCALES.contains(&n) {
+                let (low, high) = crate::ui_scale::UI_SCALES.into_inner();
                 return Err(format!("takes {low} to {high}"));
             }
             scale.0 = n;
@@ -1710,7 +1710,7 @@ fn act(world: &mut World, action: Action) -> Result<(), String> {
     world.resource_scope(|world, mut orders: Mut<Orders>| {
         barred(&orders, &action)?;
         orders.act(action);
-        crate::log_refused(orders.carry_out(&mut world.resource_mut::<Sim>().0));
+        crate::ticking::log_refused(orders.carry_out(&mut world.resource_mut::<Sim>().0));
         Ok(())
     })
 }
@@ -1740,7 +1740,7 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
     let mut chosen = world.resource::<SelectedBuilding>().0;
     let sim = &mut world.resource_mut::<Sim>().0;
     for _ in 0..(seconds / tgsim::TICK).round() as u32 {
-        crate::step_world(sim, &mut orders, &mut selected, &mut chosen);
+        crate::ticking::step_world(sim, &mut orders, &mut selected, &mut chosen);
     }
     world.insert_resource(orders);
     world.resource_mut::<Selected>().0 = selected;

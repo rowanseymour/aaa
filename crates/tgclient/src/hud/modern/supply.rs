@@ -45,8 +45,8 @@ pub fn spawn(
         Node {
             position_type: PositionType::Absolute,
             display: Display::None,
-            left: px(crate::MARGIN),
-            bottom: px(crate::MARGIN + minimap::DISC + crate::MARGIN),
+            left: px(crate::ui_scale::MARGIN),
+            bottom: px(crate::ui_scale::MARGIN + minimap::DISC + crate::ui_scale::MARGIN),
             width: px(CYCLE_SIZE),
             height: px(CYCLE_SIZE),
             ..default()

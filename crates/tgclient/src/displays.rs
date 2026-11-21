@@ -134,7 +134,7 @@ impl Plugin for DisplaysPlugin {
 pub struct Keys;
 
 /// Whether the loading screen has gone, so the match is up to look at.
-pub fn loaded(loading: Query<(), With<crate::LoadingScreen>>) -> bool {
+pub fn loaded(loading: Query<(), With<crate::loading::LoadingScreen>>) -> bool {
     loading.is_empty()
 }
 

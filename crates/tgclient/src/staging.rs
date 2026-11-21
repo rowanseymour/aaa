@@ -9,10 +9,11 @@ use tgserver::{Choice, NotJoined, Refusal, Told};
 
 use crate::fields::{Entered, Field, field};
 use crate::lan::{Hosting, Notice, Staged};
+use crate::loading::{HostedAt, Pending};
 use crate::lobby::Lobby;
 use crate::messages::filled;
 use crate::ui::{self, Font, Ink, Surface, button, called, label, panel, text};
-use crate::{Data, HostedAt, Pending, Screen, confirm};
+use crate::{Data, Screen, confirm};
 
 /// The most lines the log keeps.
 const KEPT: usize = 200;

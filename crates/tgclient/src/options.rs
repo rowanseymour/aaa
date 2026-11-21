@@ -26,7 +26,8 @@ use crate::ui::{
     Card, Chosen, Dropdown, Font, Hint, Ink, Surface, button, called, card, label, layer, padded,
     slider, slug, switch, text, toggle,
 };
-use crate::{Nickname, Screen, UI_SCALES, UiScaleSetting, menu};
+use crate::ui_scale::{UI_SCALES, UiScaleSetting};
+use crate::{Nickname, Screen, menu};
 use bevy::ecs::component::Mutable;
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";

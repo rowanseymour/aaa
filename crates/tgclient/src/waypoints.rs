@@ -15,7 +15,8 @@ use tgrender::MapAssets;
 use tgrender::terrain::world;
 
 use crate::actions::{self, Aim, Page};
-use crate::{Drawn, Loaded, Pointer, Screen, SelectedBuilding, Sim};
+use crate::pointing::Pointer;
+use crate::{Drawn, Loaded, Screen, SelectedBuilding, Sim};
 
 /// The effect marking a building's rally point.
 const RALLY_MARKER: &str = "recruit_marker_rally_point";

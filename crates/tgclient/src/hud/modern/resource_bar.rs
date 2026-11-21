@@ -100,8 +100,8 @@ pub fn spawn(
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: px(crate::MARGIN),
-                right: px(crate::MARGIN),
+                top: px(crate::ui_scale::MARGIN),
+                right: px(crate::ui_scale::MARGIN),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::FlexEnd,
                 row_gap: px(GAP),

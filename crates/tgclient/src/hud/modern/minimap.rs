@@ -24,8 +24,8 @@ pub fn spawn(mut commands: Commands, minimap: Res<Minimap>, mut images: ResMut<A
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
-            left: px(crate::MARGIN),
-            bottom: px(crate::MARGIN),
+            left: px(crate::ui_scale::MARGIN),
+            bottom: px(crate::ui_scale::MARGIN),
             width: px(DISC),
             height: px(DISC),
             border_radius: BorderRadius::MAX,

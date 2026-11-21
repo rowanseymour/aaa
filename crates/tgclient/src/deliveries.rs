@@ -10,7 +10,8 @@ use tgrender::MapAssets;
 use tgrender::models::pose;
 use tgsim::Seen;
 
-use crate::{Drawn, Loaded, Local, Screen, Sim, fog, thing_at};
+use crate::views::thing_at;
+use crate::{Drawn, Loaded, Local, Screen, Sim, fog};
 
 /// What's drawn of the sim's deliveries: each one's aircraft, by its
 /// index, and the falling model of each unit coming down, by its index.
