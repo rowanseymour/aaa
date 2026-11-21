@@ -87,11 +87,10 @@ pub fn spawn(
         return;
     };
     let game = &loaded.game;
-    let mut image = |game: &tgdata::GameData, path: &str| cache.get(game, &mut images, path);
-    let medal = image(game, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
+    let medal = cache.get(game, &mut images, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
     let buttons: Vec<_> = (shared.operations.iter())
         .map(|op| {
-            let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
+            let icon = (op.icon.as_deref()).and_then(|path| cache.get(game, &mut images, path));
             (op, icon, bindings.marked(&action(op.index), &op.name))
         })
         .collect();

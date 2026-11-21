@@ -710,7 +710,8 @@ pub fn run(program: Program) -> ExitCode {
         .add_systems(
             Startup,
             (ui::load_gem, connection::load, ui::ImageCache::setup),
-        );
+        )
+        .add_systems(OnExit(Screen::Match), ui::ImageCache::forget);
     saved.apply(app.world_mut());
     app.insert_resource(saved).add_plugins(saved::SavedPlugin);
     let setup = match &joined {

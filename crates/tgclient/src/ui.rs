@@ -1252,8 +1252,9 @@ pub fn read_image(
     textures::decode(&game.read(path)?, path, formats, true)
 }
 
-/// The pictures read from the game's data, each decoded once, by path, so
-/// whatever shows the same picture, in either interface, shares it.
+/// The pictures read from the game's data for a match, each decoded once,
+/// by path, so whatever shows the same picture, in either interface,
+/// shares it.
 #[derive(Resource)]
 pub struct ImageCache {
     formats: bevy::image::CompressedImageFormats,
@@ -1266,6 +1267,12 @@ impl ImageCache {
             formats: formats.0,
             known: HashMap::new(),
         });
+    }
+
+    /// Lets go of the pictures once a match is over, rather than keep them
+    /// on the menus.
+    pub fn forget(mut cache: ResMut<ImageCache>) {
+        cache.known.clear();
     }
 
     /// The picture at `path` in the game's data, if it's there to decode.
