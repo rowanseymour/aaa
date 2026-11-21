@@ -103,8 +103,8 @@ impl Default for Deployment {
 /// and properties the recruiter or its side has.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Requires {
-    /// Each building, by every id it may go by on a map: its current one
-    /// first, then any it was renamed from.
+    /// Each building, by every id that meets the need for it: its current
+    /// one first, then any it was renamed from and what it upgrades into.
     pub structures: Vec<Vec<Id>>,
     /// Whether one of them is enough, rather than all.
     pub any: bool,
@@ -134,6 +134,27 @@ pub struct Technology {
 pub struct DeployPoints {
     pub creation: [f32; 2],
     pub deployment: [f32; 2],
+}
+
+/// Every structure id that meets a need for `structure`: each id it goes
+/// by (see [`GameData::structure_aliases`]), its own first, then those of
+/// what it upgrades into, however many times over.
+fn meeting(
+    structure: &Id,
+    aliases: impl Fn(&Id) -> Vec<Id>,
+    upgrades: &HashMap<Id, Vec<Id>>,
+) -> Vec<Id> {
+    let mut out: Vec<Id> = Vec::new();
+    let mut todo = vec![structure.clone()];
+    while let Some(s) = todo.pop() {
+        for id in aliases(&s) {
+            if !out.contains(&id) {
+                todo.extend(upgrades.get(&id).into_iter().flatten().cloned());
+                out.push(id);
+            }
+        }
+    }
+    out
 }
 
 impl GameData {
@@ -202,11 +223,13 @@ impl GameData {
     /// those that need any.
     pub fn requirements(&self) -> HashMap<Id, Requires> {
         let aliases = self.structure_aliases();
+        let upgrades = self.upgrades();
+        let meeting = |s: &Id| meeting(s, &aliases, &upgrades);
         self.by_template(|t| {
             let e = t.element_component.as_ref()?;
             let structures: Vec<Vec<Id>> = supply::listed(e.required_structures.as_deref())
                 .iter()
-                .map(&aliases)
+                .map(meeting)
                 .collect();
             let properties = supply::listed(e.required_properties.as_deref());
             (!structures.is_empty() || !properties.is_empty()).then_some(Requires {
@@ -316,6 +339,16 @@ impl GameData {
             let olds = aliases.get(&id).cloned().unwrap_or_default();
             std::iter::once(id).chain(olds).collect()
         }
+    }
+
+    /// What each structure template can be upgraded into, by template id,
+    /// for those that can.
+    pub(crate) fn upgrades(&self) -> HashMap<Id, Vec<Id>> {
+        self.by_template(|t| {
+            let c = t.construction_component.as_ref()?;
+            let ids: Vec<Id> = c.upgrade.iter().filter_map(|u| u.ids.clone()).collect();
+            (!ids.is_empty()).then_some(ids)
+        })
     }
 
     /// Each renamed object template's old id to its new one.
@@ -472,6 +505,30 @@ fn upkeep<'a>(
 mod tests {
     use super::*;
     use crate::Formation;
+
+    #[test]
+    fn a_structure_is_met_by_what_it_upgrades_into_however_far_by_any_id() {
+        let ids = |ids: &[&str]| ids.iter().map(|&i| Id::from(i)).collect::<Vec<_>>();
+        let upgrades = HashMap::from([
+            (Id::from("village"), ids(&["town"])),
+            (Id::from("town"), ids(&["city"])),
+            // A loop doesn't go round for ever.
+            (Id::from("city"), ids(&["village"])),
+        ]);
+        let aliases = |s: &Id| match s.as_str() {
+            "town" => ids(&["town", "old_town"]),
+            _ => vec![s.clone()],
+        };
+        let found = meeting(&Id::from("village"), aliases, &upgrades);
+        assert_eq!(found, ids(&["village", "town", "old_town", "city"]));
+        // What it came from doesn't count.
+        let upgrades = HashMap::from([
+            (Id::from("village"), ids(&["town"])),
+            (Id::from("town"), ids(&["city"])),
+        ]);
+        let found = meeting(&Id::from("town"), |s: &Id| vec![s.clone()], &upgrades);
+        assert_eq!(found, ids(&["town", "city"]));
+    }
 
     /// AA's resources, in its order.
     fn test_resources() -> Vec<ResourceKind> {
