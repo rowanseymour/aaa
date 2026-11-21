@@ -1224,8 +1224,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn this_projects_own_fonts_are_there() {
+    /// This project's own data, every game's and each game's.
+    fn own_data() -> GameData {
         let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
         let mut game = empty();
         for entry in std::fs::read_dir(&data).unwrap() {
@@ -1234,6 +1234,22 @@ mod tests {
                 game.add_depot(&path).unwrap();
             }
         }
+        game
+    }
+
+    #[test]
+    fn this_projects_own_emblems_are_there() {
+        let emblems = own_data().emblems();
+        assert!(!emblems.is_empty());
+        let game = own_data();
+        for (nation, texture) in emblems {
+            assert!(game.exists(&texture), "{nation}: no {texture}");
+        }
+    }
+
+    #[test]
+    fn this_projects_own_fonts_are_there() {
+        let game = own_data();
         let fonts = game.parse_named(
             (game
                 .entry_names(|n| n.starts_with("fonts/") && n.ends_with(".tgi"))

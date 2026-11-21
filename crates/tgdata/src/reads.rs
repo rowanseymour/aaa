@@ -40,6 +40,7 @@ static READS: LazyLock<HashMap<&str, Vec<Read>>> = LazyLock::new(|| {
         ("cursor", vec![read::<defs::Cursor>()]),
         ("damagetype", vec![read::<defs::DamageType>()]),
         ("description", vec![read::<defs::Description>()]),
+        ("emblem", vec![read::<defs::Emblem>()]),
         ("faction", vec![read::<defs::Faction>()]),
         (
             "formation",

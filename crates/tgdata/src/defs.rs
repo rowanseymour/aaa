@@ -1146,6 +1146,14 @@ pub struct Nation {
     pub depot_name: Option<String>,
 }
 
+/// A nation's emblem, as this project's own interface draws it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Emblem {
+    pub nation_ids: Option<Id>,
+    /// Its image, beside the file unless it starts with `/`.
+    pub texture: Option<String>,
+}
+
 /// A bonus or penalty the lobby can give a side the computer plays.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Handicap {

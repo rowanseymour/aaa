@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Blue, white and red rings. -->
+  <circle fill="#1a2659" cx="64" cy="64" r="64"/>
+  <circle fill="#fff" cx="64" cy="64" r="42.24"/>
+  <circle fill="#bf1a1a" cx="64" cy="64" r="21.12"/>
+</svg>

@@ -286,6 +286,27 @@ impl GameData {
         out
     }
 
+    /// Each nation's emblem's image, by the nation's id, as this project's
+    /// own interface draws it: from the `[Emblem]` blocks of the `.tgi`
+    /// files under `Modern/`, the first for a nation winning. An SVG is
+    /// drawn at the emblem's size, any other image at its own.
+    pub fn emblems(&self) -> HashMap<Id, String> {
+        let names = self.entry_names(|n| n.starts_with("modern/") && n.ends_with(".tgi"));
+        let files = self.parse_named(names.iter().map(String::as_str));
+        let mut emblems = HashMap::new();
+        for file in scoped(&files) {
+            for emblem in file.read::<defs::Emblem>("Emblem") {
+                let (Some(nation), Some(texture)) = (not_null(emblem.nation_ids), emblem.texture)
+                else {
+                    continue;
+                };
+                let texture = beside(file.file, texture.trim());
+                emblems.entry(nation).or_insert(texture);
+            }
+        }
+        emblems
+    }
+
     /// The nations sides can play as, by name.
     pub fn nations(&self) -> Vec<Nation> {
         let strings = self.strings();
