@@ -104,7 +104,7 @@ use orders::Orders;
 use pointing::focus;
 use tgdata::GameData;
 use tgmap::{Map, Recruits};
-use tgrender::camera::{self};
+use tgrender::camera;
 use tgrender::models::Models;
 use tgrender::shot::{self, ShotPlugin};
 use tgrender::{Edge, MapRenderPlugin};
