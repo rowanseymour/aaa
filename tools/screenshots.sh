@@ -108,11 +108,11 @@ game() {
         --options "$(options "$hud")" --screenshot "$work/$1.png"
 }
 
-# menus <name>, with the script on stdin, which starts from the first menu.
+# menus <name> [hud], with the script on stdin, which starts from the first menu.
 menus() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    shoot "$1" "$bin/tag-aa" "$game" --dev --exec "$work/$1.txt" --options "$(options modern)" \
+    shoot "$1" "$bin/tag-aa" "$game" --dev --exec "$work/$1.txt" --options "$(options "${2:-modern}")" \
         --screenshot "$work/$1.png"
 }
 
@@ -156,10 +156,19 @@ lookat 342 289
 zoom 0.6
 EOF
 
-    game guadalcanal allies02_guadalcanal 0 original <<'EOF'
-lookat 46 276
+    # Japan's corps HQ just after commissioning an infantry division HQ.
+    menus berlin original <<'EOF'
+click menu.new-game
+click menu.custom
+click lobby.side1.nation; click lobby.side1.nation.nation-jpn
+click lobby.side1.general; click lobby.side1.general.yamamoto
+click lobby.launch
+click loading.continue
+select 13392
+commission regiment_jpn_hq_infantry
+advance 34
+lookat 56 377
 zoom 0.5
-advance 3
 EOF
 
     game pearl-harbor axis12_hawaii <<'EOF'
