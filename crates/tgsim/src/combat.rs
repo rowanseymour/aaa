@@ -768,6 +768,10 @@ impl World {
                 dead
             }
             Target::Building(b) => {
+                // A bombarder holds it for as long as it keeps an
+                // organization out of supply, if that's longer.
+                let held = (hit.bombard.zip(hit.from))
+                    .map_or(0.0, |(recharge, from)| self.bombard_hold(from, recharge));
                 let building = &mut self.buildings[b];
                 // Nothing a side fires hurts its own, such as what it took
                 // over earlier in the tick; its special operations do.
@@ -779,11 +783,6 @@ impl World {
                     && hit.amount > 0.0
                 {
                     building.struck = Some(struck);
-                    // A bombarder holds it for as long as it keeps a
-                    // organization out of supply, if that's longer.
-                    let held = hit.bombard.map_or(0.0, |recharge| {
-                        self.rules.supply_rules.bombard_timeout + recharge
-                    });
                     let held = (held / TICK).round() as u64;
                     besiege(&mut building.besieged, ticks + window.max(held));
                 }
@@ -2065,6 +2064,29 @@ mod tests {
         run(&mut w, 1.5);
         assert_eq!(w.buildings[0].health, 70.0);
         assert!(w.buildings[0].besieged.is_none());
+    }
+
+    #[test]
+    fn a_bombarder_under_orders_keeps_a_building_under_siege_longer() {
+        let besieged = |ordered: bool| {
+            let mut w = siege(&[building(20, 2, [10.0, 40.0])]);
+            w.rules.supply_rules.bombard_timeout = 1.0;
+            w.organizations[0].bombarding = ordered;
+            w.land(Hit {
+                target: Target::Building(0),
+                amount: 1.0,
+                from: Some(Target::Unit(0)),
+                by: 1,
+                bombard: Some(10.0),
+                morale: 0.0,
+                kind: None,
+                on_user: false,
+            });
+            w.buildings[0].besieged.unwrap() - w.ticks
+        };
+        // Its own 7 seconds, or the bombarder's 1 and 10 to fire again.
+        assert_eq!(besieged(false), 70);
+        assert_eq!(besieged(true), 110);
     }
 
     #[test]

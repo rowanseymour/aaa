@@ -393,21 +393,28 @@ impl World {
         }
     }
 
+    /// How many seconds a bombardment hit by `from`, whose weapon takes
+    /// `recharge` seconds between shots, holds what it lands on: longer
+    /// while `from` is carrying out a bombard order, until the weapon could
+    /// have fired again too.
+    pub(crate) fn bombard_hold(&self, from: Target, recharge: f32) -> f32 {
+        let ordered = match from {
+            Target::Unit(u) => self.organizations[self.units[u].organization].bombarding,
+            Target::Building(_) => false,
+        };
+        let timeout = self.rules.supply_rules.bombard_timeout;
+        if ordered { timeout + recharge } else { timeout }
+    }
+
     /// Notes a bombardment's hit on the organization at `r` by `from`, whose
     /// weapon takes `recharge` seconds between shots.
     pub(crate) fn shell(&mut self, r: usize, from: Target, recharge: f32) {
         let by = self.piece(from);
-        let (ticks, timeout) = (self.ticks, self.rules.supply_rules.bombard_timeout);
+        let (ticks, seconds) = (self.ticks, self.bombard_hold(from, recharge));
         let organization = &mut self.organizations[r];
         match organization.bombarded.iter_mut().find(|b| b.by == by) {
             Some(known) => known.tick = ticks,
             None => {
-                // One that's bombarding is kept out until the weapon could
-                // have fired again too.
-                let seconds = match organization.bombarding {
-                    true => timeout + recharge,
-                    false => timeout,
-                };
                 organization.bombarded.push(Bombarder {
                     by,
                     tick: ticks,
@@ -1147,15 +1154,28 @@ mod tests {
         assert!(!w.organizations[1].in_supply);
         run(&mut w, 1.0);
         assert!(w.organizations[1].in_supply && w.organizations[1].bombarded.is_empty());
-        // One that's bombarding waits out the weapon's recharge too, from
-        // each hit, and doesn't resupply meanwhile.
-        let a = w.organizations[1].units[0];
-        w.units[a].health = 10.0;
+        // What the shelled organization is doing plays no part.
         w.organizations[1].bombarding = true;
         w.shell(1, gun, 4.0);
-        run(&mut w, 3.0);
+        assert_eq!(w.organizations[1].bombarded[0].length, 10);
         w.organizations[1].bombarding = false;
-        w.shell(1, gun, 4.0);
+        run(&mut w, 2.0);
+        // One carrying out a bombard order when its first hit lands waits
+        // out the weapon's recharge too, from each hit, and the shelled
+        // organization doesn't resupply meanwhile.
+        let mut t = truck();
+        (t.id, t.owner) = (70, 2);
+        t.members[0].id = 70;
+        t.place([60.0, 30.0], [0.0, 1.0]);
+        w.add_organization(&t);
+        let mortar = Target::Unit(w.organizations[2].units[0]);
+        let a = w.organizations[1].units[0];
+        w.units[a].health = 10.0;
+        w.organizations[2].bombarding = true;
+        w.shell(1, mortar, 4.0);
+        run(&mut w, 3.0);
+        w.organizations[2].bombarding = false;
+        w.shell(1, mortar, 4.0);
         assert_eq!(w.organizations[1].bombarded[0].length, 50);
         run(&mut w, 4.0);
         assert!(!w.organizations[1].in_supply);
