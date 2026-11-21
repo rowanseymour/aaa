@@ -8,17 +8,15 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
-use tgdata::{GameData, Id};
-use tgrender::overlay::BannerImages;
+use tgdata::Id;
 use tgrender::portrait::Stage;
-use tgsim::{Target, World};
+use tgsim::Target;
 
-use crate::banners::Badges;
-use crate::hud::original::{CardShows, Cards};
+use crate::hud::original::Cards;
 use crate::object_display::*;
 use crate::ui::Blocks;
 use crate::ui::{self, Font, Gauge, Hint, Ink, Shade, Surface, framed, label, meter};
-use crate::{Drawn, Leaders, Loaded, Local, Sim};
+use crate::{Local, Sim};
 
 /// Our pixels to one of the game's interface units, in which its layout is
 /// given, chosen so the display stands as tall as the action buttons beside it.
@@ -158,20 +156,10 @@ pub fn spawn(mut commands: Commands) {
 }
 
 /// Lays the display out afresh when what it should show changes.
-#[allow(clippy::too_many_arguments)]
 pub fn lay_out(
     mut commands: Commands,
-    sim: Res<Sim>,
-    local: Res<Local>,
-    leaders: Res<Leaders>,
-    gem: Res<ui::Gem>,
-    drawn: Res<Drawn>,
-    badges: Res<Badges>,
     showing: Res<Showing>,
-    loaded: Res<Loaded>,
-    mut looks: ResMut<Looks>,
-    mut banners: ResMut<BannerImages>,
-    mut images: ResMut<Assets<Image>>,
+    mut from: ShowsFrom,
     cards: Option<Res<Cards>>,
     mut display: Single<(Entity, &mut Visibility), With<ObjectDisplay>>,
     row: Query<Entity, With<PropertyRow>>,
@@ -193,31 +181,14 @@ pub fn lay_out(
         return;
     };
     let mut ui = Ui {
+        commands: &mut commands,
+        root: *root,
         cards: cards.as_deref(),
-        sim: &sim.0,
-        local: local.0,
-        leaders: &leaders,
-        gem: &gem,
-        drawn: &drawn,
-        badges: &badges,
-        detail,
-        game: &loaded.game,
-        looks: &mut looks,
-        banners: &mut banners,
-        images: &mut images,
+        shows: from.shows(detail),
     };
-    let root = *root;
-    if let Some(row) = row {
-        return ui.icons(&mut commands, row);
-    }
-    match mode {
-        Mode::SimpleActor(actor) => ui.simple_actor(&mut commands, root, actor),
-        Mode::Company(actor) => ui.company(&mut commands, root, actor),
-        Mode::Settlement => {}
-        Mode::Group(rs) => ui.group(&mut commands, root, rs),
-    }
-    if matches!(mode, Mode::Company(Actor::Organization(_)) | Mode::Group(_)) {
-        formation_buttons(&mut commands, root);
+    match row {
+        Some(row) => ui.icons(row),
+        None => ui.draw(mode),
     }
 }
 
@@ -227,81 +198,161 @@ const FORMATIONS_AT: Vec2 = Vec2::new(444.0, 36.0);
 const FORMATION_BUTTON: f32 = 46.0;
 const FORMATION_ROW: f32 = 47.0;
 
-/// The formation buttons down the display's right edge, which
-/// [`show`](crate::formations::show) fills.
-fn formation_buttons(commands: &mut Commands, root: Entity) {
-    commands.entity(root).with_children(|display| {
-        for n in 0..crate::formations::MOST {
-            let top = FORMATIONS_AT.y + FORMATION_ROW * n as f32;
-            let node = at(FORMATIONS_AT.x, top, FORMATION_BUTTON, FORMATION_BUTTON);
-            display.spawn((
-                crate::formations::FormationButton(n),
-                ui::called(format!("formation.{}", n + 1)),
-                Button,
-                Pickable::default(),
-                Visibility::Hidden,
-                Node {
-                    border: UiRect::all(px(2)),
-                    ..node
-                },
-                Surface::Slot,
-                ui::Edge::Clear,
-                children![(
-                    crate::formations::FormationIcon,
-                    ImageNode::default(),
-                    Node {
-                        width: percent(100),
-                        height: percent(100),
-                        ..default()
-                    },
-                    Pickable::IGNORE,
-                )],
-            ));
-        }
-    });
-}
-
-/// What laying the display out reads.
-struct Ui<'a> {
+/// What laying the display out reads, and where it's drawn.
+struct Ui<'a, 'w, 's> {
+    commands: &'a mut Commands<'w, 's>,
+    /// The display, which what's shown is drawn in.
+    root: Entity,
     /// The group display's cards, where the game's layouts have them.
     cards: Option<&'a Cards>,
-    sim: &'a World,
-    local: Option<u32>,
-    leaders: &'a Leaders,
-    gem: &'a ui::Gem,
-    drawn: &'a Drawn,
-    badges: &'a Badges,
-    detail: &'a Detail,
-    game: &'a GameData,
-    looks: &'a mut Looks,
-    banners: &'a mut BannerImages,
-    images: &'a mut Assets<Image>,
+    shows: Shows<'a>,
 }
 
-impl Ui<'_> {
-    fn picture(&mut self, template: &str) -> Option<Handle<Image>> {
-        picture(self.drawn, self.looks, self.game, self.images, template)
+impl<'a> Parts<'a> for Ui<'a, '_, '_> {
+    fn shows(&mut self) -> &mut Shows<'a> {
+        &mut self.shows
     }
 
-    fn organization_name(&self, r: usize) -> String {
-        let looks = &self.looks;
-        organization_name(self.sim, &looks.names, &looks.strings, &looks.map, r)
+    /// The relay's stockpile, under its portrait.
+    fn stockpile(&mut self, b: usize) {
+        let of = Says::Building(b);
+        let node = at(PORTRAIT_BOX[0], 176.0, PORTRAIT_BOX[2], 3.0);
+        let whole = Node {
+            width: percent(100),
+            height: percent(100),
+            ..default()
+        };
+        self.commands.entity(self.root).with_children(|display| {
+            let seen = WhileSeen(Target::Building(b));
+            display
+                .spawn((node, seen, Pickable::IGNORE))
+                .with_children(|holder| bar(holder, whole, Fill::Stockpile(b), Some(of)));
+        });
+    }
+
+    /// A block of cards for each kind of slot, as the game's has them.
+    fn units(&mut self, r: usize, captain: usize) {
+        let (sim, looks) = (self.shows.sim, &*self.shows.looks);
+        let groups = card_groups(sim, looks, r, captain);
+        let card = Vec2::new(42.0, 47.0);
+        let places = card_places(
+            &groups,
+            card,
+            Vec2::splat(2.0),
+            5.0,
+            Vec2::new(210.0, 110.0),
+        );
+        let pictures: Vec<_> = places
+            .iter()
+            .map(|&(u, _)| self.shows.picture(sim.units[u].template.as_str()))
+            .collect();
+        self.commands.entity(self.root).with_children(|display| {
+            display
+                .spawn((at(144.0, 44.0, 210.0, 110.0), Pickable::IGNORE))
+                .with_children(|cards| {
+                    for (&(u, place), picture) in places.iter().zip(pictures) {
+                        let card = framed(Node {
+                            flex_direction: FlexDirection::Column,
+                            ..at(place.x, place.y, card.x, card.y)
+                        });
+                        cards
+                            .spawn((card, says(Says::Unit(u))))
+                            .with_children(|card| {
+                                card.spawn((
+                                    Node {
+                                        width: percent(100),
+                                        flex_grow: 1.0,
+                                        ..default()
+                                    },
+                                    picture_node(picture),
+                                    UnitPicture(u),
+                                    Shade::Full,
+                                ));
+                                bar(
+                                    card,
+                                    Node {
+                                        width: percent(100),
+                                        height: px(4.0 * SCALE),
+                                        ..default()
+                                    },
+                                    Fill::Unit(u),
+                                    None,
+                                );
+                            });
+                    }
+                });
+        });
+    }
+
+    /// The original's cards, so without its layouts there are none.
+    fn cards(&mut self, rs: &[usize]) {
+        let Some(cards) = self.cards else {
+            return;
+        };
+        let mut left = 8.0;
+        for r in newest_first(rs) {
+            let lone = lone(self.shows.sim, r);
+            let (Some(size), Some(top)) = (cards.size(lone), cards.top(lone)) else {
+                continue;
+            };
+            // Under the header, which has the name the card's top is for,
+            // and cut off at it so the header keeps the pointer.
+            let holder = Node {
+                overflow: Overflow::clip(),
+                ..at(left, HEADER, size.x, size.y - top)
+            };
+            left += size.x + 4.0;
+            self.commands.entity(self.root).with_children(|display| {
+                display
+                    .spawn((holder, Pickable::IGNORE))
+                    .with_children(|holder| {
+                        holder
+                            .spawn((at(0.0, -top, size.x, size.y), Pickable::IGNORE))
+                            .with_children(|s| cards.draw(s, self.shows.reborrow(), r));
+                    });
+            });
+        }
+    }
+
+    fn formation_buttons(&mut self) {
+        self.commands.entity(self.root).with_children(|display| {
+            for n in 0..crate::formations::MOST {
+                let top = FORMATIONS_AT.y + FORMATION_ROW * n as f32;
+                let node = at(FORMATIONS_AT.x, top, FORMATION_BUTTON, FORMATION_BUTTON);
+                display.spawn((
+                    crate::formations::FormationButton(n),
+                    ui::called(format!("formation.{}", n + 1)),
+                    Button,
+                    Pickable::default(),
+                    Visibility::Hidden,
+                    Node {
+                        border: UiRect::all(px(2)),
+                        ..node
+                    },
+                    Surface::Slot,
+                    ui::Edge::Clear,
+                    children![(
+                        crate::formations::FormationIcon,
+                        ImageNode::default(),
+                        Node {
+                            width: percent(100),
+                            height: percent(100),
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    )],
+                ));
+            }
+        });
     }
 
     /// The strip across the top: the name over the owner, and, where it
     /// has `properties`, the icons for those that show on its right.
-    fn title(
-        &mut self,
-        commands: &mut Commands,
-        root: Entity,
-        name: String,
-        owner: u32,
-        properties: bool,
-    ) {
-        let player = self.sim.sides.player(owner);
-        let colour = owner_colour(self.sim, self.local, owner);
+    fn title(&mut self, name: String, owner: u32, properties: bool) {
+        let player = self.shows.sim.sides.player(owner);
+        let colour = owner_colour(self.shows.sim, self.shows.local, owner);
         let mut row = None;
-        commands.entity(root).with_children(|display| {
+        self.commands.entity(self.root).with_children(|display| {
             let strip = Node {
                 position_type: PositionType::Absolute,
                 top: px(0),
@@ -348,9 +399,13 @@ impl Ui<'_> {
                                         align_self: AlignSelf::Center,
                                         ..default()
                                     };
-                                    line.spawn(ui::side_mark(self.gem, p.rgb, mark));
+                                    line.spawn(ui::side_mark(self.shows.gem, p.rgb, mark));
                                 }
-                                let owner = self.leaders.owner(p, &self.sim.sides, &self.looks.map);
+                                let owner = self.shows.leaders.owner(
+                                    p,
+                                    &self.shows.sim.sides,
+                                    &self.shows.looks.map,
+                                );
                                 line.spawn((ui::coloured(owner, Font::Hud, colour), unwrapped()));
                             });
                         });
@@ -365,25 +420,18 @@ impl Ui<'_> {
                 });
         });
         if let Some(row) = row {
-            self.icons(commands, row);
+            self.icons(row);
         }
     }
 
     /// The portrait's box, holding `template`'s picture until [`portray`]
     /// has a portrait to show there, over a bar filled as `fill` says, both
     /// giving `of`'s tooltip.
-    fn portrait(
-        &mut self,
-        commands: &mut Commands,
-        root: Entity,
-        template: &str,
-        fill: Fill,
-        of: Says,
-    ) {
-        let picture = self.picture(template);
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says) {
+        let picture = self.shows.picture(template);
         let [left, top, width, height] = PORTRAIT_BOX;
         let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
-        commands.entity(root).with_children(|display| {
+        self.commands.entity(self.root).with_children(|display| {
             display.spawn(framed(at(left, top, width, height)));
             let inside = || at(left + in_left, top + in_top, PORTRAIT.x, PORTRAIT.y);
             // What shows round a portrait that doesn't fill its box.
@@ -399,89 +447,10 @@ impl Ui<'_> {
         });
     }
 
-    /// The organization at `r`'s efficiency bar in `node`, on black, with a
-    /// marker at what it's easing towards.
-    fn efficiency(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
-        let (gauge, fill) = (Gauge::Efficiency, Fill::Efficiency(r));
-        self.marked_bar(parent, node, gauge, fill, Marker::Efficiency(r));
-    }
-
-    /// The organization at `r`'s morale bar in `node`, on black, with a
-    /// marker at its breakpoint.
-    fn morale(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
-        let (gauge, fill) = (Gauge::Morale, Fill::Morale(r));
-        self.marked_bar(parent, node, gauge, fill, Marker::Breakpoint(r));
-    }
-
-    /// A bar on black with `marker` on it.
-    fn marked_bar(
-        &mut self,
-        parent: &mut ChildSpawnerCommands,
-        node: Node,
-        gauge: Gauge,
-        fill: Fill,
-        marker: Marker,
-    ) {
-        let path = self.looks.marker.clone();
-        let picture = self.looks.image(self.game, self.images, path.as_deref());
-        let size = (picture.as_ref())
-            .and_then(|h| self.images.get(h))
-            .map(Image::size_f32);
-        let mut bar = parent.spawn((meter(node, gauge), fill, BackgroundColor(Color::BLACK)));
-        if let (Some(picture), Some(size)) = (picture, size) {
-            bar.with_child((
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(0),
-                    left: marked(self.sim, marker),
-                    width: px(size.x * SCALE),
-                    height: px(size.y * SCALE),
-                    margin: UiRect::left(px(-size.x * SCALE)),
-                    ..default()
-                },
-                ImageNode::new(picture),
-                marker,
-                Pickable::IGNORE,
-            ));
-        }
-    }
-
-    /// An icon for each property that shows, and a marker listing any
-    /// more than there are places for.
-    fn icons(&mut self, commands: &mut Commands, row: Entity) {
-        let (tips, more) = self.looks.property_tips(&self.detail.properties);
-        let seen = self.detail.seen_as.map(WhileSeen);
-        let square = || Node {
-            width: px(PROPERTY * SCALE),
-            height: px(PROPERTY * SCALE),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        };
-        for (icon, tip) in tips {
-            let icon = self.looks.image(self.game, self.images, Some(&icon));
-            let mut icon = commands.spawn((square(), picture_node(icon), Hint(tip), ChildOf(row)));
-            if let Some(seen) = seen {
-                icon.insert(seen);
-            }
-        }
-        if let Some(tip) = more {
-            let mut marker = commands.spawn((
-                square(),
-                Hint(tip),
-                ChildOf(row),
-                children![(label("+", Font::HudTitle, Ink::Body), Pickable::IGNORE)],
-            ));
-            if let Some(seen) = seen {
-                marker.insert(seen);
-            }
-        }
-    }
-
     /// The line along the bottom saying what it counts for in its side's
     /// economy, and what it's doing.
-    fn status(&self, commands: &mut Commands, root: Entity, status: Status) {
-        commands.entity(root).with_children(|display| {
+    fn status(&mut self, status: Status) {
+        self.commands.entity(self.root).with_children(|display| {
             display
                 .spawn((at(144.0, 158.0, 286.0, 18.0), Surface::Track))
                 .with_children(|line| {
@@ -514,51 +483,15 @@ impl Ui<'_> {
         });
     }
 
-    /// An organization's banner, as it flies over the organization, filling
-    /// `node`.
-    fn banner(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
-        let layers = Flown {
-            sim: self.sim,
-            detail: self.detail,
-            leaders: self.leaders,
-            badges: self.badges,
-            game: self.game,
-        }
-        .layers(self.banners, self.images, r);
-        parent
-            .spawn((node, Pickable::IGNORE))
-            .with_children(|banner| {
-                for (image, colour) in layers {
-                    let Some(image) = image else {
-                        continue;
-                    };
-                    banner.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            width: percent(100),
-                            height: percent(100),
-                            ..default()
-                        },
-                        ImageNode {
-                            image,
-                            color: colour,
-                            ..default()
-                        },
-                        Pickable::IGNORE,
-                    ));
-                }
-            });
-    }
-
     /// An HQ's places: each with the banner and health of the organization in
     /// it, which a click selects, with the picture and progress of what
     /// `building`'s queue holds it for, which a click calls off, or empty.
-    fn slots(&mut self, commands: &mut Commands, root: Entity, building: Option<usize>) {
-        let count = self.detail.slots.len();
-        for (i, place) in self.detail.slots.clone().into_iter().enumerate() {
+    fn places(&mut self, building: Option<usize>) {
+        let count = self.shows.detail.slots.len();
+        for (i, place) in self.shows.detail.slots.clone().into_iter().enumerate() {
             let [left, top] = slot_at(i, count);
             let node = at(left, top, SLOT.x, SLOT.y);
-            let mut card = commands.spawn((framed(node), ChildOf(root)));
+            let mut card = self.commands.spawn((framed(node), ChildOf(self.root)));
             let [left, top, side] = SLOT_BANNER;
             let inside = at(left, top, side, side);
             match (place, building) {
@@ -567,7 +500,7 @@ impl Ui<'_> {
                     card.insert((Button, id, Pick(r), says(Says::Organization(r))));
                     card.observe(pick);
                     card.with_children(|card| {
-                        self.banner(card, inside, r);
+                        banner(&mut self.shows, card, inside, r);
                         let [left, top, width, height] = SLOT_HEALTH;
                         bar(
                             card,
@@ -578,9 +511,9 @@ impl Ui<'_> {
                     });
                 }
                 (Place::Queued(n), Some(b)) => {
-                    let queue = &self.sim.buildings[b].queue;
+                    let queue = &self.shows.sim.buildings[b].queue;
                     let template = queue.get(n).map(|c| c.template().to_string());
-                    let picture = template.and_then(|t| self.picture(&t));
+                    let picture = template.and_then(|t| self.shows.picture(&t));
                     let of = Says::Queued {
                         building: b,
                         place: n,
@@ -601,66 +534,30 @@ impl Ui<'_> {
                     });
                 }
                 (Place::Flown(d), _) => {
-                    let template = self.sim.deliveries[d].template.as_str();
-                    let picture = self.picture(template);
-                    card.insert(Hint(template_name(&self.looks.names, template)));
+                    let template = self.shows.sim.deliveries[d].template.as_str();
+                    let picture = self.shows.picture(template);
+                    card.insert(Hint(template_name(&self.shows.looks.names, template)));
                     card.with_children(|card| {
                         card.spawn((inside, picture_node(picture), Pickable::IGNORE));
                         let [left, top, width, height] = SLOT_HEALTH;
                         bar(card, at(left, top, width, height), Fill::Flight, None);
                     });
                 }
-                _ => drop(card.insert(Hint(self.looks.said(EMPTY_SLOT)))),
+                _ => drop(card.insert(Hint(self.shows.looks.said(EMPTY_SLOT)))),
             }
         }
-    }
-
-    /// The simple actor display: a building with what it's commissioning,
-    /// or a unit on its own.
-    fn simple_actor(&mut self, commands: &mut Commands, root: Entity, actor: &Actor) {
-        match *actor {
-            Actor::Organization(r) => {
-                self.heading(commands, root, r);
-                let organization = &self.sim.organizations[r];
-                let captain = captain(self.sim, self.looks, r);
-                let unit = self.sim.units[captain].template.clone();
-                self.attacks(commands, root, Target::Unit(captain));
-                self.defense(commands, root, Target::Unit(captain), &unit);
-                let says = [&organization.template, &unit];
-                let says = says.into_iter().find_map(|t| self.described(t));
-                self.description(commands, root, says);
-                self.status(commands, root, Status::Organization(r));
-            }
-            Actor::Building(b, ref queue) => {
-                self.structure(commands, root, b);
-                let template = self.sim.buildings[b].template.clone();
-                self.attacks(commands, root, Target::Building(b));
-                self.defense(commands, root, Target::Building(b), &template);
-                // What it's commissioning shows where its description would.
-                match queue.is_empty() {
-                    true => self.description(commands, root, self.described(&template)),
-                    false => self.queue(commands, root, b),
-                }
-                self.status(commands, root, Status::Building(b));
-            }
-        }
-    }
-
-    /// What `template` says of itself, if anything.
-    fn described(&self, template: &Id) -> Option<String> {
-        self.looks.listings.get(template)?.description.clone()
     }
 
     /// The shield and the defence of `target`, for one with a body, whose
     /// `template` gives the icon.
-    fn defense(&mut self, commands: &mut Commands, root: Entity, target: Target, template: &Id) {
-        if self.sim.defense(target).is_none() {
-            return;
-        }
-        let icon = (self.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
-        let icon = self.looks.image(self.game, self.images, icon.as_deref());
+    fn defense(&mut self, target: Target, template: &Id) {
+        let icon = (self.shows.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
+        let icon = self
+            .shows
+            .looks
+            .image(self.shows.game, self.shows.images, icon.as_deref());
         let [left, top, width, height] = DEFENSE;
-        commands.entity(root).with_children(|display| {
+        self.commands.entity(self.root).with_children(|display| {
             let row = Node {
                 align_items: AlignItems::Center,
                 column_gap: px(2.0 * SCALE),
@@ -687,16 +584,19 @@ impl Ui<'_> {
 
     /// `target`'s weapons, each its icon with its main damage by it, a row
     /// each.
-    fn attacks(&mut self, commands: &mut Commands, root: Entity, target: Target) {
-        let icons: Vec<Option<String>> = (self.sim.weapons(target).iter())
+    fn attacks(&mut self, target: Target) {
+        let icons: Vec<Option<String>> = (self.shows.sim.weapons(target).iter())
             .take(MOST_WEAPONS)
             .map(|w| w.shown.icon.clone())
             .collect();
         for (i, icon) in icons.into_iter().enumerate() {
-            let icon = self.looks.image(self.game, self.images, icon.as_deref());
+            let icon = self
+                .shows
+                .looks
+                .image(self.shows.game, self.shows.images, icon.as_deref());
             let [left, top, width, height] = WEAPON;
             let top = top + WEAPON_ROW * i as f32;
-            commands.entity(root).with_children(|display| {
+            self.commands.entity(self.root).with_children(|display| {
                 let row = Node {
                     align_items: AlignItems::Center,
                     column_gap: px(2.0 * SCALE),
@@ -722,134 +622,31 @@ impl Ui<'_> {
         }
     }
 
-    /// The box of what a lone thing's template says of it; none for one
-    /// that says nothing.
-    fn description(&self, commands: &mut Commands, root: Entity, says: Option<String>) {
-        let Some(says) = says else {
-            return;
-        };
+    /// The box of what a lone thing's template says of it.
+    fn description(&mut self, says: String) {
         let [left, top, width, height] = DESCRIPTION;
         let node = Node {
             padding: UiRect::all(px(DESCRIPTION_IN * SCALE)),
             ..at(left, top, width, height)
         };
-        commands.entity(root).with_children(|display| {
+        self.commands.entity(self.root).with_children(|display| {
             display.spawn((framed(node), children![label(says, Font::Hud, Ink::Body)]));
         });
     }
 
-    /// The company display: an organization with its units, or an HQ with its
-    /// places.
-    fn company(&mut self, commands: &mut Commands, root: Entity, actor: &Actor) {
-        match *actor {
-            Actor::Organization(r) => self.organization(commands, root, r),
-            Actor::Building(b, _) => {
-                self.structure(commands, root, b);
-                // An HQ unpacked from an organization shows its banner.
-                if let Some(r) = self.sim.buildings[b].unpacked_from {
-                    self.flag(commands, root, r);
-                }
-                // Its places show what it's been asked for.
-                self.slots(commands, root, Some(b));
-                self.status(commands, root, Status::Building(b));
-            }
-        }
-    }
-
-    /// An organization's name and owner, and its captain's portrait over the
-    /// captain's health.
-    fn heading(&mut self, commands: &mut Commands, root: Entity, r: usize) {
-        let organization = &self.sim.organizations[r];
-        self.title(
-            commands,
-            root,
-            self.organization_name(r),
-            organization.owner,
-            true,
-        );
-        let captain = captain(self.sim, self.looks, r);
-        let template = self.sim.units[captain].template.clone();
-        let (fill, of) = (Fill::Unit(captain), Says::Unit(captain));
-        self.portrait(commands, root, template.as_str(), fill, of);
-    }
-
-    fn organization(&mut self, commands: &mut Commands, root: Entity, r: usize) {
-        self.heading(commands, root, r);
-        let captain = captain(self.sim, self.looks, r);
-        // An HQ shows its places where an organization shows its units.
-        let is_hq = !self.detail.slots.is_empty();
-        if !lone(self.sim, r) && !is_hq {
-            // A block of cards for each kind of slot, as the game's has
-            // them, for all but an officer, who has the portrait.
-            let groups = card_groups(self.sim, self.looks, r, captain);
-            let card = Vec2::new(42.0, 47.0);
-            let places = card_places(
-                &groups,
-                card,
-                Vec2::splat(2.0),
-                5.0,
-                Vec2::new(210.0, 110.0),
-            );
-            let pictures: Vec<_> = places
-                .iter()
-                .map(|&(u, _)| self.picture(self.sim.units[u].template.as_str()))
-                .collect();
-            commands.entity(root).with_children(|display| {
-                display
-                    .spawn((at(144.0, 44.0, 210.0, 110.0), Pickable::IGNORE))
-                    .with_children(|cards| {
-                        for (&(u, place), picture) in places.iter().zip(pictures) {
-                            let card = framed(Node {
-                                flex_direction: FlexDirection::Column,
-                                ..at(place.x, place.y, card.x, card.y)
-                            });
-                            cards
-                                .spawn((card, says(Says::Unit(u))))
-                                .with_children(|card| {
-                                    card.spawn((
-                                        Node {
-                                            width: percent(100),
-                                            flex_grow: 1.0,
-                                            ..default()
-                                        },
-                                        picture_node(picture),
-                                        UnitPicture(u),
-                                        Shade::Full,
-                                    ));
-                                    bar(
-                                        card,
-                                        Node {
-                                            width: percent(100),
-                                            height: px(4.0 * SCALE),
-                                            ..default()
-                                        },
-                                        Fill::Unit(u),
-                                        None,
-                                    );
-                                });
-                        }
-                    });
-            });
-        }
-        // A lone thing has this display only as an HQ, which still shows
-        // its banner.
-        self.flag(commands, root, r);
-        self.slots(commands, root, None);
-        self.status(commands, root, Status::Organization(r));
-    }
-
     /// The organization at `r`'s banner, between its efficiency and its
     /// morale.
-    fn flag(&mut self, commands: &mut Commands, root: Entity, r: usize) {
-        commands.entity(root).with_children(|display| {
+    fn flag(&mut self, r: usize) {
+        self.commands.entity(self.root).with_children(|display| {
             display
                 .spawn((
                     framed(at(366.0, 44.0, 63.0, 77.0)),
                     says(Says::Organization(r)),
                 ))
                 .with_children(|card| {
-                    self.efficiency(card, at(0.0, 6.0, 63.0, 2.0), r);
-                    self.banner(
+                    efficiency(&mut self.shows, card, at(0.0, 6.0, 63.0, 2.0), r);
+                    banner(
+                        &mut self.shows,
                         card,
                         Node {
                             position_type: PositionType::Absolute,
@@ -861,98 +658,18 @@ impl Ui<'_> {
                         },
                         r,
                     );
-                    self.morale(card, at(0.0, 69.0, 63.0, 2.0), r);
+                    morale(&mut self.shows, card, at(0.0, 69.0, 63.0, 2.0), r);
                 });
         });
     }
 
-    /// The group display: a card per organization.
-    fn group(&mut self, commands: &mut Commands, root: Entity, rs: &[usize]) {
-        let first = rs[0];
-        self.title(
-            commands,
-            root,
-            self.organization_name(first),
-            self.sim.organizations[first].owner,
-            false,
-        );
-        // The original's cards, so without its layouts there are none.
-        let Some(cards) = self.cards else {
-            return;
-        };
-        let mut left = 8.0;
-        for r in newest_first(rs) {
-            let lone = lone(self.sim, r);
-            let (Some(size), Some(top)) = (cards.size(lone), cards.top(lone)) else {
-                continue;
-            };
-            // Under the header, which has the name the card's top is for,
-            // and cut off at it so the header keeps the pointer.
-            let holder = Node {
-                overflow: Overflow::clip(),
-                ..at(left, HEADER, size.x, size.y - top)
-            };
-            left += size.x + 4.0;
-            commands.entity(root).with_children(|display| {
-                display
-                    .spawn((holder, Pickable::IGNORE))
-                    .with_children(|holder| {
-                        holder
-                            .spawn((at(0.0, -top, size.x, size.y), Pickable::IGNORE))
-                            .with_children(|s| {
-                                let shows = CardShows {
-                                    sim: self.sim,
-                                    local: self.local,
-                                    leaders: self.leaders,
-                                    gem: self.gem,
-                                    drawn: self.drawn,
-                                    badges: self.badges,
-                                    detail: self.detail,
-                                    game: self.game,
-                                    looks: &mut *self.looks,
-                                    banners: &mut *self.banners,
-                                    images: &mut *self.images,
-                                };
-                                cards.draw(s, shows, r);
-                            });
-                    });
-            });
-        }
-    }
-
-    /// A building's name and owner, and its picture over its health and,
-    /// for a relay, its stockpile.
-    fn structure(&mut self, commands: &mut Commands, root: Entity, b: usize) {
-        let building = &self.sim.buildings[b];
-        let template = building.template.clone();
-        let looks = &self.looks;
-        let name = building_name(self.sim, &looks.names, &looks.strings, &looks.map, b);
-        self.title(commands, root, name, building.owner, true);
-        let of = Says::Building(b);
-        self.portrait(commands, root, template.as_str(), Fill::Building(b), of);
-        if self.detail.stockpile {
-            let node = at(PORTRAIT_BOX[0], 176.0, PORTRAIT_BOX[2], 3.0);
-            let whole = Node {
-                width: percent(100),
-                height: percent(100),
-                ..default()
-            };
-            commands.entity(root).with_children(|display| {
-                let seen = WhileSeen(Target::Building(b));
-                display
-                    .spawn((node, seen, Pickable::IGNORE))
-                    .with_children(|holder| bar(holder, whole, Fill::Stockpile(b), Some(of)));
-            });
-        }
-    }
-
     /// What a building is commissioning, the first with its progress.
-    fn queue(&mut self, commands: &mut Commands, root: Entity, b: usize) {
-        let queue = self.sim.buildings[b].queue.iter();
+    fn queue(&mut self, b: usize) {
+        let queue = self.shows.sim.buildings[b].queue.iter();
         let queue: Vec<String> = queue.map(|c| c.template().to_string()).collect();
         // Commissions are trucks, which show their building's button.
-        let pictures: Vec<_> = queue.iter().map(|t| self.picture(t)).collect();
-        commands.entity(root).with_children(|display| {
+        let pictures: Vec<_> = queue.iter().map(|t| self.shows.picture(t)).collect();
+        self.commands.entity(self.root).with_children(|display| {
             for (i, picture) in pictures.into_iter().enumerate().take(MAX_QUEUED) {
                 let node = match i {
                     0 => at(240.0, 44.0, 64.0, 64.0),
@@ -995,6 +712,124 @@ impl Ui<'_> {
             }
         });
     }
+}
+
+impl Ui<'_, '_, '_> {
+    /// An icon for each property that shows, and a marker listing any
+    /// more than there are places for.
+    fn icons(&mut self, row: Entity) {
+        let (tips, more) = self
+            .shows
+            .looks
+            .property_tips(&self.shows.detail.properties);
+        let seen = self.shows.detail.seen_as.map(WhileSeen);
+        let square = || Node {
+            width: px(PROPERTY * SCALE),
+            height: px(PROPERTY * SCALE),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        };
+        for (icon, tip) in tips {
+            let icon = self
+                .shows
+                .looks
+                .image(self.shows.game, self.shows.images, Some(&icon));
+            let mut icon =
+                self.commands
+                    .spawn((square(), picture_node(icon), Hint(tip), ChildOf(row)));
+            if let Some(seen) = seen {
+                icon.insert(seen);
+            }
+        }
+        if let Some(tip) = more {
+            let mut marker = self.commands.spawn((
+                square(),
+                Hint(tip),
+                ChildOf(row),
+                children![(label("+", Font::HudTitle, Ink::Body), Pickable::IGNORE)],
+            ));
+            if let Some(seen) = seen {
+                marker.insert(seen);
+            }
+        }
+    }
+}
+
+/// The organization at `r`'s efficiency bar in `node`, on black, with a
+/// marker at what it's easing towards.
+fn efficiency(shows: &mut Shows, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
+    let (gauge, fill) = (Gauge::Efficiency, Fill::Efficiency(r));
+    marked_bar(shows, parent, node, gauge, fill, Marker::Efficiency(r));
+}
+
+/// The organization at `r`'s morale bar in `node`, on black, with a
+/// marker at its breakpoint.
+fn morale(shows: &mut Shows, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
+    let (gauge, fill) = (Gauge::Morale, Fill::Morale(r));
+    marked_bar(shows, parent, node, gauge, fill, Marker::Breakpoint(r));
+}
+
+/// A bar on black with `marker` on it.
+fn marked_bar(
+    shows: &mut Shows,
+    parent: &mut ChildSpawnerCommands,
+    node: Node,
+    gauge: Gauge,
+    fill: Fill,
+    marker: Marker,
+) {
+    let path = shows.looks.marker.clone();
+    let picture = shows.looks.image(shows.game, shows.images, path.as_deref());
+    let size = (picture.as_ref())
+        .and_then(|h| shows.images.get(h))
+        .map(Image::size_f32);
+    let mut bar = parent.spawn((meter(node, gauge), fill, BackgroundColor(Color::BLACK)));
+    if let (Some(picture), Some(size)) = (picture, size) {
+        bar.with_child((
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(0),
+                left: marked(shows.sim, marker),
+                width: px(size.x * SCALE),
+                height: px(size.y * SCALE),
+                margin: UiRect::left(px(-size.x * SCALE)),
+                ..default()
+            },
+            ImageNode::new(picture),
+            marker,
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// An organization's banner, as it flies over the organization, filling
+/// `node`.
+fn banner(shows: &mut Shows, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
+    let layers = shows.banner(r);
+    parent
+        .spawn((node, Pickable::IGNORE))
+        .with_children(|banner| {
+            for (image, colour) in layers {
+                let Some(image) = image else {
+                    continue;
+                };
+                banner.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                    ImageNode {
+                        image,
+                        color: colour,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ));
+            }
+        });
 }
 
 /// A bar in `node`, filled as `fill` says, giving `of`'s tooltip where
