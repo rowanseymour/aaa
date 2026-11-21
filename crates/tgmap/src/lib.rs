@@ -38,8 +38,8 @@ pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
 pub use triggers::Triggers;
 pub use units::{
-    Division, Formation, Member, Organization, Outcome, Packs, Player, Recruits, Team, Trailer,
-    UNPACKED_FACING, Unpacks, owner, relation,
+    BUILDING_PADDING, Division, Formation, Member, Organization, Outcome, Packs, Player, Recruits,
+    Team, Trailer, UNPACKED_FACING, Unpacks, owner, relation,
 };
 
 use std::collections::{HashMap, HashSet};

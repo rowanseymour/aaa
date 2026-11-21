@@ -219,20 +219,49 @@ impl World {
     /// stand there as far as it can tell: what stands where it can't see
     /// now doesn't count against it.
     pub(crate) fn room_seen(&self, player: u32, spot: &Obstacle) -> bool {
+        self.room_in_sight(player, spot, spot, false)
+    }
+
+    /// As [`World::room_seen`], for something standing on `footprint` that
+    /// needs `spot` clear, with the units `player` sees counting against it
+    /// too when `units`.
+    pub(crate) fn room_in_sight(
+        &self,
+        player: u32,
+        footprint: &Obstacle,
+        spot: &Obstacle,
+        units: bool,
+    ) -> bool {
         // As the least explored of the ground under it is.
-        let (lo, hi) = spot.bounds(spot.shape);
+        let (lo, hi) = footprint.bounds(footprint.shape);
         let corners = [lo, hi, [lo[0], hi[1]], [hi[0], lo[1]]];
-        let under = corners.into_iter().chain([spot.position]);
+        let under = corners.into_iter().chain([footprint.position]);
         let seen = under.map(|c| self.seen(player, c)).min_by_key(|s| match s {
             Seen::Unexplored => 0,
             Seen::Explored => 1,
             Seen::Visible => 2,
         });
+        let sighted = match units {
+            true => self.sees_units(player),
+            false => Vec::new(),
+        };
+        let sighted = self.unit_spots(|u| sighted.get(u).copied().unwrap_or(false));
         match seen.unwrap_or(Seen::Unexplored) {
             Seen::Unexplored => false,
-            Seen::Explored => self.pathing.room_for(spot, Domain::Land, []),
-            Seen::Visible => self.clear(spot),
+            Seen::Explored => self.pathing.room_for(spot, Domain::Land, &sighted),
+            Seen::Visible => {
+                self.clear(spot) && self.pathing.room_for(spot, Domain::Land, &sighted)
+            }
         }
+    }
+
+    /// Where the living units for which `keep` holds stand, each as the
+    /// shape it blocks with.
+    pub(crate) fn unit_spots(&self, keep: impl Fn(usize) -> bool) -> Vec<Obstacle> {
+        (self.units.iter().enumerate())
+            .filter(|&(i, u)| u.alive() && keep(i))
+            .filter_map(|(_, u)| Some(spot(u.position, u.facing, Some(u.shape?))))
+            .collect()
     }
 
     /// Whether `spot` is on the map, on land, and clear of everything

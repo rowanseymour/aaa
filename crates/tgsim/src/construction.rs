@@ -2,7 +2,7 @@
 //! building's to stand, starting its site, raising the site to a finished
 //! building, mending what's damaged, and calling a site off.
 
-use tgmap::Id;
+use tgmap::{Domain, Id, Obstacle, Shape};
 
 use crate::economy::money;
 use crate::packing::unpack_facing;
@@ -183,7 +183,8 @@ impl World {
 
     /// Whether `player` could put up a building of `template` at `at`
     /// facing `facing`: all of it on ground the side has explored, with
-    /// room to stand there as far as the side can tell.
+    /// room round it as far as the side can tell, the units it sees there
+    /// counting against it.
     pub fn room_to_build(
         &self,
         player: u32,
@@ -191,19 +192,29 @@ impl World {
         at: [f32; 2],
         facing: [f32; 2],
     ) -> bool {
-        let Some(site) = self.rules.buildable.get(template) else {
-            return false;
-        };
-        let facing = unpack_facing(facing);
-        let spot = match &site.obstacle {
-            Some(o) => tgmap::Obstacle {
-                position: at,
-                facing,
-                ..o.clone()
-            },
-            None => crate::delivery::spot(at, facing, None),
-        };
-        self.room_seen(player, &spot)
+        let footprint = self.footprint(template, at, facing);
+        let room = self.build_room(template, at, facing);
+        (footprint.zip(room)).is_some_and(|(f, r)| self.room_in_sight(player, &f, &r, true))
+    }
+
+    /// Where a building of `template` would stand at `at` facing `facing`.
+    fn footprint(&self, template: &Id, at: [f32; 2], facing: [f32; 2]) -> Option<Obstacle> {
+        let site = self.rules.buildable.get(template)?;
+        let shape = site.obstacle.as_ref().map(|o| o.shape);
+        Some(crate::delivery::spot(at, unpack_facing(facing), shape))
+    }
+
+    /// The ground that must be clear for a building of `template` to go up
+    /// at `at` facing `facing`: its blocking shape padded all round, so it
+    /// keeps apart from what's near. One that blocks nothing needs only its
+    /// point.
+    fn build_room(&self, template: &Id, at: [f32; 2], facing: [f32; 2]) -> Option<Obstacle> {
+        let mut room = self.footprint(template, at, facing)?;
+        if room.shape != Shape::Point {
+            room.shape = room.shape.padded(self.rules.building_padding);
+            room.soft = room.shape;
+        }
+        Some(room)
     }
 
     /// The money putting up a building of `template` takes.
@@ -285,6 +296,10 @@ impl World {
             return;
         }
         let player = self.organizations[r].owner;
+        // What the map bars is offered all the same, and refused silently.
+        if self.barred(player, &template) {
+            return;
+        }
         let cost = self.site_cost(&template);
         if cost > self.stockpile(player) {
             self.notices.push(Notice::CannotAfford {
@@ -294,7 +309,12 @@ impl World {
             });
             return;
         }
-        let Some(mut site) = self.rules.buildable.get(&template).cloned() else {
+        // Now everything there counts against it, seen or not.
+        let room = self.build_room(&template, build.at, build.facing);
+        let blocking = self.blocking();
+        let clear = |room: &Obstacle| self.pathing.room_for(room, Domain::Land, &blocking);
+        let site = (room.filter(clear)).and_then(|_| self.rules.buildable.get(&template).cloned());
+        let Some(mut site) = site else {
             self.notices.push(Notice::NotBuilt {
                 player,
                 organization: r,
@@ -517,6 +537,55 @@ mod tests {
         let w = with_buildings(engineers(), &[building(9, 1, [20.0, 20.0])]);
         assert_eq!(w.check(1, &build([20.0, 20.0])), Err(Refused::NoRoom));
         assert_eq!(w.check(1, &build([20.0, 30.0])), Ok(()));
+    }
+
+    #[test]
+    fn builds_keep_their_padding_clear_of_buildings_and_units() {
+        let mut w = with_buildings(engineers(), &[building(9, 1, [20.0, 20.0])]);
+        for u in &mut w.units {
+            u.shape = Some(tgmap::Shape::Circle { radius: 0.5 });
+        }
+        // Its 6 by 6 clears the house's, but not with 2 all round.
+        assert_eq!(w.check(1, &build([20.0, 27.0])), Err(Refused::NoRoom));
+        assert_eq!(w.check(1, &build([20.0, 29.0])), Ok(()));
+        // Nor onto the engineer, or the enemy soldier it sees.
+        assert_eq!(w.check(1, &build([12.0, 10.0])), Err(Refused::NoRoom));
+        assert_eq!(w.check(1, &build([35.0, 32.0])), Err(Refused::NoRoom));
+    }
+
+    #[test]
+    fn a_site_isnt_started_with_anything_in_its_way_on_arrival() {
+        let mut w = engineers();
+        w.apply(1, build([10.0, 20.0])).unwrap();
+        // The builders themselves, here.
+        w.units[0].position = [10.0, 18.0];
+        w.units[0].shape = Some(tgmap::Shape::Circle { radius: 0.5 });
+        run(&mut w, 1.0);
+        assert!(w.buildings.is_empty());
+        assert_eq!(w.organizations[0].build, None::<Build>);
+        let told = Notice::NotBuilt {
+            player: 1,
+            organization: 0,
+            template: Id::from("bunker"),
+        };
+        assert!(w.notices.contains(&told));
+        assert_eq!(w.stockpile(1), 500.0);
+    }
+
+    #[test]
+    fn what_the_map_bars_is_dropped_silently_on_arrival() {
+        let mut w = engineers();
+        let side = w.sides.players.iter_mut().find(|p| p.id == 1).unwrap();
+        side.barred = vec![Id::from("BUNKER")];
+        // Still offered and ordered.
+        assert_eq!(w.buildable(0), [Id::from("bunker")]);
+        w.apply(1, build([10.0, 20.0])).unwrap();
+        run(&mut w, 1.0);
+        assert!(w.buildings.is_empty());
+        assert_eq!(w.organizations[0].build, None::<Build>);
+        let told = |n: &Notice| matches!(n, Notice::NotBuilt { .. } | Notice::CannotAfford { .. });
+        assert!(!w.notices.iter().any(told));
+        assert_eq!(w.stockpile(1), 500.0);
     }
 
     #[test]

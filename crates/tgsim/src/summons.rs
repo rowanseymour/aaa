@@ -150,9 +150,7 @@ impl World {
 
     /// As [`World::blocking`], but for the building at `except`.
     pub(crate) fn blocking_but(&self, except: Option<usize>) -> Vec<Obstacle> {
-        let units = (self.units.iter())
-            .filter(|u| u.alive())
-            .filter_map(|u| Some(spot(u.position, u.facing, Some(u.shape?))));
+        let units = self.unit_spots(|_| true);
         let buildings = (self.buildings.iter().enumerate())
             .filter(|&(i, b)| !b.gone() && Some(i) != except)
             .filter_map(|(_, b)| b.obstacle.clone());
