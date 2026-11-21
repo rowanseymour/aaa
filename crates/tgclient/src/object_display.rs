@@ -33,7 +33,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::ecs::system::SystemParam;
-use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
@@ -339,8 +338,6 @@ pub struct Looks {
     pub(crate) positions: HashMap<Id, (Vec<Option<Id>>, Option<usize>)>,
     /// The names of experience levels, by their properties' ids.
     pub(crate) levels: HashMap<Id, String>,
-    pub(crate) images: HashMap<String, Option<Handle<Image>>>,
-    pub(crate) formats: bevy::image::CompressedImageFormats,
     /// The archive path of the picture marking a point on an
     /// organization's bars, if the layouts have one: the efficiency
     /// bar's, which the morale bar shares.
@@ -348,21 +345,6 @@ pub struct Looks {
 }
 
 impl Looks {
-    pub(crate) fn image(
-        &mut self,
-        game: &GameData,
-        images: &mut Assets<Image>,
-        path: Option<&str>,
-    ) -> Option<Handle<Image>> {
-        let path = path?;
-        if let Some(h) = self.images.get(path) {
-            return h.clone();
-        }
-        let h = crate::ui::read_image(game, path, self.formats).map(|i| images.add(i));
-        self.images.insert(path.to_string(), h.clone());
-        h
-    }
-
     /// The icon and tooltip of each of `properties` that has a look, as
     /// many as the display has places for, and a tooltip listing the rest
     /// if there are more.
@@ -406,7 +388,7 @@ impl Looks {
 pub fn setup(
     mut commands: Commands,
     loaded: Res<Loaded>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut cache: ResMut<ui::ImageCache>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let width = (PORTRAIT.x * PORTRAIT_DENSITY).round() as u32;
@@ -441,7 +423,7 @@ pub fn setup(
         .iter()
         .map(|(id, t)| (id.clone(), t.name.clone())))
     .chain((listings.iter()).map(|(id, l)| (id.clone(), l.name.clone())));
-    let glyphs = crate::ui::glyphs(game, &mut images, formats.0);
+    let glyphs = crate::ui::glyphs(game, &mut images, &mut cache);
     let mut properties: HashMap<Id, PropertyLook> = (*game.property_looks()).clone();
     let mut formations = HashMap::new();
     for (formation, look) in game.formation_looks().iter() {
@@ -469,8 +451,6 @@ pub fn setup(
         technologies: (technologies.iter())
             .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
             .collect(),
-        images: HashMap::new(),
-        formats: formats.0,
         marker: efficiency_target(&game.game_widgets()),
     });
     commands.insert_resource(Showing::default());
@@ -739,14 +719,14 @@ pub fn choose(
 /// The picture of a template, or of a technology being researched.
 pub(crate) fn picture(
     drawn: &Drawn,
-    looks: &mut Looks,
+    looks: &Looks,
     game: &GameData,
-    images: &mut Assets<Image>,
+    (cache, images): (&mut ui::ImageCache, &mut Assets<Image>),
     template: &str,
 ) -> Option<Handle<Image>> {
     let path = (drawn.0.icon(template).map(str::to_string))
-        .or_else(|| looks.technologies.get(&Id::from(template)).cloned());
-    looks.image(game, images, path.as_deref())
+        .or_else(|| looks.technologies.get(&Id::from(template)).cloned())?;
+    cache.get(game, images, &path)
 }
 
 /// The colour an owner's name is in, by how the player stands towards it.
@@ -825,6 +805,7 @@ pub(crate) struct Shows<'a> {
     pub game: &'a GameData,
     pub looks: &'a mut Looks,
     pub banners: &'a mut BannerImages,
+    pub cache: &'a mut ui::ImageCache,
     pub images: &'a mut Assets<Image>,
 }
 
@@ -840,6 +821,7 @@ pub(crate) struct ShowsFrom<'w> {
     loaded: Res<'w, Loaded>,
     looks: ResMut<'w, Looks>,
     banners: ResMut<'w, BannerImages>,
+    cache: ResMut<'w, ui::ImageCache>,
     images: ResMut<'w, Assets<Image>>,
 }
 
@@ -857,6 +839,7 @@ impl ShowsFrom<'_> {
             game: &self.loaded.game,
             looks: &mut self.looks,
             banners: &mut self.banners,
+            cache: &mut self.cache,
             images: &mut self.images,
         }
     }
@@ -868,13 +851,20 @@ impl Shows<'_> {
         Shows {
             looks: &mut *self.looks,
             banners: &mut *self.banners,
+            cache: &mut *self.cache,
             images: &mut *self.images,
             ..*self
         }
     }
 
     pub(crate) fn picture(&mut self, template: &str) -> Option<Handle<Image>> {
-        picture(self.drawn, self.looks, self.game, self.images, template)
+        let loading = (&mut *self.cache, &mut *self.images);
+        picture(self.drawn, self.looks, self.game, loading, template)
+    }
+
+    /// The picture at `path` in the game's data, for one there's a path to.
+    pub(crate) fn image(&mut self, path: Option<&str>) -> Option<Handle<Image>> {
+        self.cache.get(self.game, self.images, path?)
     }
 
     pub(crate) fn organization_name(&self, r: usize) -> String {
@@ -907,7 +897,7 @@ impl Shows<'_> {
     /// The shield icon `template` gives its defence.
     pub(crate) fn defense_icon(&mut self, template: &Id) -> Option<Handle<Image>> {
         let icon = (self.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
-        self.looks.image(self.game, self.images, icon.as_deref())
+        self.image(icon.as_deref())
     }
 
     /// The icons of the first `most` of `target`'s weapons.
@@ -921,7 +911,7 @@ impl Shows<'_> {
             .map(|w| w.shown.icon.clone())
             .collect();
         (icons.iter())
-            .map(|icon| self.looks.image(self.game, self.images, icon.as_deref()))
+            .map(|icon| self.image(icon.as_deref()))
             .collect()
     }
 

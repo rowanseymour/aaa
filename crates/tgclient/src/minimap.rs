@@ -209,11 +209,7 @@ fn decode_icon(
     path: &str,
     formats: bevy::image::CompressedImageFormats,
 ) -> Option<Icon> {
-    let image = crate::ui::read_image(game, path, formats)?;
-    let image = match image.texture_descriptor.format {
-        TextureFormat::Rgba8UnormSrgb => image,
-        _ => image.convert(TextureFormat::Rgba8UnormSrgb)?,
-    };
+    let image = crate::ui::rgba8(&crate::ui::read_image(game, path, formats)?)?;
     Some(Icon {
         width: image.width() as usize,
         height: image.height() as usize,

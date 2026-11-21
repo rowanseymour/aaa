@@ -703,10 +703,7 @@ impl Ui<'_, '_, '_> {
             ..default()
         };
         for (icon, tip) in tips {
-            let icon = self
-                .shows
-                .looks
-                .image(self.shows.game, self.shows.images, Some(&icon));
+            let icon = self.shows.image(Some(&icon));
             let mut icon =
                 self.commands
                     .spawn((square(), picture_node(icon), Hint(tip), ChildOf(row)));
@@ -752,7 +749,7 @@ fn marked_bar(
     marker: Marker,
 ) {
     let path = shows.looks.marker.clone();
-    let picture = shows.looks.image(shows.game, shows.images, path.as_deref());
+    let picture = shows.image(path.as_deref());
     let size = (picture.as_ref())
         .and_then(|h| shows.images.get(h))
         .map(Image::size_f32);

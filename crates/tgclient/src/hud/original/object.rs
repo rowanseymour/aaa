@@ -1125,10 +1125,7 @@ impl Draw<'_, '_> {
         for (n, (icon, tip)) in tips.into_iter().enumerate() {
             let within = moved(at, n as f32 * (width + separation), 0.0);
             let parts = self.painter.paint(self.s, bar, within, &[]);
-            let icon = self
-                .shows
-                .looks
-                .image(self.shows.game, self.shows.images, Some(&icon));
+            let icon = self.shows.image(Some(&icon));
             self.show(&parts, "Decal", icon);
             self.mark_icon(&parts, Hint(tip), seen);
         }

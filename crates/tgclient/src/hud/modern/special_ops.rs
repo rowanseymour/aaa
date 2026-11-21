@@ -2,9 +2,6 @@
 //! side's experience, and a tray of the faction's operations, each with a
 //! tooltip beside the tray and a bar showing how far it's recharged.
 
-use std::collections::HashMap;
-
-use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::Button;
@@ -82,7 +79,7 @@ pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut cache: ResMut<crate::ui::ImageCache>,
     bindings: Res<Bindings>,
     shared: Option<Res<Panel>>,
 ) {
@@ -90,15 +87,7 @@ pub fn spawn(
         return;
     };
     let game = &loaded.game;
-    let mut cache: HashMap<String, Option<Handle<Image>>> = HashMap::new();
-    let mut image = |game: &tgdata::GameData, path: &str| {
-        (cache.entry(path.to_string()))
-            .or_insert_with(|| {
-                let decoded = crate::ui::read_image(game, path, formats.0)?;
-                Some(images.add(decoded))
-            })
-            .clone()
-    };
+    let mut image = |game: &tgdata::GameData, path: &str| cache.get(game, &mut images, path);
     let medal = image(game, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
     let buttons: Vec<_> = (shared.operations.iter())
         .map(|op| {

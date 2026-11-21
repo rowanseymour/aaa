@@ -9,8 +9,10 @@ use std::collections::HashMap;
 use bevy::asset::uuid_handle;
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::ecs::system::SystemParam;
+use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 use bevy::text::{Font as Face, FontSource};
 use bevy::ui::{ComputedStackIndex, RelativeCursorPosition};
 use bevy::ui_widgets::{
@@ -1250,27 +1252,58 @@ pub fn read_image(
     textures::decode(&game.read(path)?, path, formats, true)
 }
 
+/// The pictures read from the game's data, each decoded once, by path, so
+/// whatever shows the same picture, in either interface, shares it.
+#[derive(Resource)]
+pub struct ImageCache {
+    formats: bevy::image::CompressedImageFormats,
+    known: HashMap<String, Option<Handle<Image>>>,
+}
+
+impl ImageCache {
+    pub fn setup(mut commands: Commands, formats: Res<CompressedImageFormatSupport>) {
+        commands.insert_resource(ImageCache {
+            formats: formats.0,
+            known: HashMap::new(),
+        });
+    }
+
+    /// The picture at `path` in the game's data, if it's there to decode.
+    pub fn get(
+        &mut self,
+        game: &GameData,
+        images: &mut Assets<Image>,
+        path: &str,
+    ) -> Option<Handle<Image>> {
+        if let Some(known) = self.known.get(path) {
+            return known.clone();
+        }
+        let image = read_image(game, path, self.formats).map(|i| images.add(i));
+        self.known.insert(path.to_string(), image.clone());
+        image
+    }
+}
+
+/// `image` as eight-bit RGBA, for reading or changing its pixels.
+pub(crate) fn rgba8(image: &Image) -> Option<Image> {
+    match image.texture_descriptor.format {
+        TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => Some(image.clone()),
+        _ => image.convert(TextureFormat::Rgba8UnormSrgb),
+    }
+}
+
 /// Each resource's glyph, by the resource's id.
 pub(crate) fn glyphs(
     game: &GameData,
     images: &mut Assets<Image>,
-    formats: bevy::image::CompressedImageFormats,
+    cache: &mut ImageCache,
 ) -> HashMap<Id, Handle<Image>> {
-    // Resources often share a glyph, such as a limit and what provides it.
-    let mut decoded: HashMap<String, Option<Handle<Image>>> = HashMap::new();
-    let mut out = HashMap::new();
-    for r in game.resources().iter() {
-        let Some(name) = &r.glyph else { continue };
-        let handle = decoded.entry(name.clone()).or_insert_with(|| {
-            let path = format!("{GLYPH_DIR}/{name}.png");
-            let image = read_image(game, &path, formats)?;
-            Some(images.add(image))
-        });
-        if let Some(h) = handle {
-            out.insert(r.id.clone(), h.clone());
-        }
-    }
-    out
+    let resources = game.resources();
+    let glyphs = resources.iter().filter_map(|r| {
+        let path = format!("{GLYPH_DIR}/{}.png", r.glyph.as_ref()?);
+        Some((r.id.clone(), cache.get(game, images, &path)?))
+    });
+    glyphs.collect()
 }
 
 /// Part of the interface that takes clicks, so they don't go to the map

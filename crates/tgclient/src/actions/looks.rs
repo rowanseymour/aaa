@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use tgdata::{GameData, Id};
 use tgmap::Organization;
@@ -215,14 +214,13 @@ pub fn setup(
     raising: Res<Raising>,
     sim: Res<Sim>,
     mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut cache: ResMut<crate::ui::ImageCache>,
 ) {
     let game = &loaded.game;
-    let glyphs = glyphs(game, &mut images, formats.0);
+    let glyphs = glyphs(game, &mut images, &mut cache);
     let mut sources = HashMap::new();
     let mut image = |game: &GameData, path: &str| {
-        let image = crate::ui::read_image(game, path, formats.0)?;
-        let handle = images.add(image);
+        let handle = cache.get(game, &mut images, path)?;
         sources.insert(handle.id(), path.to_string());
         Some(handle)
     };

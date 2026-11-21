@@ -18,7 +18,6 @@ use tgdata::widgets::{Bounds, InterfaceFlags, RESTING, Rect, SCREEN, ViewElement
 use tgrender::textures;
 
 use bevy::picking::hover::Hovered;
-use bevy::render::render_resource::TextureFormat;
 use bevy::ui_widgets::Button;
 
 mod bars;
@@ -610,7 +609,10 @@ pub(crate) fn unload_cards(mut commands: Commands) {
     commands.remove_resource::<Cards>();
 }
 
-/// The pictures read so far, by archive path.
+/// The pictures read so far, by archive path. They're decoded afresh for
+/// each reading of the layouts rather than shared in the
+/// [`ImageCache`](crate::ui::ImageCache), as their pixels are read to cut
+/// and grey them, which a picture loses once it's drawn.
 struct Pictures<'a> {
     game: &'a tgdata::GameData,
     skin: Option<&'a tgdata::Skin>,
@@ -636,11 +638,7 @@ impl Pictures<'_> {
     /// making pictures of its parts.
     fn rgba(&mut self, path: &str) -> Option<(UVec2, Vec<u8>)> {
         let handle = self.get(path)?;
-        let image = self.images.get(&handle)?;
-        let image = match image.texture_descriptor.format {
-            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => image.clone(),
-            _ => image.convert(TextureFormat::Rgba8UnormSrgb)?,
-        };
+        let image = crate::ui::rgba8(self.images.get(&handle)?)?;
         Some((image.size(), image.data?))
     }
 }
@@ -1171,10 +1169,7 @@ pub fn show_grid(
 /// An icon as the original greys it: each pixel's colour mixed down to one
 /// grey, darkened to under half.
 fn grey(icon: &Image) -> Option<Image> {
-    let mut out = match icon.texture_descriptor.format {
-        TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => icon.clone(),
-        _ => icon.convert(TextureFormat::Rgba8UnormSrgb)?,
-    };
+    let mut out = crate::ui::rgba8(icon)?;
     for pixel in out.data.as_mut()?.as_chunks_mut::<4>().0 {
         let [r, g, b] = [pixel[0], pixel[1], pixel[2]].map(f32::from);
         #[allow(clippy::approx_constant, reason = "the original's weight, not 1/π")]

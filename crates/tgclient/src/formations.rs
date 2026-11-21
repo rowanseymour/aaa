@@ -335,7 +335,8 @@ pub fn show(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
     bindings: Res<crate::keys::Bindings>,
-    mut looks: ResMut<crate::object_display::Looks>,
+    looks: Res<crate::object_display::Looks>,
+    mut cache: ResMut<crate::ui::ImageCache>,
     mut images: ResMut<Assets<Image>>,
     mut buttons: Query<Parts>,
     mut icons: Query<&mut ImageNode, With<FormationIcon>>,
@@ -365,7 +366,7 @@ pub fn show(
                 hint.0 = words;
             }
         }
-        let icon = looks.image(&loaded.game, &mut images, icon.as_deref());
+        let icon = icon.and_then(|path| cache.get(&loaded.game, &mut images, &path));
         for child in children {
             if let Ok(mut image) = icons.get_mut(*child)
                 && let Some(icon) = &icon
