@@ -28,6 +28,7 @@ pub mod water;
 
 pub use rig::Playing;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
@@ -226,7 +227,7 @@ pub fn spawn_objects(
         pickable,
         biome,
     );
-    let holding: std::collections::HashSet<u32> = (map.roles())
+    let holding: HashSet<u32> = (map.roles())
         .filter(|(_, role)| *role == tgmap::Role::HoldsBuilding)
         .map(|(t, _)| t.id)
         .collect();
