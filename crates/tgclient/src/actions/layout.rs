@@ -5,13 +5,12 @@ use bevy::prelude::*;
 use tgdata::Id;
 use tgsim::{Lacking, Researchable};
 
-use crate::control_groups::{self};
+use crate::control_groups;
 
 use super::looks::{Looks, look_of};
 use super::press::{can_pack, sell_command, shown_hq};
 use super::{
-    CANCEL, COMMAND_ALL, Entry, Face, Give, MENU_CANCEL, Menu, ORDERS, Offer, Page, SLOTS,
-    Shown,
+    CANCEL, COMMAND_ALL, Entry, Face, Give, MENU_CANCEL, Menu, ORDERS, Offer, Page, SLOTS, Shown,
 };
 
 /// Where a command's button goes: its slot and, that taken, which end of
