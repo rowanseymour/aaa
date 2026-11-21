@@ -55,6 +55,7 @@ mod orders;
 mod outcome;
 mod pause;
 mod placing;
+mod random;
 use tgserver::presets;
 mod remote;
 mod resource_bar;
@@ -102,7 +103,7 @@ use tgrender::shot::{self, ShotPlugin};
 use tgrender::terrain::{map_point, world};
 use tgrender::{Edge, MapAssets, MapRenderPlugin, Playing};
 use tgserver::protocol::Welcome;
-use tgsim::{Relation, State, TICK, Target, World};
+use tgsim::{Relation, State, TICK, World};
 
 fn usage(program: &Program) -> String {
     let Program {
@@ -463,6 +464,17 @@ enum Focus {
     Building(usize),
 }
 
+impl Focus {
+    /// The organization or building focused, if it's either.
+    fn piece(self) -> Option<tgsim::Piece> {
+        match self {
+            Focus::Nothing => None,
+            Focus::Organization(r) => Some(tgsim::Piece::Organization(r)),
+            Focus::Building(b) => Some(tgsim::Piece::Building(b)),
+        }
+    }
+}
+
 /// The flat square marks are drawn on and their materials, one per
 /// [`TINTS`].
 #[derive(Resource)]
@@ -600,10 +612,7 @@ fn show_trailers(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
-        visibility.set_if_neq(match fog.shows_unit(view.unit) {
-            true => Visibility::Inherited,
-            false => Visibility::Hidden,
-        });
+        visibility.set_if_neq(ui::visible(fog.shows_unit(view.unit)));
         (transform.translation, transform.rotation) = pose(
             &loaded.map.ground,
             trailer.drawn_at(t),
@@ -1146,12 +1155,12 @@ pub fn run(program: Program) -> ExitCode {
                         select,
                         command
                             .run_if(minimap::pointer_away)
-                            .run_if(actions::pointer_away),
+                            .run_if(ui::pointer_away),
                     )
                         .run_if(not(actions::aiming))
                         .run_if(not(special_ops::armed)),
-                    actions::aim.run_if(actions::pointer_away),
-                    placing::place.run_if(actions::pointer_away),
+                    actions::aim.run_if(ui::pointer_away),
+                    placing::place.run_if(ui::pointer_away),
                     special_ops::give,
                 )
                     .chain(),
@@ -1277,10 +1286,7 @@ fn takes_input(
     displays: Res<displays::Displays>,
     loading: Query<(), With<LoadingScreen>>,
 ) -> bool {
-    console::closed(console)
-        && pause::closed(menu)
-        && displays::closed(Some(displays))
-        && loading.is_empty()
+    keys_heard(console, menu) && displays::closed(Some(displays)) && loading.is_empty()
 }
 
 /// Whether keys reach the match's hotkeys: neither the console nor the
@@ -1827,14 +1833,6 @@ fn selection_sounds(
     before.clone_from(&selected.0);
 }
 
-/// Where a shot's target stands.
-fn target_position(sim: &World, target: Target) -> [f32; 2] {
-    match target {
-        Target::Unit(u) => sim.units[u].position,
-        Target::Building(b) => sim.buildings[b].position,
-    }
-}
-
 /// The match has been shown once, so the sim may step. Until then what's
 /// shown is how the match begins, however long its first frame took.
 #[derive(Resource)]
@@ -2103,10 +2101,7 @@ fn show_packing(
                 view.packing = Some((e, unpacking));
             }
         }
-        let shown = match view.packing.is_some() || gone {
-            true => Visibility::Hidden,
-            false => Visibility::Inherited,
-        };
+        let shown = ui::visible(view.packing.is_none() && !gone);
         if !matches!(building.state, State::Destroyed(_)) {
             visibility.set_if_neq(shown);
         }
@@ -2167,10 +2162,7 @@ fn show_units(
         // A truck that packed back up from its building is seen again, as
         // is a member that's arrived or been replaced.
         if unit.alive() {
-            visibility.set_if_neq(match seen {
-                true => Visibility::Inherited,
-                false => Visibility::Hidden,
-            });
+            visibility.set_if_neq(ui::visible(seen));
             if view.dead {
                 view.dead = false;
                 if let Some(p) = playing.as_mut() {
@@ -2204,10 +2196,7 @@ fn show_units(
             _ => Some(0.0),
         };
         if !unit.alive() {
-            visibility.set_if_neq(match (seen, sunk) {
-                (true, Some(_)) => Visibility::Inherited,
-                _ => Visibility::Hidden,
-            });
+            visibility.set_if_neq(ui::visible(seen && sunk.is_some()));
         }
         if unit.shot != view.shot {
             view.shot = unit.shot;
@@ -2215,7 +2204,7 @@ fn show_units(
                 .shot
                 .and_then(|(_, w)| unit.fighter.as_ref()?.weapons.get(w));
             if let (Some(w), Some(target), true) = (weapon, unit.target, seen) {
-                let to = target_position(&sim.0, target);
+                let to = sim.0.position(target);
                 sounds.shot(&time, &w.sounds, unit.position, to, owner);
             }
             if let (Some(p), Some(ids)) = (
@@ -2237,7 +2226,7 @@ fn show_units(
                 .mended
                 .and_then(|(_, i)| unit.fighter.as_ref()?.repairs.get(i));
             if let (Some(r), Some(target), true) = (repair, unit.target, seen) {
-                let to = target_position(&sim.0, target);
+                let to = sim.0.position(target);
                 sounds.shot(&time, &r.sounds, unit.position, to, owner);
             }
             if let (Some(p), Some(ids)) = (
@@ -2349,7 +2338,7 @@ fn show_buildings(
                 .shot
                 .and_then(|(_, w)| building.fighter.weapons.get(w));
             if let (Some(w), Some(target)) = (weapon, building.target) {
-                let to = target_position(&sim.0, target);
+                let to = sim.0.position(target);
                 sounds.shot(&time, &w.sounds, building.position, to, building.owner);
             }
             if let (Some(mut p), Some(ids)) = (playing, weapon.and_then(|w| w.animation.as_deref()))
@@ -2374,7 +2363,7 @@ struct Pointer<'w, 's> {
             &'static RtsCamera,
         ),
     >,
-    panels: actions::Panels<'w, 's>,
+    panels: ui::Panels<'w, 's>,
     minimap: Res<'w, minimap::Minimap>,
     views: Query<'w, 's, &'static RelativeCursorPosition, With<minimap::MinimapView>>,
 }
@@ -2469,7 +2458,7 @@ fn focus(
     banners: Query<banners::Pointed<banners::Banner>>,
     hq_banners: Query<banners::Pointed<banners::HqBanner>>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
-    panels: actions::Panels,
+    panels: ui::Panels,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     scenery: Res<banners::Scenery>,
@@ -2537,7 +2526,7 @@ fn select(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
-    panels: actions::Panels,
+    panels: ui::Panels,
     (loaded, drawn): (Res<Loaded>, Res<Drawn>),
     local: Res<Local>,
     focus: Res<Focus>,
@@ -2557,7 +2546,7 @@ fn select(
     let cursor = at.map(|at| view.map_or(at, |v| at.clamp(v.min, v.max)));
     if buttons.just_pressed(MouseButton::Left)
         && minimap::pointer_away(minimap)
-        && actions::pointer_away(panels)
+        && ui::pointer_away(panels)
         && at.zip(view).is_none_or(|(at, v)| v.contains(at))
     {
         *start = cursor;
@@ -2715,7 +2704,7 @@ fn command(
         orders.gather(player);
     }
     let mut moving = selected.0.clone();
-    if let Some(e) = enemy_at(&sim.0, player, *focus) {
+    if let Some(e) = enemy_organization(&sim.0, player, *focus) {
         let (pursuing, rest) = pursue(&sim.0, &mut orders, player, &selected.0, e);
         sent.write(waypoints::Sent {
             to: None,
@@ -2727,18 +2716,16 @@ fn command(
     // What can't be attacked there is repaired, by those that can, or
     // else moved onto.
     if let Some(piece) = onto(&sim.0, player, *focus) {
-        let (repairing, rest): (Vec<usize>, Vec<usize>) =
-            moving.iter().partition(|&&organization| {
-                let repair = tgsim::Command::Repair {
-                    organization,
-                    piece,
-                };
-                orders.give(&sim.0, player, repair).is_ok()
-            });
+        let (repairing, rest) = give_each(&sim.0, &mut orders, player, &moving, point, |r| {
+            tgsim::Command::Repair {
+                organization: r,
+                piece,
+            }
+        });
         sent.write(waypoints::Sent {
             to: None,
             aim: actions::Aim::Repair,
-            organizations: repairing.iter().map(|&r| (r, point)).collect(),
+            organizations: repairing,
         });
         let (went, rest) = approach(&sim.0, &mut orders, player, &rest, piece);
         sent.write(waypoints::Sent {
@@ -2765,7 +2752,7 @@ fn command(
 }
 
 /// The enemy organization of `player`'s that `focus` is on, if it's one.
-fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
+fn enemy_organization(sim: &World, player: u32, focus: Focus) -> Option<usize> {
     let Focus::Organization(e) = focus else {
         return None;
     };
@@ -2776,14 +2763,12 @@ fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
 /// What at `focus` organizations of `player`'s are moved onto, rather than
 /// to its place: any organization, and a building that isn't an enemy's.
 fn onto(sim: &World, player: u32, focus: Focus) -> Option<tgsim::Piece> {
-    match focus {
-        Focus::Organization(r) => Some(tgsim::Piece::Organization(r)),
-        Focus::Building(b) => {
-            let relation = sim.sides.relation(player, sim.buildings[b].owner);
-            (relation != tgsim::Relation::Enemy).then_some(tgsim::Piece::Building(b))
+    focus.piece().filter(|&p| match p {
+        tgsim::Piece::Organization(_) => true,
+        tgsim::Piece::Building(_) => {
+            sim.sides.relation(player, sim.piece_owner(p)) != tgsim::Relation::Enemy
         }
-        Focus::Nothing => None,
-    }
+    })
 }
 
 /// Moves organizations onto `piece`. Returns those that went, each with
@@ -2795,18 +2780,16 @@ fn approach(
     organizations: &[usize],
     piece: tgsim::Piece,
 ) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
-    let (went, rest): (Vec<usize>, Vec<usize>) = organizations.iter().partition(|&&r| {
-        let command = tgsim::Command::MoveOnto {
-            organization: r,
-            piece,
-        };
-        orders.give(sim, player, command).is_ok()
-    });
     let there = match piece {
         tgsim::Piece::Organization(e) => sim.centre(e),
         tgsim::Piece::Building(b) => sim.buildings[b].position,
     };
-    (went.into_iter().map(|r| (r, there)).collect(), rest)
+    give_each(sim, orders, player, organizations, there, |r| {
+        tgsim::Command::MoveOnto {
+            organization: r,
+            piece,
+        }
+    })
 }
 
 /// Sends organizations after the enemy organization `e`. Returns those that went,
@@ -2818,14 +2801,26 @@ fn pursue(
     organizations: &[usize],
     e: usize,
 ) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
-    let there = sim.centre(e);
-    let (went, rest): (Vec<usize>, Vec<usize>) = organizations.iter().partition(|&&r| {
-        let command = tgsim::Command::Pursue {
+    give_each(sim, orders, player, organizations, sim.centre(e), |r| {
+        tgsim::Command::Pursue {
             organization: r,
             enemy: e,
-        };
-        orders.give(sim, player, command).is_ok()
-    });
+        }
+    })
+}
+
+/// Gives each organization the command `command` makes for it. Returns
+/// those that took it, each with `there`, and those that didn't.
+pub(crate) fn give_each(
+    sim: &World,
+    orders: &mut Orders,
+    player: u32,
+    organizations: &[usize],
+    there: [f32; 2],
+    command: impl Fn(usize) -> tgsim::Command,
+) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
+    let (went, rest): (Vec<usize>, Vec<usize>) =
+        (organizations.iter()).partition(|&&r| orders.give(sim, player, command(r)).is_ok());
     (went.into_iter().map(|r| (r, there)).collect(), rest)
 }
 

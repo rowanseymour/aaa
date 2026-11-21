@@ -40,11 +40,10 @@ use tgdata::{GUARDING, GameData, Id, PropertyLook};
 use tgrender::MapAssets;
 use tgrender::overlay::BannerImages;
 use tgrender::portrait::{Sitter, Stage};
-use tgrender::textures;
 use tgsim::{Ledger, Order, Pause, Piece, Relation, State, Target, World};
 
 use crate::banners::{self, Badges};
-use crate::ui::{self, Hint, Ink, Meter, Shade};
+use crate::ui::{self, Hint, Ink, Meter, Shade, visible};
 use crate::{
     Drawn, Leaders, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint,
 };
@@ -353,8 +352,7 @@ impl Looks {
         if let Some(h) = self.images.get(path) {
             return h.clone();
         }
-        let h =
-            textures::decode(&game.read(path)?, path, self.formats, true).map(|i| images.add(i));
+        let h = crate::ui::read_image(game, path, self.formats).map(|i| images.add(i));
         self.images.insert(path.to_string(), h.clone());
         h
     }
@@ -413,7 +411,7 @@ pub fn setup(
         .iter()
         .map(|(id, t)| (id.clone(), t.name.clone())))
     .chain((listings.iter()).map(|(id, l)| (id.clone(), l.name.clone())));
-    let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
+    let glyphs = crate::ui::glyphs(game, &mut images, formats.0);
     let mut properties: HashMap<Id, PropertyLook> = (*game.property_looks()).clone();
     let mut formations = HashMap::new();
     for (formation, look) in game.formation_looks().iter() {
@@ -895,13 +893,6 @@ fn seen_now(sim: &World, fog: Option<&crate::fog::Fog>, of: Target) -> bool {
                 Target::Building(b) => f.building(b) == crate::fog::Look::Shown,
             }
     })
-}
-
-fn visible(shown: bool) -> Visibility {
-    match shown {
-        true => Visibility::Inherited,
-        false => Visibility::Hidden,
-    }
 }
 
 /// A weapon's tooltip: its name, its damage now as `figure`, the game's

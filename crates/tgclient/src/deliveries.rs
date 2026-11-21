@@ -47,10 +47,7 @@ pub fn show(
     let friends = local.0.map(|p| sim.0.sharing_sight(p));
     let seen = |owner: u32, at: [f32; 2]| {
         let ours = friends.as_ref().is_none_or(|f| f.contains(&owner));
-        match ours || fog.at(at) == Seen::Visible {
-            true => Visibility::Inherited,
-            false => Visibility::Hidden,
-        }
+        crate::ui::visible(ours || fog.at(at) == Seen::Visible)
     };
     let mut place = |e: Entity, at: Vec3, turned: Quat, shown: Visibility| {
         if let Ok((mut transform, mut visibility)) = placed.get_mut(e) {

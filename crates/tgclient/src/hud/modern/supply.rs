@@ -5,12 +5,11 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
-use tgrender::textures;
 
 use super::minimap;
-use crate::actions::Blocks;
 use crate::intent::Asks;
 use crate::keys;
+use crate::ui::Blocks;
 use crate::ui::Hint;
 use crate::{Loaded, Local, Sim};
 
@@ -32,9 +31,7 @@ pub fn spawn(
     formats: Res<CompressedImageFormatSupport>,
 ) {
     let game = &loaded.game;
-    let icon = (game.read(CYCLE_ICON))
-        .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
-        .map(|i| images.add(i));
+    let icon = crate::ui::read_image(game, CYCLE_ICON, formats.0).map(|i| images.add(i));
     let help = game.strings().get(CYCLE_HELP).cloned();
     commands.spawn((
         CycleDetached,
@@ -72,11 +69,5 @@ pub fn show_cycle_button(
         return;
     }
     let any = local.0.is_some_and(|p| sim.0.attachable(p));
-    let display = match any {
-        true => Display::Flex,
-        false => Display::None,
-    };
-    if button.display != display {
-        button.display = display;
-    }
+    crate::ui::show(button, any);
 }

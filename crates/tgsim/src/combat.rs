@@ -354,14 +354,16 @@ impl World {
         Some((plain + ground + level, plain))
     }
 
-    pub(crate) fn owner(&self, t: Target) -> u32 {
+    /// The player a target belongs to.
+    pub fn owner(&self, t: Target) -> u32 {
         match t {
             Target::Unit(u) => self.organizations[self.units[u].organization].owner,
             Target::Building(b) => self.buildings[b].owner,
         }
     }
 
-    pub(crate) fn position(&self, t: Target) -> [f32; 2] {
+    /// Where a target is.
+    pub fn position(&self, t: Target) -> [f32; 2] {
         match t {
             Target::Unit(u) => self.units[u].position,
             Target::Building(b) => self.buildings[b].position,

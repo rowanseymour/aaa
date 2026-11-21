@@ -24,6 +24,8 @@ use tgrender::terrain::{map_point, world};
 use tgrender::{MapAssets, MapObject, Tint};
 use tgsim::{Landing, Operated, State, Target, World};
 
+use crate::random::Random;
+use crate::ui::visible;
 use crate::{BuildingView, Drawn, Loaded, Screen, Sim, UnitView};
 
 #[derive(Resource)]
@@ -60,7 +62,7 @@ pub struct Effects {
     /// Seconds since a site's health last changed that it's still being
     /// worked on, if the game says.
     at_work: Option<f32>,
-    rng: u64,
+    rng: Random,
 }
 
 /// An effect command set off, waiting to play.
@@ -281,7 +283,7 @@ impl Effects {
             detail: 1.0,
             night,
             at_work: game.active_construction_seconds(),
-            rng: 0x9e37_79b9_7f4a_7c15,
+            rng: Random::new(0x9e37_79b9_7f4a_7c15),
         }
     }
 
@@ -301,11 +303,7 @@ impl Effects {
 
     /// A number in `0..1`.
     fn random(&mut self) -> f32 {
-        // xorshift64
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 7;
-        self.rng ^= self.rng << 17;
-        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+        self.rng.next()
     }
 
     fn queue(&mut self, when: When, cues: &[VfxCue], source: Source, target: Option<Target>) {
@@ -690,8 +688,8 @@ fn notice(
         if let Some(w) = fighter(sim, l.from).and_then(|f| f.weapons.get(l.weapon)) {
             effects.land(l, w, at.at);
             if let Some(p) = &w.projectile {
-                let to = crate::target_position(sim, l.target);
-                sounds.landed(&time, p, l.at, to, owner(sim, l.from));
+                let to = sim.position(l.target);
+                sounds.landed(&time, p, l.at, to, sim.owner(l.from));
             }
         }
     }
@@ -770,14 +768,6 @@ fn notice(
 /// The map's own scenery not yet seen.
 type NewScenery = (Without<Scenery>, crate::fog::IsScenery);
 
-/// Whose a target is.
-fn owner(sim: &World, t: Target) -> u32 {
-    match t {
-        Target::Unit(u) => sim.organizations[sim.units[u].organization].owner,
-        Target::Building(b) => sim.buildings[b].owner,
-    }
-}
-
 /// What a target is, whether it's living or not.
 fn fighter(sim: &World, t: Target) -> Option<&tgdata::Fighter> {
     match t {
@@ -853,13 +843,10 @@ fn play(
     fog: Res<crate::fog::Fog>,
 ) {
     let now = time.elapsed_secs_f64();
-    if effects.queued.iter().all(|(due, _)| *due > now) {
+    let due = crate::sound::take_due(&mut effects.queued, now);
+    if due.is_empty() {
         return;
     }
-    let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut effects.queued)
-        .into_iter()
-        .partition(|(due, _)| *due <= now);
-    effects.queued = waiting;
     let sim = &sim.0;
     // Each view's anchor, root, packing model and footprint.
     let mut views = HashMap::new();
@@ -1466,14 +1453,6 @@ fn shown_with(shown: Visibility, nightly: bool, night: bool) -> Visibility {
     }
 }
 
-/// How an effect for the night shows, by whether it's night.
-fn visible(night: bool) -> Visibility {
-    match night {
-        true => Visibility::Inherited,
-        false => Visibility::Hidden,
-    }
-}
-
 /// Shows pictures laid on the ground as far as they've come in or gone.
 fn fade(
     time: Res<Time>,
@@ -1935,7 +1914,7 @@ mod tests {
             detail: 1.0,
             night: false,
             at_work: Some(2.5),
-            rng: 1,
+            rng: Random::new(1),
         }
     }
 

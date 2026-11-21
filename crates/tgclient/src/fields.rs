@@ -2,7 +2,8 @@
 //! at a time, taken by pressing it, and Enter in it tells whatever
 //! listens.
 
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
@@ -89,7 +90,7 @@ fn type_in(
         return;
     }
     let mut now = typed.text.clone();
-    crate::chat::type_into(&mut now, typed.longest, &mut presses);
+    crate::fields::type_into(&mut now, typed.longest, &mut presses);
     if typed.digits {
         now.retain(|c| c.is_ascii_digit());
     }
@@ -119,5 +120,35 @@ fn show(
         if let Some(Ok(mut text)) = texts.iter_many_mut(children).fetch_next() {
             text.0 = shown;
         }
+    }
+}
+
+/// Types what's been pressed into `input`, as far as `longest`
+/// characters; Backspace takes the last character back.
+pub(crate) fn type_into(
+    input: &mut String,
+    longest: usize,
+    presses: &mut MessageReader<KeyboardInput>,
+) {
+    for press in presses.read() {
+        if press.state != ButtonState::Pressed {
+            continue;
+        }
+        if press.key_code == KeyCode::Backspace {
+            input.pop();
+            continue;
+        }
+        let typed = match &press.logical_key {
+            Key::Character(c) => c.as_str(),
+            Key::Space => " ",
+            _ => continue,
+        };
+        let room = longest.saturating_sub(input.chars().count());
+        let typed: String = typed
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(room)
+            .collect();
+        input.push_str(&typed);
     }
 }

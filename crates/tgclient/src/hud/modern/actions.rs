@@ -9,11 +9,11 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
 
 use crate::actions::{
-    Blocks, COLUMNS, Looks, Page, Quantity, ROWS, SLOTS, Said, Shown, Slot, Tip, builds, lit,
-    look_of, widget,
+    COLUMNS, Looks, Page, Quantity, ROWS, SLOTS, Said, Shown, Slot, Tip, builds, lit, look_of,
+    widget,
 };
 use crate::intent::Asks;
-use crate::ui::{self, Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
+use crate::ui::{self, Blocks, Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
 use crate::{Local, Selected, SelectedBuilding, Sim};
 
 /// A button's side, in logical pixels; the icons are drawn 42 across.
@@ -158,10 +158,7 @@ pub fn show(
     let building = chosen.0.filter(|_| selected.0.is_empty());
     // Others' things have no buttons.
     let nothing = !crate::selection::commanded(&sim.0, local.0, &selected.0, building);
-    panel.set_if_neq(match nothing {
-        false => Visibility::Inherited,
-        true => Visibility::Hidden,
-    });
+    panel.set_if_neq(ui::visible(!nothing));
     if nothing {
         return;
     }
@@ -220,13 +217,7 @@ impl TipParts<'_, '_> {
     /// Shows the tip, or hides the box for none.
     fn say(&mut self, tip: Option<Tip>) {
         let (entity, node, fresh) = &mut *self.tooltip;
-        let display = match tip {
-            Some(_) => Display::Flex,
-            None => Display::None,
-        };
-        if node.display != display {
-            node.display = display;
-        }
+        ui::show(node, tip.is_some());
         let tip = tip.unwrap_or_default();
         // What it last said was in the box before this one.
         if *self.said == tip && !fresh.is_added() {

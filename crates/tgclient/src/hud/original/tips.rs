@@ -209,13 +209,7 @@ pub fn show(
 ) {
     let (entity, mut node, mut pane) = pane.into_inner();
     let docked = (hinted.0.as_ref()).filter(|h| h.dock == entity);
-    let display = match said.0.is_some() || docked.is_some() {
-        true => Display::Flex,
-        false => Display::None,
-    };
-    if node.display != display {
-        node.display = display;
-    }
+    crate::ui::show(&mut node, said.0.is_some() || docked.is_some());
     // Compared before it's copied, as it's mostly unchanged.
     let same = match (&pane.said, &said.0, docked) {
         (Some(Saying::Tip(was)), Some(tip), _) => was == tip,

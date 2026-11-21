@@ -10,8 +10,8 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::ScrollArea;
 use tgrender::textures;
 
-use crate::actions::Blocks;
 use crate::intent::{Asked, Asks, Intent};
+use crate::ui::Blocks;
 use crate::ui::{self, Font, Ink, Surface, label};
 use crate::{Orders, Screen};
 use tgsim::Action;
@@ -269,11 +269,7 @@ impl Toggling<'_, '_> {
 
     fn show(&mut self) {
         for (PanelWindow(panel), mut node) in &mut self.windows {
-            let display = match self.displays.is_open(*panel) {
-                true => Display::Flex,
-                false => Display::None,
-            };
-            node.display = display;
+            crate::ui::show(&mut node, self.displays.is_open(*panel));
         }
     }
 }

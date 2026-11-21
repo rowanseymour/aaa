@@ -13,7 +13,6 @@ use bevy::window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow, S
 use tgdata::Id;
 use tgrender::MapAssets;
 use tgrender::terrain::world;
-use tgrender::textures;
 
 use crate::actions::{self, Aim, Page};
 use crate::{Drawn, Loaded, Pointer, Screen, SelectedBuilding, Sim};
@@ -117,7 +116,7 @@ pub fn load(
             .frames
             .iter()
             .filter_map(|f| {
-                let mut image = textures::decode(&game.read(f)?, f, formats.0, true)?;
+                let mut image = crate::ui::read_image(game, f, formats.0)?;
                 // The window reads the cursor's pixels, so they stay here too.
                 image.asset_usage = RenderAssetUsages::all();
                 Some(images.add(image))

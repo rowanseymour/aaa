@@ -7,7 +7,6 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use tgdata::Id;
-use tgrender::textures;
 
 use crate::displays::{self, Contents, Displays, Panel, Window};
 use crate::ui::{Font, Hint, Ink, Marked, label};
@@ -139,7 +138,7 @@ fn refresh(
         };
         let image = line.image.get_or_insert_with(|| {
             let path = &line.icon;
-            let decoded = textures::decode(&loaded.game.read(path)?, path, formats, true)?;
+            let decoded = crate::ui::read_image(&loaded.game, path, formats)?;
             Some(images.add(decoded))
         });
         entries.push((line.name.clone(), image.clone(), line.hint.clone()));

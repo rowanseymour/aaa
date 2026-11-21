@@ -327,8 +327,8 @@ impl World {
         }
     }
 
-    /// The owner of what an organization or building engages.
-    pub(crate) fn piece_owner(&self, enemy: Piece) -> u32 {
+    /// The player a piece belongs to.
+    pub fn piece_owner(&self, enemy: Piece) -> u32 {
         match enemy {
             Piece::Organization(e) => self.organizations[e].owner,
             Piece::Building(b) => self.buildings[b].owner,

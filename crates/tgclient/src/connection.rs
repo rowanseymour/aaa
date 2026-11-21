@@ -262,7 +262,7 @@ pub fn load(
 ) {
     let formats = formats.map(|f| f.0).unwrap_or_default();
     let mut image = |path: &str| {
-        let image = tgrender::textures::decode(&data.0.read(path)?, path, formats, true)?;
+        let image = crate::ui::read_image(&data.0, path, formats)?;
         Some(images.add(image))
     };
     let connection = data.0.connection_look();
@@ -275,7 +275,7 @@ pub fn load(
     let glyphs = [&ping.good, &ping.middling, &ping.bad];
     let pings = (glyphs.into_iter().flatten())
         .filter_map(|name| {
-            let path = format!("{}/{name}.png", crate::actions::GLYPH_DIR);
+            let path = format!("{}/{name}.png", crate::ui::GLYPH_DIR);
             Some((name.clone(), image(&path)?))
         })
         .collect();
@@ -736,7 +736,7 @@ fn keys(
         return;
     }
     let mut typing = std::mem::take(&mut dialog.typing);
-    crate::chat::type_into(&mut typing, tgsim::CHAT_LONGEST, &mut presses);
+    crate::fields::type_into(&mut typing, tgsim::CHAT_LONGEST, &mut presses);
     if dialog.typing != typing {
         dialog.typing = typing;
     }
