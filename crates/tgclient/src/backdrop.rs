@@ -163,7 +163,7 @@ fn arrive(
     let (assets, game) = (&mut assets, &data.0);
     tgrender::spawn_objects(&mut commands, assets, game, &map, false, which, Backdrop);
     let [x, y] = at;
-    let focus = terrain::world(x, y, map.ground.height_at(at));
+    let focus = tgrender::space::world(x, y, map.ground.height_at(at));
     for (mut cam, mut transform) in &mut cameras {
         cam.focus = focus;
         *transform = cam.transform();

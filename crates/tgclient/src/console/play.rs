@@ -4,7 +4,7 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::map_point;
+use tgrender::space::map_point;
 
 use crate::actions::Aim;
 use crate::lobby::Lineup;
@@ -51,7 +51,7 @@ pub(crate) fn sun(world: &mut World, args: &[&str]) -> Reply {
         .set_night(night);
     let mut ambient = world.resource::<GlobalAmbientLight>().clone();
     for mut light in lights.iter_mut(world) {
-        tgrender::color_lights(&mut light, &mut ambient, preset.diffuse, preset.ambient);
+        tgrender::light::color_lights(&mut light, &mut ambient, preset.diffuse, preset.ambient);
     }
     world.insert_resource(ambient);
     Ok(String::new())

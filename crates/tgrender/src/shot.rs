@@ -84,17 +84,6 @@ struct Wanted {
     asked: bool,
 }
 
-impl Wanted {
-    fn new(path: PathBuf) -> Wanted {
-        Wanted {
-            path,
-            frames: 0,
-            quiet: 0,
-            asked: false,
-        }
-    }
-}
-
 /// Saves the next settled frame of a windowless run to `path`, triggering
 /// [`Taken`] once it has; `false` if cameras draw to a window instead.
 pub fn take(world: &mut World, path: PathBuf) -> bool {
@@ -113,6 +102,15 @@ enum Step {
 }
 
 impl Wanted {
+    fn new(path: PathBuf) -> Wanted {
+        Wanted {
+            path,
+            frames: 0,
+            quiet: 0,
+            asked: false,
+        }
+    }
+
     /// Advances a frame, given how many pipelines are still compiling.
     fn tick(&mut self, compiling: usize) -> Step {
         self.frames += 1;

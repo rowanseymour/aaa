@@ -1,11 +1,26 @@
-//! Decoding the game's image files.
+//! Decoding the game's image files, and building the images drawn with
+//! them.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{
     CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
 };
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{
+    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+};
+use tgdata::GameData;
+
+/// Reads and decodes the image file at archive path `path`, warning if it
+/// can't be decoded: `srgb` as for [`decode`].
+pub fn read(
+    game: &GameData,
+    path: &str,
+    formats: CompressedImageFormats,
+    srgb: bool,
+) -> Option<Image> {
+    decode(&game.read(path)?, path, formats, srgb)
+}
 
 /// Decodes an image file by its name's extension, warning if it can't:
 /// `srgb` for one the interface draws, not the world (see [`crate::stored`]).
@@ -36,6 +51,131 @@ pub fn repeating() -> ImageSampler {
         anisotropy_clamp: 16,
         ..ImageSamplerDescriptor::linear()
     })
+}
+
+/// A sampler that stops at the texture's edges.
+pub fn clamped() -> ImageSampler {
+    ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        ..ImageSamplerDescriptor::linear()
+    })
+}
+
+/// RGBA8 for an image the interface draws if `srgb`, else for the world's
+/// stored colour values (see [`crate::stored`]).
+pub fn rgba8_format(srgb: bool) -> TextureFormat {
+    match srgb {
+        true => TextureFormat::Rgba8UnormSrgb,
+        false => TextureFormat::Rgba8Unorm,
+    }
+}
+
+/// A 2D image `size` across, or an array of `layers` of them, from its
+/// top level's data.
+pub fn image_2d(size: UVec2, layers: u32, data: Vec<u8>, format: TextureFormat) -> Image {
+    Image::new(
+        extent(size, layers),
+        TextureDimension::D2,
+        data,
+        format,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// [`image_2d`] from the data of all its `mips` levels, a layer at a time.
+pub fn mipmapped(
+    size: UVec2,
+    layers: u32,
+    mips: u32,
+    data: Vec<u8>,
+    format: TextureFormat,
+) -> Image {
+    let mut image = Image::new_uninit(
+        extent(size, layers),
+        TextureDimension::D2,
+        format,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = mips;
+    image
+}
+
+fn extent(size: UVec2, layers: u32) -> Extent3d {
+    Extent3d {
+        width: size.x,
+        height: size.y,
+        depth_or_array_layers: layers,
+    }
+}
+
+/// Stacks equally sized images, each with the same mip chain, into one
+/// array texture with a repeating sampler.
+pub fn texture_array(layers: Vec<Image>) -> Image {
+    let first = &layers[0];
+    let size = first.size();
+    let mips = first.texture_descriptor.mip_level_count;
+    let format = first.texture_descriptor.format;
+    let count = layers.len() as u32;
+    let data = layers.into_iter().flat_map(|l| l.data.unwrap()).collect();
+    array_image(data, size, mips, format, count)
+}
+
+/// An array texture with a repeating sampler, of `count` layers of `size`,
+/// each with `mips` levels, from their data one after another.
+pub fn array_image(
+    data: Vec<u8>,
+    size: UVec2,
+    mips: u32,
+    format: TextureFormat,
+    count: u32,
+) -> Image {
+    let mut image = mipmapped(size, count, mips, data, format);
+    // Otherwise a single layer would be viewed as a plain 2D texture.
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::D2Array),
+        ..default()
+    });
+    image.sampler = repeating();
+    image
+}
+
+/// A square, mipmapped array layer of side `n` from its RGBA8 pixels, in
+/// stored colour values (see [`crate::stored`]).
+pub fn layer_image(data: Vec<u8>, n: usize) -> Image {
+    let mut image = image_2d(UVec2::splat(n as u32), 1, data, rgba8_format(false));
+    generate_mipmaps(&mut image);
+    image
+}
+
+/// Appends box-filtered mip levels to an RGBA8 image.
+fn generate_mipmaps(image: &mut Image) {
+    let (mut w, mut h) = (image.width() as usize, image.height() as usize);
+    let Some(data) = image.data.as_mut() else {
+        return;
+    };
+    let mut level = data.clone();
+    let mut count = 1;
+    while w > 1 && h > 1 && w % 2 == 0 && h % 2 == 0 {
+        let (nw, nh) = (w / 2, h / 2);
+        let mut next = vec![0u8; nw * nh * 4];
+        for y in 0..nh {
+            for x in 0..nw {
+                for c in 0..4 {
+                    let p = |dx: usize, dy: usize| {
+                        level[((2 * y + dy) * w + 2 * x + dx) * 4 + c] as u32
+                    };
+                    next[(y * nw + x) * 4 + c] =
+                        ((p(0, 0) + p(1, 0) + p(0, 1) + p(1, 1)) / 4) as u8;
+                }
+            }
+        }
+        data.extend_from_slice(&next);
+        (level, w, h) = (next, nw, nh);
+        count += 1;
+    }
+    image.texture_descriptor.mip_level_count = count;
 }
 
 /// The top level of `image` as RGBA8, its bytes as stored whatever its
@@ -80,21 +220,8 @@ pub fn decompress(image: Image) -> Option<Image> {
             }
         }
     }
-    let format = match srgb {
-        true => TextureFormat::Rgba8UnormSrgb,
-        false => TextureFormat::Rgba8Unorm,
-    };
-    Some(Image::new(
-        Extent3d {
-            width: w as u32,
-            height: h as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        out,
-        format,
-        RenderAssetUsages::RENDER_WORLD,
-    ))
+    let size = UVec2::new(w as u32, h as u32);
+    Some(image_2d(size, 1, out, rgba8_format(srgb)))
 }
 
 #[derive(Clone, Copy)]

@@ -15,7 +15,7 @@ use tgmap::Map;
 
 use tgrender::camera::{self, RtsCamera};
 use tgrender::shot::{self, ShotPlugin};
-use tgrender::{Edge, MapAssets, MapObject, MapRenderPlugin, objects, terrain};
+use tgrender::{Edge, MapAssets, MapObject, MapRenderPlugin, objects};
 
 const USAGE: &str = "\
 usage:
@@ -272,7 +272,7 @@ fn setup(
     if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
         let (x, y) = (x * size, y * size);
         cam = RtsCamera {
-            focus: terrain::world(x, y, ground.height_at([x, y])),
+            focus: tgrender::space::world(x, y, ground.height_at([x, y])),
             distance,
             yaw,
             pitch,
@@ -315,7 +315,7 @@ fn cycle_lighting(
     lighting.current = (lighting.current + 1) % lighting.presets.len();
     let (name, diffuse, ambient_color) = &lighting.presets[lighting.current];
     for mut sun in &mut suns {
-        tgrender::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
+        tgrender::light::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
     }
     for mut t in &mut text {
         t.0 = help(name);

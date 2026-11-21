@@ -10,7 +10,7 @@ use bevy::audio::Volume;
 use bevy::prelude::*;
 use tgdata::{Audio, AudioCategory, AudioWho, Cue, GameData, Id, ObjectAudio, SoundSwitches};
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::map_point;
+use tgrender::space::map_point;
 use tgsim::Relation;
 
 use crate::random::Random;

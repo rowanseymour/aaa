@@ -10,7 +10,7 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use tgmap::Tile;
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::world;
+use tgrender::space::world;
 use tgrender::{Tint, overlay};
 
 use crate::effects::Effects;

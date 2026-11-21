@@ -4,10 +4,8 @@
 
 use std::collections::HashMap;
 
-use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use nif::{Nif, Object};
 use tgck::map::CELL_SIZE;
@@ -15,8 +13,8 @@ use tgdata::{BannerDecal, GameData, Id};
 use tgmap::{Division, Ground, Shape, from_local};
 
 use crate::loader::embedded_image;
-use crate::terrain::world;
-use crate::textures;
+use crate::space::{heading, in_world, world};
+use crate::{meshes, textures};
 
 /// How far over the ground a mark floats, so the ground doesn't cut it.
 const LIFT: f32 = 0.05;
@@ -54,10 +52,7 @@ impl OverlayImages {
         formats: CompressedImageFormats,
     ) -> Self {
         // Marks on the ground, drawn with the world.
-        let mut texture = |name: &str| {
-            let image = textures::decode(&game.read(name)?, name, formats, false)?;
-            Some(images.add(image))
-        };
+        let mut texture = |name| Some(images.add(textures::read(game, name, formats, false)?));
         let ring = texture("Effects/Selection/FocusedCircle.dds");
         let square = texture("Effects/Selection/FocusedSquare.dds");
         let mut bar = |name: &str| -> Vec<Handle<Image>> {
@@ -154,11 +149,8 @@ impl BannerImages {
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
     ) -> Self {
-        let mut add = |name: &str| {
-            let image = textures::decode(&game.read(name)?, name, formats, true)?;
-            Some(images.add(image))
-        };
-        let focus = add("Effects/Selection/BannerFocusBase.tga");
+        let focus = textures::read(game, "Effects/Selection/BannerFocusBase.tga", formats, true)
+            .map(|i| images.add(i));
         BannerImages {
             focus,
             icon_paths: game.banner_icons(),
@@ -285,8 +277,8 @@ impl BannerImages {
         path: String,
     ) -> Option<Handle<Image>> {
         let formats = self.formats;
-        crate::models::cached(&mut self.loaded, &path, || {
-            textures::decode(&game.read(&path)?, &path, formats, true).map(|i| images.add(i))
+        crate::cache::cached(&mut self.loaded, &path, || {
+            textures::read(game, &path, formats, true).map(|i| images.add(i))
         })
     }
 }
@@ -341,17 +333,8 @@ pub fn flat_square() -> Mesh {
         [0.5, 0.0, 0.5],
         [-0.5, 0.0, 0.5],
     ];
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 4])
-    .with_inserted_attribute(
-        Mesh::ATTRIBUTE_UV_0,
-        vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-    )
-    .with_inserted_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]))
+    let uvs = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    meshes::triangles(positions, meshes::up(4), uvs, vec![0, 2, 1, 0, 3, 2])
 }
 
 /// An unlit, see-through material showing `image` in `colour`.
@@ -381,16 +364,14 @@ pub fn mark_transform(
     facing: [f32; 2],
     size: Vec2,
 ) -> Transform {
-    let facing = Vec2::from(facing).try_normalize().unwrap_or(Vec2::NEG_Y);
     let footprint = Shape::Rect {
         width: size.x,
         height: size.y,
     };
-    let tilt = ground.tilt(position, facing.to_array(), footprint);
-    let axis = |[x, y, z]: [f32; 3]| world(x, y, z);
-    let up = axis(tilt.up).normalize();
+    let tilt = ground.tilt(position, heading(facing).to_array(), footprint);
+    let up = in_world(tilt.up).normalize();
     // The square's -z, its image's top, points ahead.
-    let ahead = axis(tilt.forward);
+    let ahead = in_world(tilt.forward);
     let right = ahead.cross(up).normalize();
     let back = right.cross(up);
     let [x, y] = position;
@@ -417,10 +398,7 @@ pub fn draped_square_about(
     size: Vec2,
     origin: Vec3,
 ) -> Mesh {
-    let facing = Vec2::from(facing)
-        .try_normalize()
-        .unwrap_or(Vec2::NEG_Y)
-        .to_array();
+    let facing = heading(facing).to_array();
     // Finer than the ground's cells, so it bends where they do.
     let steps = |len: f32| ((2.0 * len / CELL_SIZE).ceil() as u32).max(1);
     let (nx, ny) = (steps(size.x), steps(size.y));
@@ -445,15 +423,8 @@ pub fn draped_square_about(
             indices.extend([a, c, b, a, d, c]);
         }
     }
-    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-    .with_inserted_indices(Indices::U32(indices))
+    let normals = meshes::up(positions.len());
+    meshes::triangles(positions, normals, uvs, indices)
 }
 
 /// How many of an outline's sides one guide point stands for, at most.
@@ -538,7 +509,7 @@ pub fn border_paths(loops: &[Vec<[f32; 2]>]) -> Vec<Vec<[f32; 2]>> {
 
 /// The image a border is drawn with, sampled over and over along it.
 pub fn border_image(game: &GameData, path: &str, formats: CompressedImageFormats) -> Option<Image> {
-    let mut image = textures::decode(&game.read(path)?, path, formats, false)?;
+    let mut image = textures::read(game, path, formats, false)?;
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_v: ImageAddressMode::Repeat,
         ..ImageSamplerDescriptor::linear()
@@ -592,15 +563,8 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
             }
         }
     }
-    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-    .with_inserted_indices(Indices::U32(indices))
+    let normals = meshes::up(positions.len());
+    meshes::triangles(positions, normals, uvs, indices)
 }
 
 #[cfg(test)]
@@ -622,7 +586,7 @@ mod tests {
             panic!("no positions");
         };
         for p in positions {
-            let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
+            let [x, y] = crate::space::map_point(Vec3::from_array(*p));
             assert!((p[1] - ground.height_at([x, y]) - LIFT).abs() < 1e-4);
         }
         // Its corners are at the size asked for, around the position.
@@ -748,7 +712,7 @@ mod tests {
         // Half its width either side of the path, the image's left edge
         // outside what the path bounds.
         for (p, [u, _]) in positions.iter().zip(uvs) {
-            let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
+            let [x, y] = crate::space::map_point(Vec3::from_array(*p));
             assert!((p[1] - ground.height_at([x, y]) - LIFT).abs() < 1e-4);
             assert!((7.49..56.51).contains(&x) && (7.49..56.51).contains(&y));
             // Along the middle of the near side, clear of the corners.

@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use tgdata::{Decal, SpecialOperation};
 use tgrender::MapAssets;
 use tgrender::decals::DecalCache;
-use tgrender::terrain::world;
+use tgrender::space::world;
 
 use bevy::ecs::system::SystemParam;
 

@@ -11,6 +11,7 @@
 
 use bevy::camera::Hdr;
 use bevy::core_pipeline::fullscreen_material::FullscreenMaterial;
+use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 use bevy::render::{RenderApp, extract_component::ExtractComponent, render_resource::ShaderType};
 use bevy::shader::ShaderRef;
@@ -28,6 +29,18 @@ impl FullscreenMaterial for StoredColours {
     fn fragment_shader() -> ShaderRef {
         "embedded://tgrender/stored.wesl".into()
     }
+}
+
+/// A 3D camera that draws the world in stored colour values, and without
+/// tonemapping, which [`crate::light::color_lights`] needs.
+pub fn world_camera() -> impl Bundle {
+    (
+        Camera3d::default(),
+        Tonemapping::None,
+        // Dithering only runs as part of tonemapping.
+        DebandDither::Disabled,
+        StoredColours::default(),
+    )
 }
 
 /// `colour` as a world shader takes it: its stored value, unconverted.

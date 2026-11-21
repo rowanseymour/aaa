@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use tgdata::Id;
 use tgmap::Ground;
 use tgrender::models::Models;
-use tgrender::terrain::{map_point, world};
+use tgrender::space::{map_point, world};
 
 use super::play::{Placed, edge, hit_height};
 use super::{OnThing, Play, Source, Subject};

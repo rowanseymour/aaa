@@ -94,7 +94,7 @@ pub fn show(
             // Nose down as steeply as it dives: turning the way it's
             // heading back about this axis takes it down towards the ground.
             let [fx, fy] = delivery.facing;
-            let axis = tgrender::terrain::world(fx, fy, 0.0).cross(Vec3::Y);
+            let axis = tgrender::space::world(fx, fy, 0.0).cross(Vec3::Y);
             let dip = Quat::from_axis_angle(axis.normalize_or_zero(), -delivery.dive().atan());
             let turned = dip * turned;
             if let Some(e) = plane {

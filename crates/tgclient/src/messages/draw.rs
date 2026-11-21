@@ -5,7 +5,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 use tgrender::camera::RtsCamera;
-use tgrender::terrain::world;
+use tgrender::space::world;
 
 use crate::displays::{self, Contents, Displays, Panel, Window};
 use crate::ui::{Font, Hint, font};

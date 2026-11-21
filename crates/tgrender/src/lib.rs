@@ -2,12 +2,15 @@
 //! objects with the game's models, and an RTS camera to look at them with.
 
 pub mod blend;
+mod cache;
 pub mod camera;
 pub mod decals;
 mod glow;
+pub mod light;
 mod loader;
 pub mod log;
 mod measures;
+mod meshes;
 pub mod models;
 pub mod objects;
 pub mod overlay;
@@ -16,6 +19,7 @@ pub mod portrait;
 mod rig;
 pub mod shot;
 mod solid;
+pub mod space;
 pub mod stored;
 mod team;
 pub mod terrain;
@@ -27,14 +31,13 @@ pub use rig::Playing;
 use std::sync::Arc;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
-use bevy::camera::Exposure;
 use bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
-use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::light::NotShadowCaster;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
-use tgck::map::Sun;
+use tgck::map::{Sun, Thing};
 use tgdata::GameData;
 use tgmap::Map;
 
@@ -43,9 +46,9 @@ use glow::GlowMaterial;
 use models::{MaterialStores, ModelAssets, Models};
 use solid::SolidMaterial;
 use team::TeamMaterial;
-pub use team::Tint;
-use tgck::map::Thing;
 use water::WaterMaterial;
+
+pub use team::Tint;
 
 /// What drawing a map needs: the ground material, model animation, what lies
 /// beyond the map and the camera's controls.
@@ -287,57 +290,11 @@ pub fn spawn_land(
             tag.clone(),
         ));
     }
-    for light in light(commands, sun, size, shade).into_iter().flatten() {
+    for light in light::spawn(commands, sun, size, shade)
+        .into_iter()
+        .flatten()
+    {
         commands.entity(light).insert(tag.clone());
     }
     ground
-}
-
-/// Lights a map of `size` across from its sun, whose shadows take away
-/// `shade` of its light: two lights, that share casting shadows and the
-/// rest not, either left out where its share is nothing.
-fn light(commands: &mut Commands, sun: &Sun, size: f32, shade: f32) -> [Option<Entity>; 2] {
-    let mut ambient = GlobalAmbientLight::default();
-    let [dx, dy, dz] = sun.direction;
-    let facing = Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y);
-    let lights = [(shade, true), (1.0 - shade, false)].map(|(share, shadows)| {
-        if share <= 0.0 {
-            return None;
-        }
-        let mut directional = DirectionalLight {
-            illuminance: std::f32::consts::PI * light_unit() * share,
-            shadow_maps_enabled: shadows,
-            ..default()
-        };
-        color_lights(&mut directional, &mut ambient, sun.diffuse, sun.ambient);
-        let cascades = CascadeShadowConfigBuilder {
-            maximum_distance: size * 1.5,
-            ..default()
-        };
-        Some(commands.spawn((directional, facing, cascades.build())).id())
-    });
-    commands.insert_resource(ambient);
-    lights
-}
-
-/// Light of strength 1 to the camera: the inverse of its exposure.
-fn light_unit() -> f32 {
-    1.0 / Exposure::default().exposure()
-}
-
-/// Gives the sun and ambient lights a sun's `diffuse` and `ambient` colours,
-/// keeping each sun light's share of the light.
-///
-/// The game lights like Direct3D's fixed pipeline: texture * (ambient +
-/// diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
-/// PBR gets the same result, as long as the camera skips tonemapping.
-pub fn color_lights(
-    directional: &mut DirectionalLight,
-    ambient: &mut GlobalAmbientLight,
-    diffuse: [f32; 3],
-    ambient_color: [f32; 3],
-) {
-    directional.color = stored::rgb(diffuse);
-    ambient.color = stored::rgb(ambient_color);
-    ambient.brightness = light_unit();
 }

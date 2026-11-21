@@ -8,7 +8,7 @@ use tgrender::MapObject;
 use tgrender::camera::RtsCamera;
 use tgrender::models::Footprint;
 use tgrender::overlay::{self, BUILDING_HEALTH_BAR, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET};
-use tgrender::terrain::world;
+use tgrender::space::world;
 use tgsim::{Relation, World};
 
 use crate::ui_scale::{OnMap, overlaps_view, place_on_map, within_view};

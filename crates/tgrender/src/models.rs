@@ -1,10 +1,7 @@
 //! Placed objects drawn with the game's models, where their templates name
 //! models this crate can read.
 
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::f32::consts::FRAC_PI_2;
-use std::hash::Hash;
 use std::sync::Arc;
 
 use bevy::ecs::system::SystemParam;
@@ -21,14 +18,15 @@ use tgdata::{AnimationKind, Footing, GameData, Id, Portrait, Shape, View};
 use tgmap::{Ground, Player, owner};
 
 use crate::MapObject;
+use crate::cache::cached;
 use crate::glow::GlowMaterial;
 use crate::loader::{Loader, Textures};
 use crate::measures::Measures;
 use crate::particles::{self, Frames, System};
 use crate::rig::{Clips, Nodes, Rig};
 use crate::solid::SolidMaterial;
+use crate::space::{bevy_transform, facing_turn, heading, in_world, world};
 use crate::team::{Team, TeamMaterial};
-use crate::terrain::world;
 
 /// Where and how turned to draw an object at `position` facing `facing`: at
 /// the height its `footing` stands at and turned only about the vertical, or
@@ -41,39 +39,41 @@ pub fn pose(
     footing: Footing,
 ) -> (Vec3, Quat) {
     let [x, y] = position;
-    let [fx, fy] = facing;
     let Some(footprint) = conform else {
         let translation = world(x, y, ground.stand_at(footing, [x, y]));
-        return (translation, Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2));
+        return (translation, facing_turn(facing));
     };
-    // Objects never turned face their model's -y.
-    let facing = Vec2::new(fx, fy).try_normalize().unwrap_or(Vec2::NEG_Y);
-    let tilt = ground.tilt(position, facing.to_array(), footprint);
-    let axis = |[x, y, z]: [f32; 3]| world(x, y, z);
-    let forward = axis(tilt.forward);
+    let tilt = ground.tilt(position, heading(facing).to_array(), footprint);
+    let forward = in_world(tilt.forward);
     // The model's -y points ahead and its z up, kept square to it.
-    let right = (-forward).cross(axis(tilt.up)).normalize();
+    let right = (-forward).cross(in_world(tilt.up)).normalize();
     let up = right.cross(-forward);
     let rotation = Quat::from_mat3(&Mat3::from_cols(right, up, forward));
     (world(x, y, tilt.height), rotation)
 }
 
-/// Which of its view's models a thing is drawn with, before wrapping round
-/// them: things with no variation set pick one by id, so neighbours differ.
-fn variation(thing: &Thing) -> usize {
-    usize::try_from(thing.variation).unwrap_or(thing.id as usize)
+/// The archive path of the one of its view's models a thing is drawn with:
+/// things with no variation set pick one by id, so neighbours differ.
+fn variation<'v>(thing: &Thing, view: &'v View) -> Option<&'v str> {
+    let pick = usize::try_from(thing.variation).unwrap_or(thing.id as usize);
+    let models = &view.models;
+    (!models.is_empty()).then(|| models[pick % models.len()].as_str())
+}
+
+/// The root a model's meshes are spawned under.
+pub(crate) fn root(name: impl Into<String>, transform: Transform) -> impl Bundle {
+    (Name::new(name.into()), transform, Visibility::default())
 }
 
 /// Where a placed object's model goes and how it's turned and sized.
 fn placed(thing: &Thing, view: &View) -> Transform {
-    // Maps store each object's height as the game places it: on the
-    // ground, the seabed or the waterline.
-    let [x, y, z] = thing.position;
     // Models face their -y axis, which turns to the object's facing:
     // roads run along it and waves roll back against it to shore.
     let [fx, fy, _] = thing.facing;
-    Transform::from_translation(world(x, y, z))
-        .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
+    // Maps store each object's height as the game places it: on the
+    // ground, the seabed or the waterline.
+    Transform::from_translation(in_world(thing.position))
+        .with_rotation(facing_turn([fx, fy]))
         .with_scale(Vec3::splat(view.scale * thing.scale))
 }
 
@@ -102,6 +102,23 @@ pub(crate) struct Part {
     /// How much ambient light its material reflects, and how much of the
     /// light that falls on it, where it has a material to say.
     pub reflects: Option<([f32; 3], [f32; 3])>,
+}
+
+impl Part {
+    /// Whether its animation changes its material, so each copy of it
+    /// needs one of its own.
+    pub(crate) fn paints(&self) -> bool {
+        self.animation.as_ref().is_some_and(|a| a.paints())
+    }
+
+    /// Makes `entity` draw it in `material`.
+    pub(crate) fn draw(&self, entity: &mut EntityCommands, material: &PartMaterial) {
+        entity.insert(Mesh3d(self.mesh.clone()));
+        material.insert(entity);
+        if self.blended {
+            entity.insert(NotShadowCaster);
+        }
+    }
 }
 
 /// A part's material: most are standard, those that add to what's behind
@@ -363,7 +380,7 @@ impl Animated {
 
     /// Whether it changes its part's material, rather than only moving it.
     pub(crate) fn paints(&self) -> bool {
-        self.animation.fade.is_some() || self.animation.texture.is_some()
+        self.animation.paints()
     }
 
     /// Paints its part at its time, and gives the part's transform then if
@@ -625,8 +642,7 @@ impl Models {
         match packing {
             Some(true) => view.unpacking.as_deref(),
             Some(false) => view.packing.as_deref(),
-            None if view.models.is_empty() => None,
-            None => Some(&view.models[variation(thing) % view.models.len()]),
+            None => variation(thing, view),
         }
     }
 
@@ -757,7 +773,7 @@ impl Models {
     }
 
     /// The templates that raise an organization.
-    pub(crate) fn organization_templates(&self) -> std::collections::HashSet<Id> {
+    pub(crate) fn organization_templates(&self) -> HashSet<Id> {
         self.game.organization_components().into_keys().collect()
     }
 
@@ -818,13 +834,8 @@ impl Models {
         if !matches!(model.meshes, Meshes::Rig(_)) {
             return None;
         }
-        let root = commands
-            .spawn((Name::new(path), placed(thing, &view), Visibility::default()))
-            .id();
-        let paint = Paint {
-            colour: self.colours.get(&owner).copied(),
-            ambient: None,
-        };
+        let root = commands.spawn(root(path, placed(thing, &view))).id();
+        let paint = self.owners_paint(Some(owner));
         self.spawn_meshes(commands, assets, root, model, paint, into);
         Some(root)
     }
@@ -900,20 +911,12 @@ impl Models {
         view: &View,
         moving: Option<&tgdata::Animation>,
     ) -> Option<Entity> {
-        if view.models.is_empty() {
-            return None;
-        }
-        let model = &view.models[variation(thing) % view.models.len()];
+        let model = variation(thing, view)?;
         let model = self.model(assets, model, view, Plays::unit(view, moving))?;
-        let paint = Paint {
-            colour: owner.and_then(|o| self.colours.get(&o).copied()),
-            ambient: None,
-        };
+        let paint = self.owners_paint(owner);
         let mut root = commands.spawn((
-            Name::new(thing.template.clone()),
+            root(thing.template.clone(), placed(thing, view)),
             MapObject(thing.clone()),
-            placed(thing, view),
-            Visibility::default(),
         ));
         if let Some(size) = model.selection {
             root.insert(Footprint(size * view.scale * thing.scale));
@@ -939,13 +942,7 @@ impl Models {
     ) -> Option<Entity> {
         let view = View::of_models(vec![path.to_string()], texture_dirs.to_vec());
         let model = self.own_animation(assets, path, &view)?;
-        let root = commands
-            .spawn((
-                Name::new(path.to_string()),
-                transform,
-                Visibility::default(),
-            ))
-            .id();
+        let root = commands.spawn(root(path, transform)).id();
         self.spawn_meshes(commands, assets, root, model, Paint::default(), 0.0);
         Some(root)
     }
@@ -1002,11 +999,8 @@ impl Models {
             .collect();
         commands.entity(root).with_children(|parent| {
             for (part, material) in parts.into_iter().zip(materials) {
-                let mut child = parent.spawn(Mesh3d(part.mesh));
-                if part.blended {
-                    child.insert(NotShadowCaster);
-                }
-                material.insert(&mut child);
+                let mut child = parent.spawn_empty();
+                part.draw(&mut child, &material);
                 if let Some(animation) = part.animation {
                     child.insert((
                         animation.transform(offset),
@@ -1017,11 +1011,24 @@ impl Models {
         });
     }
 
+    /// The colour of the player `owner`, if there is one.
+    pub(crate) fn colour_of(&self, owner: Option<u32>) -> Option<[f32; 3]> {
+        self.colours.get(&owner?).copied()
+    }
+
+    /// How a model of the player `owner`'s is painted on the map.
+    fn owners_paint(&self, owner: Option<u32>) -> Paint {
+        Paint {
+            colour: self.colour_of(owner),
+            ambient: None,
+        }
+    }
+
     /// A part's material as [`Self::paint`] gives it, copied if the part's
     /// animation changes it.
     fn own_paint(&mut self, assets: &mut ModelAssets, part: &Part, paint: Paint) -> PartMaterial {
         let material = self.paint(assets, part, paint.colour);
-        let material = match part.animation.as_ref().is_some_and(|a| a.paints()) {
+        let material = match part.paints() {
             true => assets.materials.copy(&material),
             false => material,
         };
@@ -1295,25 +1302,6 @@ fn selection_box(nif: &Nif, frames: &Frames) -> Option<Vec2> {
     (size.min_element() > 0.0).then_some(size)
 }
 
-/// The value cached for `key`, loading and caching it on first use.
-pub(crate) fn cached<K, Q, T>(
-    cache: &mut HashMap<K, Option<T>>,
-    key: &Q,
-    load: impl FnOnce() -> Option<T>,
-) -> Option<T>
-where
-    K: Borrow<Q> + Hash + Eq,
-    Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    T: Clone,
-{
-    if let Some(v) = cache.get(key) {
-        return v.clone();
-    }
-    let v = load();
-    cache.insert(key.to_owned(), v.clone());
-    v
-}
-
 /// The first active controller of `kind` in the chain starting at `first`.
 pub(crate) fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Option<&Controller> {
     controllers(nif, first).find(|c| c.kind == kind)
@@ -1370,24 +1358,6 @@ pub(crate) fn motion(
         from = at + 1;
     }
     (!moved.is_empty()).then(|| (moved, chain(&path[from..])))
-}
-
-/// A model-space transform in Bevy axes.
-pub(crate) fn bevy_transform(t: &nif::Transform) -> Transform {
-    let [x, y, z] = t.translation;
-    let r = t.rotation;
-    // The game's z-up axes map to Bevy's as (x, y, z) -> (x, z, -y); conjugate
-    // the rotation by that change of basis.
-    let m = Mat3::from_cols(
-        Vec3::new(r[0][0], r[2][0], -r[1][0]),
-        Vec3::new(r[0][2], r[2][2], -r[1][2]),
-        -Vec3::new(r[0][1], r[2][1], -r[1][1]),
-    );
-    Transform {
-        translation: world(x, y, z),
-        rotation: Quat::from_mat3(&m),
-        scale: Vec3::splat(t.scale),
-    }
 }
 
 /// Bevy asset stores the models are added to.

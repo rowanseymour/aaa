@@ -121,7 +121,7 @@ pub(crate) fn follow(
     [sun.target_diffuse, sun.target_ambient, sun.target_specular] = heading;
     effects.set_night(loaded.game.night(diffuse));
     for mut light in &mut lights {
-        tgrender::color_lights(&mut light, &mut ambient, diffuse, ambient_color);
+        tgrender::light::color_lights(&mut light, &mut ambient, diffuse, ambient_color);
     }
 }
 

@@ -1247,7 +1247,7 @@ pub fn read_image(
     path: &str,
     formats: bevy::image::CompressedImageFormats,
 ) -> Option<Image> {
-    textures::decode(&game.read(path)?, path, formats, true)
+    textures::read(game, path, formats, true)
 }
 
 /// Each resource's glyph, by the resource's id.
