@@ -83,7 +83,8 @@ AA's own.
 
 The code is a workspace of crates in [`crates/`](crates), from readers for the game's
 file formats up to [`tgclient`](crates/tgclient), which plays matches, and each
-game's program on top of it.
+game's program on top of it. [`data/`](data) holds this project's own data files, which
+the programs read after the game's.
 
 ```sh
 cargo build --release
