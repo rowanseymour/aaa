@@ -120,21 +120,24 @@ impl<'a> Loader<'a, '_> {
         transform: &nif::Transform,
     ) -> Option<Part> {
         let nif = self.nif;
-        let base = nif
-            .property::<nif::Texturing>(props)
-            .and_then(|t| t.base.as_ref());
+        let texturing = nif.property::<nif::Texturing>(props);
+        let base = texturing.and_then(|t| t.base.as_ref());
+        let texture = self.base_texture(props);
+        // A texture drawn instead of the colour beneath it shows as stored,
+        // whatever light or vertex colours there are.
+        let replaced = texture.is_some() && texturing.is_some_and(|t| t.replaces());
         let material = nif.property::<nif::Material>(props);
         let uv_set = base.map_or(0, |b| b.uv_set as usize);
         // Vertex colours tint a mesh only where they stand for its ambient
         // and diffuse colours, as they do without a property to say.
-        let tinted = nif
-            .property::<nif::VertexColor>(props)
-            .is_none_or(|v| v.stand_for() == VertexColors::AmbientDiffuse);
+        let tinted = !replaced
+            && nif
+                .property::<nif::VertexColor>(props)
+                .is_none_or(|v| v.stand_for() == VertexColors::AmbientDiffuse);
         let mut mesh = mesh(g, transform, uv_set, tinted)?;
         if self.pickable {
             mesh.asset_usage = RenderAssetUsages::default();
         }
-        let texture = self.base_texture(props);
         let alpha = nif.property::<nif::Alpha>(props);
         let double_sided = nif
             .property::<nif::Stencil>(props)
@@ -144,12 +147,14 @@ impl<'a> Loader<'a, '_> {
         let emissive = material.map_or([0.0; 3], |m| m.emissive);
         // Shapes no light reaches show their emissive colour alone, such
         // as the glow of a lit window.
-        let unlit = nif
-            .property::<nif::VertexColor>(props)
-            .is_some_and(|v| !v.lit());
-        let ([r, g, b], emissive) = match unlit {
-            true => (emissive, [0.0; 3]),
-            false => (material.map_or([1.0; 3], |m| m.diffuse), emissive),
+        let unlit = replaced
+            || nif
+                .property::<nif::VertexColor>(props)
+                .is_some_and(|v| !v.lit());
+        let ([r, g, b], emissive) = match (replaced, unlit) {
+            (true, _) => ([1.0; 3], [0.0; 3]),
+            (false, true) => (emissive, [0.0; 3]),
+            (false, false) => (material.map_or([1.0; 3], |m| m.diffuse), emissive),
         };
         // The material's own glow is added to the light it takes, and the
         // texture multiplies the lot. Alpha 0 keeps it from being scaled by

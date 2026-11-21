@@ -18,7 +18,7 @@ use tgdata::{
 };
 use tgmap::{Ground, Map};
 use tgrender::camera::RtsCamera;
-use tgrender::decals::{DecalCache, decal_colour};
+use tgrender::decals::{DecalCache, DecalMaterial, decal_colour};
 use tgrender::models::{Footprint, Models, Rate};
 use tgrender::terrain::{map_point, world};
 use tgrender::{MapAssets, MapObject, Tint};
@@ -1477,8 +1477,8 @@ fn visible(night: bool) -> Visibility {
 /// Shows pictures laid on the ground as far as they've come in or gone.
 fn fade(
     time: Res<Time>,
-    mut laid: Query<(&mut Fading, &MeshMaterial3d<StandardMaterial>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut laid: Query<(&mut Fading, &MeshMaterial3d<DecalMaterial>)>,
+    mut materials: ResMut<Assets<DecalMaterial>>,
 ) {
     let now = time.elapsed_secs_f64();
     for (mut fading, material) in &mut laid {
@@ -1493,10 +1493,10 @@ fn fade(
         let colour = decal_colour(&fading.decal, shown);
         if materials
             .get(&material.0)
-            .is_some_and(|m| m.base_color != colour)
+            .is_some_and(|m| m.base.base_color != colour)
             && let Some(mut m) = materials.get_mut(&material.0)
         {
-            m.base_color = colour;
+            m.base.base_color = colour;
         }
     }
 }
