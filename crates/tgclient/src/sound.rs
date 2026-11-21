@@ -222,6 +222,33 @@ impl Sounds {
         }
     }
 
+    /// Queues what a portrait says as its `ids` animation starts, unless
+    /// the options have replies off. It's `player`'s own, so it's held to
+    /// its limit like any object's audio rather than cutting off a copy
+    /// still playing.
+    pub fn greeted(&mut self, time: &Time, portrait: &Id, ids: &str, player: u32) {
+        if !self.switches.replies {
+            return;
+        }
+        let Some(object) = self.objects.get(portrait) else {
+            return;
+        };
+        let lines = (object.animations.iter())
+            .filter(|a| {
+                a.ids
+                    .as_deref()
+                    .is_some_and(|a| a.eq_ignore_ascii_case(ids))
+            })
+            .map(|a| Request {
+                audio: a.audio.clone(),
+                at: None,
+                owner: Some(player),
+            })
+            .collect::<Vec<_>>();
+        let now = time.elapsed_secs_f64();
+        self.queued.extend(lines.into_iter().map(|r| (now, r)));
+    }
+
     /// Queues the cues of `owner`'s projectile of a template landing at
     /// `at`, on a target at `to`: each where it says, the projectile's own
     /// where it landed.
@@ -370,7 +397,24 @@ pub struct SoundPlugin;
 
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (play, follow_volumes));
+        app.add_message::<tgrender::portrait::Greeted>()
+            .add_systems(Update, (greet.before(play), play, follow_volumes));
+    }
+}
+
+/// Queues the lines portraits say as they greet.
+fn greet(
+    mut greetings: MessageReader<tgrender::portrait::Greeted>,
+    mut sounds: ResMut<Sounds>,
+    local: Option<Res<Local>>,
+    time: Res<Time>,
+) {
+    let Some(player) = local.and_then(|l| l.0) else {
+        greetings.clear();
+        return;
+    };
+    for g in greetings.read() {
+        sounds.greeted(&time, &g.portrait, &g.ids, player);
     }
 }
 
@@ -601,6 +645,35 @@ mod tests {
         sounds.switches.replies = true;
         sounds.reply(&time, "infantry", |a| &a.selected, [0.0; 2], 1);
         assert_eq!(sounds.queued.len(), 1);
+    }
+
+    #[test]
+    fn a_greeting_says_its_animations_line_while_replies_are_on() {
+        let line = |ids: &str, audio: &str| tgdata::AnimationAudio {
+            kind: tgdata::AnimationKind::Selected,
+            ids: Some(ids.into()),
+            interval: None,
+            audio: Id::from(audio),
+            looping: false,
+        };
+        let audio = ObjectAudio {
+            animations: vec![line("talk1", "patton_select"), line("talk2", "other")],
+            ..ObjectAudio::default()
+        };
+        let mut sounds = Sounds::of(Arc::default(), &[]);
+        sounds.objects.insert(Id::from("patton_portrait"), audio);
+        let time = Time::<()>::default();
+        sounds.switches.replies = false;
+        sounds.greeted(&time, &Id::from("patton_portrait"), "talk1", 1);
+        assert!(sounds.queued.is_empty());
+        sounds.switches.replies = true;
+        sounds.greeted(&time, &Id::from("patton_portrait"), "TALK1", 1);
+        let queued: Vec<_> = sounds
+            .queued
+            .iter()
+            .map(|(_, r)| (&r.audio, r.owner))
+            .collect();
+        assert_eq!(queued, [(&Id::from("patton_select"), Some(1))]);
     }
 
     #[test]
