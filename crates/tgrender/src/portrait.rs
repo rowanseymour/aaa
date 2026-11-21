@@ -305,9 +305,10 @@ impl Models {
         let greetings = of_kind(AnimationKind::Selected);
         if greeting && !greetings.is_empty() {
             let pick = fidgets.roll() as usize % greetings.len();
-            commands
-                .entity(root)
-                .insert(Greeting(greetings[pick].clone()));
+            commands.entity(root).insert(Greeting {
+                portrait: id.clone(),
+                ids: greetings[pick].clone(),
+            });
         }
         if !fidgets.ids.is_empty() {
             commands.entity(root).insert(fidgets);
@@ -422,7 +423,20 @@ pub fn layer(
 
 /// What a face plays once as it's put up, by its animation's ids.
 #[derive(Component)]
-pub struct Greeting(String);
+pub struct Greeting {
+    portrait: Id,
+    ids: String,
+}
+
+/// A face's greeting starting, for whatever plays with it, such as the
+/// line its animation says.
+#[derive(Message, Debug, Clone, PartialEq)]
+pub struct Greeted {
+    /// The portrait's template.
+    pub portrait: Id,
+    /// The animation's.
+    pub ids: String,
+}
 
 /// Has each face play its greeting as it's put up, and one of its fidgets
 /// after idling a while.
@@ -431,9 +445,17 @@ pub fn fidget(
     time: Res<Time<Real>>,
     mut greeted: Query<(Entity, &Greeting, &mut Playing)>,
     mut faces: Query<(&mut Fidgets, &mut Playing), Without<Greeting>>,
+    mut greetings: MessageWriter<Greeted>,
 ) {
+    // Tried once only: a greeting that can't play as the face is put up
+    // isn't heard either, and isn't tried again.
     for (face, greeting, mut playing) in &mut greeted {
-        playing.use_ability(&greeting.0);
+        if playing.use_ability(&greeting.ids) {
+            greetings.write(Greeted {
+                portrait: greeting.portrait.clone(),
+                ids: greeting.ids.clone(),
+            });
+        }
         commands.entity(face).remove::<Greeting>();
     }
     for (mut fidgets, mut playing) in &mut faces {

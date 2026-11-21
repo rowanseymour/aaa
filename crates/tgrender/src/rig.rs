@@ -792,14 +792,16 @@ fn set_of(rig: &Rig, look: Option<usize>) -> &ClipSet {
 
 impl Playing {
     /// Plays the ability animation with these ids once from the start,
-    /// unless it's dying or has none.
-    pub fn use_ability(&mut self, ids: &str) {
+    /// unless it's dying or has none. True if it started.
+    pub fn use_ability(&mut self, ids: &str) -> bool {
         let Some(clip) = set_of(&self.rig, self.look).ability(ids) else {
-            return;
+            return false;
         };
-        if !self.dying() {
-            self.once = Some(Once::start(clip));
+        if self.dying() {
+            return false;
         }
+        self.once = Some(Once::start(clip));
+        true
     }
 
     /// Plays the death with these ids and stays at its end; without one it

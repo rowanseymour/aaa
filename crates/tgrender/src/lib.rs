@@ -113,6 +113,7 @@ impl Plugin for MapRenderPlugin {
             .insert_resource(self.edge)
             .insert_resource(MeshPicking(self.pickable))
             .init_resource::<particles::Draws>()
+            .add_message::<portrait::Greeted>()
             .add_systems(
                 PostUpdate,
                 (
