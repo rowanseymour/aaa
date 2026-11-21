@@ -100,27 +100,71 @@ pub fn place(
     else {
         return;
     };
-    let Some(organization) = actions::builder(&sim.0, &selected.0) else {
-        return;
-    };
-    let build = tgsim::Command::Build {
-        organization,
-        template,
-        at,
-        facing,
-    };
-    match orders.give(&sim.0, player, build) {
-        Ok(()) => {
-            crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &[organization])
+    let size = loaded.map.ground.size();
+    let mut sent = Vec::new();
+    for build in build_orders(&sim.0, &selected.0, &template, (at, facing), size) {
+        let tgsim::Command::Build { organization, .. } = build else {
+            continue;
+        };
+        match orders.give(&sim.0, player, build) {
+            Ok(()) => sent.push(organization),
+            Err(e) => debug!("can't build: {e:?}"),
         }
-        Err(e) => debug!("can't build: {e:?}"),
     }
+    crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &sent);
     *page = Page::Orders;
+}
+
+/// The Build orders placing `template` at `at` facing `facing` gives the
+/// selection on a map `size` across: one for each that can build it, at
+/// the place plus its offset from the selection's centre, as for a move.
+/// The rest ignore it, though they count towards the centre.
+fn build_orders(
+    sim: &tgsim::World,
+    selected: &[usize],
+    template: &tgmap::Id,
+    (at, facing): ([f32; 2], [f32; 2]),
+    size: f32,
+) -> Vec<tgsim::Command> {
+    let spots = crate::commanding::spread(sim, selected, at, size);
+    (selected.iter().copied().zip(spots))
+        .filter(|&(r, _)| sim.organizations[r].unpacks.is_none())
+        .filter(|&(r, _)| sim.buildable(r).contains(template))
+        .map(|(organization, at)| tgsim::Command::Build {
+            organization,
+            template: template.clone(),
+            at,
+            facing,
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_builder_selected_builds_at_its_place_from_the_selections_centre() {
+        let mut sim = crate::orders::testing::fresh();
+        // The first squad, at 10,10, builds; the second, at 10,20, doesn't.
+        let fighter = tgmap::Fighter {
+            builds: vec![tgmap::Id::from("bunker")],
+            ..Default::default()
+        };
+        sim.units[0].fighter = Some(fighter);
+        let bunker = tgmap::Id::from("bunker");
+        let orders = build_orders(&sim, &[0, 1], &bunker, ([30.0, 30.0], [0.0, -1.0]), 100.0);
+        assert_eq!(
+            orders,
+            [tgsim::Command::Build {
+                organization: 0,
+                template: bunker.clone(),
+                at: [30.0, 25.0],
+                facing: [0.0, -1.0],
+            }]
+        );
+        assert!(build_orders(&sim, &[1], &bunker, ([30.0, 30.0], [0.0, -1.0]), 100.0).is_empty());
+    }
 
     #[test]
     fn a_drag_turns_the_building_along_it_and_a_short_one_doesnt() {

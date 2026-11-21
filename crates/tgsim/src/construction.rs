@@ -36,24 +36,21 @@ impl World {
         out
     }
 
-    /// Whether `player` may send `organization` to build one of `template`
-    /// at `at` facing `facing`: the place is checked as the side sees it
-    /// when it's ordered, as the player's own aiming does.
+    /// Whether `player` may send `organization` to build one of `template`.
+    /// Where isn't checked: aiming tests only the clicked place, and
+    /// regiments sent along with it go to their own, which is tested when
+    /// they arrive.
     pub(crate) fn may_build(
         &self,
         player: u32,
         organization: usize,
         template: &Id,
-        (at, facing): ([f32; 2], [f32; 2]),
     ) -> Result<(), Refused> {
         self.may_command(player, organization)?;
         let offered = self.buildable(organization).contains(template);
-        if !offered || !self.rules.buildable.contains_key(template) {
-            return Err(Refused::Unable);
-        }
-        match self.room_to_build(player, template, at, facing) {
+        match offered && self.rules.buildable.contains_key(template) {
             true => Ok(()),
-            false => Err(Refused::NoRoom),
+            false => Err(Refused::Unable),
         }
     }
 
@@ -65,7 +62,7 @@ impl World {
         at: [f32; 2],
         facing: [f32; 2],
     ) -> Result<(), Refused> {
-        self.may_build(player, organization, &template, (at, facing))?;
+        self.may_build(player, organization, &template)?;
         self.advance(player, organization, at, Order::Move, None)?;
         self.organizations[organization].build = Some(Build {
             template,
@@ -532,25 +529,38 @@ mod tests {
         assert_eq!(w.check(2, &build([10.0, 20.0])), Err(Refused::NotYours));
     }
 
-    #[test]
-    fn builds_are_refused_where_the_building_wouldnt_fit() {
-        let w = with_buildings(engineers(), &[building(9, 1, [20.0, 20.0])]);
-        assert_eq!(w.check(1, &build([20.0, 20.0])), Err(Refused::NoRoom));
-        assert_eq!(w.check(1, &build([20.0, 30.0])), Ok(()));
+    /// Whether player 1 could aim a bunker at `at`.
+    fn fits(w: &crate::World, at: [f32; 2]) -> bool {
+        w.room_to_build(1, &Id::from("bunker"), at, [0.0, -1.0])
     }
 
     #[test]
-    fn builds_keep_their_padding_clear_of_buildings_and_units() {
+    fn aiming_keeps_the_padding_clear_of_buildings_and_units() {
         let mut w = with_buildings(engineers(), &[building(9, 1, [20.0, 20.0])]);
         for u in &mut w.units {
             u.shape = Some(tgmap::Shape::Circle { radius: 0.5 });
         }
+        assert!(!fits(&w, [20.0, 20.0]));
         // Its 6 by 6 clears the house's, but not with 2 all round.
-        assert_eq!(w.check(1, &build([20.0, 27.0])), Err(Refused::NoRoom));
-        assert_eq!(w.check(1, &build([20.0, 29.0])), Ok(()));
+        assert!(!fits(&w, [20.0, 27.0]));
+        assert!(fits(&w, [20.0, 29.0]));
         // Nor onto the engineer, or the enemy soldier it sees.
-        assert_eq!(w.check(1, &build([12.0, 10.0])), Err(Refused::NoRoom));
-        assert_eq!(w.check(1, &build([35.0, 32.0])), Err(Refused::NoRoom));
+        assert!(!fits(&w, [12.0, 10.0]));
+        assert!(!fits(&w, [35.0, 32.0]));
+    }
+
+    #[test]
+    fn orders_arent_refused_for_the_place_which_is_tested_on_arrival() {
+        let mut w = with_buildings(engineers(), &[building(9, 1, [10.0, 20.0])]);
+        assert!(!fits(&w, [10.0, 20.0]));
+        w.apply(1, build([10.0, 20.0])).unwrap();
+        run(&mut w, 1.0);
+        assert_eq!(w.buildings.len(), 1);
+        assert!(w.notices.contains(&Notice::NotBuilt {
+            player: 1,
+            organization: 0,
+            template: Id::from("bunker"),
+        }));
     }
 
     #[test]
