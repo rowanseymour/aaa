@@ -150,7 +150,7 @@ impl World {
             (std::iter::once(template).chain(with.iter().copied()))
                 .any(|t| kind(t).is_some_and(|k| k.properties.contains(p)))
         };
-        let technologies = (self.technologies.get(&owner).into_iter().flatten())
+        let technologies = (self.technologies_of(owner))
             .filter(|t| table.get(*t).is_some_and(|e| e.requires.iter().all(has)));
         let timed = held.into_iter().map(|h| &h.property);
         let mut ids: Vec<&Id> = Vec::new();

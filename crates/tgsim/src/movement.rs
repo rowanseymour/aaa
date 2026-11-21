@@ -1322,7 +1322,7 @@ mod tests {
             soft: tgmap::Shape::Point,
         };
         w.rules.kinds.insert("tank".into(), kind("tank"));
-        w.technologies.insert(1, vec!["engines".into()]);
+        w.grant(1, tgmap::Id::from("engines"));
         assert_eq!(w.regiment_speed(0), 2.0);
         // Once the slowest is gone the rest go at their own.
         w.units[0].die(0);

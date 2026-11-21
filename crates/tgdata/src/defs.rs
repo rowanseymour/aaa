@@ -131,6 +131,7 @@ pub struct Thing {
     pub element_component: Option<ElementComponent>,
     pub detection_component: Option<DetectionComponent>,
     pub construction_component: Option<ConstructionComponent>,
+    pub structure_component: Option<StructureComponent>,
     pub builder_component: Option<BuilderComponent>,
     pub experience_component: Option<ExperienceComponent>,
     pub placement: Option<Placement>,
@@ -295,6 +296,14 @@ pub struct OrganizationComponent {
     pub morale_breakpoint: Option<f32>,
     /// Seconds it rests or guards before it entrenches.
     pub entrenchment_time: Option<f32>,
+}
+
+/// What a building does for its side.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StructureComponent {
+    /// The technologies its side has while it holds the building.
+    #[serde(default)]
+    pub technology_property: Vec<PropertyRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -204,7 +204,7 @@ mod tests {
             requires: vec!["org_unit".into()],
         };
         w.rules.entrenchment.rates.insert("spades".into(), rate);
-        w.technologies.insert(1, vec!["spades".into()]);
+        w.grant(1, Id::from("spades"));
         run(&mut w, 25.0);
         assert!(w.entrenched(0));
     }

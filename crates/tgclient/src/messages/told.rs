@@ -537,6 +537,11 @@ pub(crate) fn told(
             vec![look.name(technology.as_str()).into()],
             None,
         ),
+        Notice::TechnologyLost { player, technology } if ours(player) => Told::Event(
+            "technology_lost",
+            vec![look.name(technology.as_str()).into()],
+            None,
+        ),
         // A side always sees its own, so is always told: the loser while
         // it's still theirs, the taker once it is.
         Notice::Lost {

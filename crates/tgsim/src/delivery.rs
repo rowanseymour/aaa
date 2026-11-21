@@ -824,7 +824,7 @@ mod tests {
                 .combat_effects
                 .insert("superchargers".into(), effect);
             if superchargers {
-                w.technologies.insert(1, vec!["superchargers".into()]);
+                w.grant(1, Id::from("superchargers"));
             }
             w.apply(1, deliver([40.0, 20.0])).unwrap();
             run(&mut w, 6.0);

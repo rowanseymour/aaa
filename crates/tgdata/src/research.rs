@@ -36,6 +36,16 @@ pub struct Research {
 impl GameData {
     /// What each template that researches lists, in its menu's order, by
     /// template id.
+    /// The technologies each building template gives its side while the
+    /// side holds one, for those that give any, by template id.
+    pub fn granted_technologies(&self) -> HashMap<Id, Vec<Id>> {
+        self.by_template(|t| {
+            let refs = &t.structure_component.as_ref()?.technology_property;
+            let list: Vec<Id> = refs.iter().filter_map(|r| r.property_ids.clone()).collect();
+            (!list.is_empty()).then_some(list)
+        })
+    }
+
     pub fn research_lists(&self) -> HashMap<Id, Vec<Research>> {
         let aliases = self.structure_aliases();
         self.by_template(|t| {
@@ -80,6 +90,19 @@ pub(crate) fn research(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buildings_list_the_technologies_they_give_their_side() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = assembly_parts\n\t[StructureComponent]\n\t{\n\
+             \t\t[TechnologyProperty]\n\t\tproperty_ids = assembly_line_tech\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = tgi::from_block(block).unwrap();
+        let refs = thing.structure_component.unwrap().technology_property;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].property_ids, Some(Id::from("assembly_line_tech")));
+    }
 
     #[test]
     fn items_read_who_gets_them_what_they_cost_and_need() {

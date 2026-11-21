@@ -469,7 +469,7 @@ mod tests {
         assert!(w.choose(0, &w.ranges(0), man, &mut 0).is_some());
         gun(&mut w).choice.requires = vec![Id::from("tech_napalm")];
         assert!(w.choose(0, &w.ranges(0), man, &mut 0).is_none());
-        w.technologies.insert(1, vec![Id::from("tech_napalm")]);
+        w.grant(1, Id::from("tech_napalm"));
         assert!(w.choose(0, &w.ranges(0), man, &mut 0).is_some());
         gun(&mut w).choice.levels = [Some(1), None];
         assert!(w.choose(0, &w.ranges(0), man, &mut 0).is_none());

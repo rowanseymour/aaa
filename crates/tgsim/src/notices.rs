@@ -112,6 +112,8 @@ pub enum Notice {
     },
     /// It holds a technology it didn't.
     Gained { player: u32, technology: Id },
+    /// It no longer holds a technology it did.
+    TechnologyLost { player: u32, technology: Id },
     /// An organization of its, by index into [`World::organizations`], has
     /// routed.
     Routed { player: u32, organization: usize },

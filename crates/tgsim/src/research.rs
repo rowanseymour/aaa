@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use tgmap::{Grant, Id, Research};
 
-use crate::{Building, Held, Notice, Refused, World};
+use crate::{Building, Held, Notice, Refused, State, World};
 
 /// What a recruiter would need to raise an organization but hasn't, and so
 /// whether its menu offers it, greys it or leaves it out.
@@ -40,6 +40,26 @@ pub enum Researchable {
     Hidden,
 }
 
+/// One of a side's grants of a technology. A side holds a technology
+/// while it holds any grant of it, and each grant goes on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Granted {
+    pub technology: Id,
+    pub source: Source,
+}
+
+/// Where a grant came from, which decides what can take it away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The map's start technologies, the handicap's: never taken away.
+    Kept,
+    /// Research or a trigger, which a trigger can take away.
+    Given,
+    /// The building at this index into [`World::buildings`], for as long
+    /// as the side holds it.
+    Building(usize),
+}
+
 /// For good, as a researched property never runs out.
 const KEPT: u64 = u64::MAX;
 
@@ -54,22 +74,106 @@ impl World {
     }
 
     /// Gives `player` a technology, for all it has and will have, unless
-    /// the map bars it.
+    /// the map bars it, saying nothing: a start technology's grant, which
+    /// nothing takes away.
     pub fn grant(&mut self, player: u32, technology: Id) {
-        if self.barred(player, &technology) {
-            return;
-        }
-        let held = self.technologies.entry(player).or_default();
-        if !held.contains(&technology) {
-            held.push(technology);
-        }
+        self.add_grant(player, technology, Source::Kept);
     }
 
-    /// Whether `player`'s side holds `technology`.
+    /// Adds a grant of `technology` from `source` to `player`'s, unless the
+    /// map bars it. Returns whether the technology is new to the side.
+    fn add_grant(&mut self, player: u32, technology: Id, source: Source) -> bool {
+        if self.barred(player, &technology) {
+            return false;
+        }
+        let new = !self.holds(player, &technology);
+        let grants = self.technologies.entry(player).or_default();
+        grants.push(Granted { technology, source });
+        new
+    }
+
+    /// Takes away the first of `player`'s grants of `technology` that
+    /// `takes` picks, telling them when it was the last. Returns whether
+    /// there was one.
+    fn take_grant(&mut self, player: u32, technology: &Id, takes: impl Fn(Source) -> bool) -> bool {
+        let Some(grants) = self.technologies.get_mut(&player) else {
+            return false;
+        };
+        let Some(i) = (grants.iter()).position(|g| g.technology == *technology && takes(g.source))
+        else {
+            return false;
+        };
+        let Granted { technology, .. } = grants.remove(i);
+        if !self.holds(player, &technology) {
+            self.notices
+                .push(Notice::TechnologyLost { player, technology });
+        }
+        true
+    }
+
+    /// Whether `player`'s side holds `technology`, from any grant.
     pub fn holds(&self, player: u32, technology: &Id) -> bool {
-        self.technologies
+        (self.technologies.get(&player))
+            .is_some_and(|g| g.iter().any(|g| g.technology == *technology))
+    }
+
+    /// The technologies `player`'s side holds, each once, in the order it
+    /// first held them.
+    pub fn technologies_of(&self, player: u32) -> impl Iterator<Item = &Id> + Clone {
+        let grants = self
+            .technologies
             .get(&player)
-            .is_some_and(|t| t.contains(technology))
+            .map_or(&[][..], Vec::as_slice);
+        (grants.iter().enumerate())
+            .filter(|&(i, g)| !grants[..i].iter().any(|e| e.technology == g.technology))
+            .map(|(_, g)| &g.technology)
+    }
+
+    /// The side the building at `b` gives its technologies to, if any:
+    /// its owner from when it joins the side, its remains included, unless
+    /// it's an independent one.
+    fn grantee(&self, b: usize) -> Option<u32> {
+        let building = &self.buildings[b];
+        let there = match building.state {
+            State::Destroyed(_) => (self.building_remains(b)).is_some_and(|r| self.ticks < r.gone),
+            State::Packed(..) | State::Sold(_) => false,
+            State::Standing | State::Disabled => true,
+        };
+        let sided = (self.sides.player(building.owner)).is_some_and(|p| !p.independent);
+        (there && sided).then_some(building.owner)
+    }
+
+    /// Brings each side's grants from buildings in line with what it
+    /// holds: one that's left the side takes its grants away first, then
+    /// its new side gets them.
+    pub(crate) fn grant_from_buildings(&mut self) {
+        if self.rules.granted.is_empty() {
+            return;
+        }
+        for b in 0..self.buildings.len() {
+            let Some(list) = self.rules.granted.get(&self.buildings[b].template) else {
+                continue;
+            };
+            let list = list.clone();
+            let source = Source::Building(b);
+            let had = (self.technologies.iter())
+                .find(|(_, g)| g.iter().any(|g| g.source == source))
+                .map(|(&p, _)| p);
+            let has = self.grantee(b);
+            if had == has {
+                continue;
+            }
+            if let Some(p) = had {
+                for t in &list {
+                    self.take_grant(p, t, |s| s == source);
+                }
+            }
+            if let Some(p) = has {
+                for t in list {
+                    self.gain_from(p, t, source);
+                }
+            }
+        }
     }
 
     /// Whether the building at `building` has `property` of its own: its
@@ -250,16 +354,30 @@ impl World {
     }
 
     /// Gives `player` a technology as [`World::grant`] does, telling them
-    /// so when it's new to them.
+    /// so when it's new to them: a handicap's.
     pub fn gain(&mut self, player: u32, technology: Id) {
-        if self.holds(player, &technology) {
-            return;
-        }
-        self.grant(player, technology.clone());
-        // A barred one isn't granted.
-        if self.holds(player, &technology) {
+        self.gain_from(player, technology, Source::Kept);
+    }
+
+    /// Gives `player` a grant of `technology` from `source`, telling them
+    /// when it's new to them.
+    fn gain_from(&mut self, player: u32, technology: Id, source: Source) {
+        if self.add_grant(player, technology.clone(), source) {
             self.notices.push(Notice::Gained { player, technology });
         }
+    }
+
+    /// Gives `player` a grant of `technology` that a trigger can take away
+    /// again, as `kingdom_gains_technology` does.
+    pub(crate) fn gain_taken_back(&mut self, player: u32, technology: Id) {
+        self.gain_from(player, technology, Source::Given);
+    }
+
+    /// Takes away one of `player`'s grants of `technology` that research or
+    /// a trigger gave, as `kingdom_loses_technology` does. Returns whether
+    /// there was one.
+    pub(crate) fn lose_given(&mut self, player: u32, technology: &Id) -> bool {
+        self.take_grant(player, technology, |s| s == Source::Given)
     }
 
     /// Gives what the building at `building` has researched to whom its
@@ -278,7 +396,10 @@ impl World {
             technology: technology.clone(),
         });
         match item.grant {
-            Grant::Side => self.gain(player, technology),
+            // Research says only that it's done.
+            Grant::Side => {
+                self.add_grant(player, technology, Source::Given);
+            }
             Grant::Building => self.buildings[building].properties.push(held),
             // No building belongs to a settlement, so there's none to have
             // it.
@@ -292,9 +413,9 @@ mod tests {
 
     use crate::testing::*;
 
-    use tgmap::Id;
+    use tgmap::{Domain, Id, Pathing};
 
-    use crate::{Command, Notice, Refused, Researchable, World};
+    use crate::{Command, Notice, Refused, Researchable, State, World};
 
     /// The economy's HQ listing two technologies for its side, 60 and 100
     /// money, the second needing the first and a depot.
@@ -350,16 +471,14 @@ mod tests {
         let told: Vec<&Notice> = (w.notices.iter())
             .filter(|n| matches!(n, Notice::Researched { .. } | Notice::Gained { .. }))
             .collect();
+        // Research says only that it's done.
         assert!(matches!(
             told[..],
-            [
-                Notice::Researched {
-                    player: 1,
-                    building: 0,
-                    ..
-                },
-                Notice::Gained { player: 1, .. }
-            ]
+            [Notice::Researched {
+                player: 1,
+                building: 0,
+                ..
+            }]
         ));
         assert_eq!(w.researchable(1, 0, &heavy), Researchable::Taken);
         // A building it needs only greys it.
@@ -368,6 +487,53 @@ mod tests {
             Researchable::Lacking(vec![Id::from("depot")])
         );
         assert_eq!(w.apply(1, research("tech_tiger")), Err(Refused::Lacking));
+    }
+
+    #[test]
+    fn buildings_give_their_side_technologies_while_it_holds_them() {
+        let mut w = World::from_organizations(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+        let parts = |id, owner, x| {
+            let mut b = building(id, owner, [x, 10.0]);
+            b.template = "parts".into();
+            b
+        };
+        w.add_buildings(&[parts(30, 1, 10.0), parts(31, 1, 20.0), parts(32, 4, 30.0)]);
+        w.sides.players.push(player(4, None, &[0, 0, 0, 0], &[]));
+        let line = Id::from("assembly_line");
+        w.rules
+            .granted
+            .insert(Id::from("parts"), vec![line.clone()]);
+        let told = |w: &World| {
+            (w.notices.iter())
+                .filter_map(|n| match n {
+                    Notice::Gained { player, .. } => Some((*player, true)),
+                    Notice::TechnologyLost { player, .. } => Some((*player, false)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // Two grants, told once; an independent side's building gives none.
+        w.tick();
+        assert_eq!(w.technologies[&1].len(), 2);
+        assert!(!w.holds(4, &line));
+        assert_eq!(told(&w), [(1, true)]);
+        // Changing hands, the old side keeps its other grant.
+        w.change_hands(0, 2);
+        w.tick();
+        assert!(w.holds(1, &line) && w.holds(2, &line));
+        assert_eq!(told(&w), [(1, true), (2, true)]);
+        // The last grant goes with the building, told.
+        w.buildings[1].state = State::Sold(w.ticks);
+        w.tick();
+        assert!(!w.holds(1, &line));
+        assert_eq!(told(&w), [(1, true), (2, true), (1, false)]);
+        // A destroyed one grants while its remains stand.
+        w.rules.remains.insert(Id::from("parts"), [1.0, 1.0]);
+        w.buildings[0].state = State::Destroyed(w.ticks);
+        run(&mut w, 1.9);
+        assert!(w.holds(2, &line));
+        run(&mut w, 0.2);
+        assert!(!w.holds(2, &line));
     }
 
     #[test]

@@ -147,11 +147,7 @@ impl World {
         let timed = (organization.properties.iter())
             .chain(&unit.properties)
             .map(|h| &h.property);
-        let technologies = self
-            .technologies
-            .get(&organization.owner)
-            .into_iter()
-            .flatten();
+        let technologies = self.technologies_of(organization.owner);
         let on = |p: &&Id| self.gains(&organization.template, p) || self.gains(&unit.template, p);
         let free = rules.free.contains(&unit.template)
             || rules.free.contains(&organization.template)
@@ -249,7 +245,7 @@ mod tests {
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 0.5));
         // its side a technology that is, on those it's for,
-        w.technologies.insert(7, vec![Id::from("trailblazing")]);
+        w.grant(7, Id::from("trailblazing"));
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 0.5));
         let anyone = TerrainEffect::default();
