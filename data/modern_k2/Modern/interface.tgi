@@ -1,0 +1,12 @@
+;; How this project's own interface looks for K2: a dark umber, parchment
+;; and gold.
+
+[ModernInterface]
+{
+	title = K2
+	tint = 0.09, 0.067, 0.043
+	light = 0.902, 0.847, 0.71
+	accent = 0.8, 0.62, 0.25
+	backdrop_map = (1v1)Battleground
+	backdrop_focus = 128, 128
+}

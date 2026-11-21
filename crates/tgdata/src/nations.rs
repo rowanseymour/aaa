@@ -291,8 +291,7 @@ impl GameData {
     /// files under `Modern/`, the first for a nation winning. An SVG is
     /// drawn at the emblem's size, any other image at its own.
     pub fn emblems(&self) -> HashMap<Id, String> {
-        let names = self.entry_names(|n| n.starts_with("modern/") && n.ends_with(".tgi"));
-        let files = self.parse_named(names.iter().map(String::as_str));
+        let files = self.modern_files();
         let mut emblems = HashMap::new();
         for file in scoped(&files) {
             for emblem in file.read::<defs::Emblem>("Emblem") {

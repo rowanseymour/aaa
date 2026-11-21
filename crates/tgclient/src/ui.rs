@@ -72,7 +72,22 @@ impl Default for Theme {
     }
 }
 
-/// The colours a [`Theme`] is made from that a game's program chooses.
+impl Theme {
+    /// The theme `look` gives, with the default's colours where it gives
+    /// none.
+    pub fn of(look: &tgdata::defs::ModernInterface) -> Theme {
+        let default = Theme::default();
+        let colour =
+            |c: Option<[f32; 3]>, or: Color| c.map_or(or, |[r, g, b]| Color::srgb(r, g, b));
+        Theme::from(Palette {
+            tint: colour(look.tint, default.tint),
+            light: colour(look.light, default.light),
+            accent: colour(look.accent, default.accent),
+        })
+    }
+}
+
+/// The colours a [`Theme`] is made from that the data chooses.
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
     /// The theme's [`Theme::tint`].

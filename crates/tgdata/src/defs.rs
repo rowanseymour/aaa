@@ -1163,6 +1163,28 @@ pub struct Emblem {
     pub texture: Option<String>,
 }
 
+/// How this project's own interface looks for a game. Colours are sRGB,
+/// each part from 0 to 1.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct ModernInterface {
+    /// What the game is called on its window, and on the main menu
+    /// without a logo.
+    pub title: Option<String>,
+    /// The image crowning the main menu, beside the file unless it starts
+    /// with `/`.
+    pub logo: Option<String>,
+    /// What every surface is shaded from.
+    pub tint: Option<[f32; 3]>,
+    /// What surfaces are lit toward, and the colour of plain text.
+    pub light: Option<[f32; 3]>,
+    /// What stands out from the surfaces.
+    pub accent: Option<[f32; 3]>,
+    /// The map the main menu stands over.
+    pub backdrop_map: Option<String>,
+    /// Where on it the menu's camera looks, in map units.
+    pub backdrop_focus: Option<[f32; 2]>,
+}
+
 /// A bonus or penalty the lobby can give a side the computer plays.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Handicap {

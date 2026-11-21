@@ -16,13 +16,13 @@ use tgrender::camera::{self, RtsCamera};
 use tgrender::terrain::{self, Prepared};
 use tgrender::{Edge, MapAssets};
 
-use crate::{Data, Program, Screen};
+use crate::{Data, Look, Screen};
 
 /// Which stretch of which map the backdrop shows.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct View {
     /// The map, as [`tgdata::GameData::find_map`] takes its name.
-    pub map: &'static str,
+    pub map: String,
     /// Where on it the camera looks, in map units, a little to the right of
     /// what's to be seen, for the menu's column.
     pub focus: [f32; 2],
@@ -79,7 +79,7 @@ fn show(
     mut commands: Commands,
     data: Res<Data>,
     edge: Res<Edge>,
-    program: Res<Program>,
+    look: Res<Look>,
     mut cameras: Query<&mut Camera, With<Backdrop>>,
 ) {
     if !cameras.is_empty() {
@@ -96,12 +96,15 @@ fn show(
         ..default()
     };
     commands.entity(camera).insert((Backdrop, below));
+    let Some(view) = &look.backdrop else {
+        return;
+    };
     let game = data.0.clone();
     let fade = edge.fade();
-    let map = program.backdrop.map;
+    let map = view.map.clone();
     let thread = std::thread::spawn(move || {
         let name = game
-            .find_map(map)
+            .find_map(&map)
             .ok_or_else(|| format!("{map}: no such map"))?;
         let map = Map::load(&game, &Recruits::new(&game), &name)?;
         let prepared = terrain::prepare(&game, &map.ground, &map.terrain, fade);
@@ -130,7 +133,7 @@ fn arrive(
     mut commands: Commands,
     mut building: Option<ResMut<Building>>,
     data: Res<Data>,
-    program: Res<Program>,
+    look: Res<Look>,
     mut assets: MapAssets,
     mut cameras: Query<(&mut RtsCamera, &mut Transform), With<Backdrop>>,
 ) {
@@ -146,7 +149,9 @@ fn arrive(
         Ok(Err(e)) => return warn!("menu backdrop: {e}"),
         Err(_) => return warn!("menu backdrop: building it panicked"),
     };
-    let at = program.backdrop.focus;
+    let Some(at) = look.backdrop.as_ref().map(|v| v.focus) else {
+        return;
+    };
     let size = map.ground.size();
     let sun = &map.sun;
     tgrender::spawn_land(&mut commands, &mut assets, prepared, sun, size, Backdrop);

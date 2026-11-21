@@ -609,6 +609,13 @@ impl GameData {
             .collect()
     }
 
+    /// This project's own `.tgi` files, those under `Modern/`, parsed, in
+    /// the order their depots are looked in.
+    pub(crate) fn modern_files(&self) -> Vec<(String, Arc<tgi::Parsed>)> {
+        let names = self.entry_names(|n| n.starts_with("modern/") && n.ends_with(".tgi"));
+        self.parse_named(names.iter().map(String::as_str))
+    }
+
     /// Every `.tgi` file the game loads whose lower-case path passes
     /// `filter`, parsed, in the order the game loads them.
     pub(crate) fn parse_tgis(
@@ -1235,6 +1242,91 @@ mod tests {
             }
         }
         game
+    }
+
+    #[test]
+    fn each_field_of_the_modern_interface_is_the_first_given() {
+        let own = folder(
+            "look-own",
+            &[(
+                "Modern/Look/look.tgi",
+                "[ModernInterface]\ntitle = Own\nlogo = logo.png\ntint = 0.1, 0.2, 0.3",
+            )],
+        );
+        let shared = folder(
+            "look-shared",
+            &[(
+                "Modern/look.tgi",
+                "[ModernInterface]\ntitle = Shared\nlogo = /Other/logo.png\nbackdrop_map = m\nbackdrop_focus = 1, 2",
+            )],
+        );
+        let mut game = empty();
+        game.add_depot(&own).unwrap();
+        game.add_depot(&shared).unwrap();
+
+        let look = game.modern_interface();
+        assert_eq!(look.title.as_deref(), Some("Own"));
+        assert_eq!(look.logo.as_deref(), Some("Modern/Look/logo.png"));
+        assert_eq!(look.tint, Some([0.1, 0.2, 0.3]));
+        assert_eq!(look.light, None);
+        assert_eq!(look.backdrop_map.as_deref(), Some("m"));
+        assert_eq!(look.backdrop_focus, Some([1.0, 2.0]));
+
+        // `null` says there's none, and a map brings only its own focus.
+        let unset = folder(
+            "look-unset",
+            &[(
+                "Modern/Unset/look.tgi",
+                "[ModernInterface]\nlogo = NULL\nbackdrop_map = own",
+            )],
+        );
+        let mut game = empty();
+        game.add_depot(&unset).unwrap();
+        game.add_depot(&shared).unwrap();
+        let look = game.modern_interface();
+        assert_eq!(look.title.as_deref(), Some("Shared"));
+        assert_eq!(look.logo, None);
+        assert_eq!(look.backdrop_map.as_deref(), Some("own"));
+        assert_eq!(look.backdrop_focus, None);
+
+        for dir in [own, shared, unset] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn each_games_own_look_is_there() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let games = (std::fs::read_dir(&data).unwrap())
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("modern_")
+            });
+        let mut seen = 0;
+        for own in games {
+            let mut game = empty();
+            game.add_depot(&own).unwrap();
+            game.add_depot(&data.join("modern")).unwrap();
+            let look = game.modern_interface();
+            let name = own.display();
+            assert!(look.title.is_some(), "{name}: no title");
+            assert!(
+                look.tint.and(look.light).and(look.accent).is_some(),
+                "{name}: no palette"
+            );
+            assert!(
+                look.backdrop_map.is_some() && look.backdrop_focus.is_some(),
+                "{name}"
+            );
+            if let Some(logo) = look.logo {
+                assert!(game.exists(&logo), "{name}: no {logo}");
+            }
+            seen += 1;
+        }
+        assert!(seen > 0);
     }
 
     #[test]
