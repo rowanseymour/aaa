@@ -34,6 +34,8 @@ const HOTKEYS: &str = "options_dialog_Child_text_6";
 const BORDER: &str = "options_dialog_Child_text_15";
 const RESOLUTION: &str = "options_dialog_Child_text_18";
 const GAME_TAB: &str = "options_dialog_ShowGameplayButton_Tooltip";
+const VIDEO_TAB: &str = "options_dialog_ShowVideoButton_Tooltip";
+const AUDIO_TAB: &str = "options_dialog_ShowAudioButton_Tooltip";
 const VOLUME: &str = "options_dialog_AudioPage_VolumeTitle_Label_Text";
 const SOUNDS: &str = "options_dialog_AudioPage_SoundsTitle_Label_Text";
 const CHAT: &str = "options_dialog_Child_text_31";
@@ -73,11 +75,11 @@ pub struct Options {
     ui_scale_label: String,
     hud_label: String,
     ui_scale_hint: String,
-    /// What each tab is called, by [`Tab`], and the groups of options
+    /// What the game calls each tab, by [`Tab`], and the groups of options
     /// in them.
     game_tab: String,
-    display_tab: String,
-    sound_tab: String,
+    video_tab: String,
+    audio_tab: String,
     game_title: String,
     extras_title: String,
     basic_title: String,
@@ -134,8 +136,8 @@ impl Options {
             ui_scale_hint:
                 "A match played with the original interface scales with its view instead.".into(),
             game_tab: tab(GAME_TAB, "Gameplay"),
-            display_tab: "Display".into(),
-            sound_tab: "Sound".into(),
+            video_tab: tab(VIDEO_TAB, "Video"),
+            audio_tab: tab(AUDIO_TAB, "Audio"),
             game_title: said(GAME, "Game"),
             extras_title: said(EXTRAS, "Auxiliaries"),
             basic_title: said(BASIC, "Basic"),
@@ -181,8 +183,8 @@ enum Open {
 enum Tab {
     #[default]
     Game,
-    Display,
-    Sound,
+    Video,
+    Audio,
 }
 
 /// The options, over the whole screen.
@@ -552,8 +554,8 @@ pub fn page(commands: &mut Commands, options: &Options) -> Entity {
     let side = commands.spawn((ChildOf(page), menu::side())).id();
     for (tab, name) in [
         (Tab::Game, &options.game_tab),
-        (Tab::Display, &options.display_tab),
-        (Tab::Sound, &options.sound_tab),
+        (Tab::Video, &options.video_tab),
+        (Tab::Audio, &options.audio_tab),
     ] {
         commands
             .spawn((
@@ -561,8 +563,8 @@ pub fn page(commands: &mut Commands, options: &Options) -> Entity {
                 toggle(name, Font::Large),
                 called(match tab {
                     Tab::Game => "options.tab.game",
-                    Tab::Display => "options.tab.display",
-                    Tab::Sound => "options.tab.sound",
+                    Tab::Video => "options.tab.video",
+                    Tab::Audio => "options.tab.audio",
                 }),
                 ChildOf(side),
             ))
@@ -674,7 +676,7 @@ fn show_body(
                 ))
                 .observe(|_: On<Activate>, mut border: ResMut<Border>| border.0 = !border.0);
         }
-        Tab::Display => {
+        Tab::Video => {
             let basic = section(&mut commands, body, &options.basic_title);
             choice(&mut commands, basic, &options.display_label, DisplayHolder);
             choice(&mut commands, basic, &options.resolution_label, Resolution);
@@ -690,7 +692,7 @@ fn show_body(
             );
             choice(&mut commands, basic, &options.hud_label, HudHolder);
         }
-        Tab::Sound => {
+        Tab::Audio => {
             let volume = section(&mut commands, body, &options.volume_title);
             for (channel, name) in Channel::ALL.into_iter().zip(&options.volume_labels) {
                 let row = Node {
@@ -1363,7 +1365,7 @@ mod tests {
     fn a_resolution_chosen_sizes_the_window() {
         let mut app = app();
         app.world_mut().spawn((Window::default(), PrimaryWindow));
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Display);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
         activate::<Opener>(&mut app, |o| o.0 == Open::Resolution);
         activate::<ResolutionChoice>(&mut app, |r| r.0 == UVec2::new(1600, 900));
         let world = app.world_mut();
@@ -1376,7 +1378,7 @@ mod tests {
     fn a_display_chosen_sets_the_window_mode_and_a_resolution_unsets_it() {
         let mut app = app();
         app.world_mut().spawn((Window::default(), PrimaryWindow));
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Display);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
         activate::<Opener>(&mut app, |o| o.0 == Open::Display);
         activate::<Pick<Display>>(&mut app, |d| d.0 == Display::Borderless);
         let mode = |app: &mut App| {
@@ -1400,7 +1402,7 @@ mod tests {
     fn the_display_and_anti_aliasing_chosen_are_marked() {
         let mut app = app();
         app.world_mut().spawn((Window::default(), PrimaryWindow));
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Display);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
         activate::<Opener>(&mut app, |o| o.0 == Open::Display);
         activate::<Pick<Display>>(&mut app, |d| d.0 == Display::Fullscreen);
         activate::<Opener>(&mut app, |o| o.0 == Open::Display);
@@ -1416,7 +1418,7 @@ mod tests {
     #[test]
     fn an_interface_chosen_is_set_and_marked() {
         let mut app = app();
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Display);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
         activate::<Opener>(&mut app, |o| o.0 == Open::Hud);
         activate::<Pick<Hud>>(&mut app, |h| h.0 == Hud::Original);
         assert_eq!(*app.world().resource::<Hud>(), Hud::Original);
@@ -1433,7 +1435,7 @@ mod tests {
     #[test]
     fn a_ui_scale_chosen_is_set_and_marked() {
         let mut app = app();
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Display);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
         activate::<Opener>(&mut app, |o| o.0 == Open::UiScale);
         activate::<UiScaleChoice>(&mut app, |s| s.0 == 1.5);
         assert_eq!(app.world().resource::<UiScaleSetting>().0, 1.5);
@@ -1467,7 +1469,7 @@ mod tests {
         let first = app.world_mut().spawn(camera()).id();
         app.update();
         assert_eq!(app.world().get::<Msaa>(first), Some(&Msaa::Sample4));
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Display);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
         activate::<Opener>(&mut app, |o| o.0 == Open::AntiAliasing);
         activate::<Pick<AntiAliasing>>(&mut app, |a| a.0 == AntiAliasing::Smaa);
         let world = app.world();
@@ -1487,7 +1489,7 @@ mod tests {
     #[test]
     fn a_volume_slider_moved_sets_its_volume_and_says_it() {
         let mut app = app();
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Sound);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Audio);
         let world = app.world_mut();
         let mut sliders = world.query::<(Entity, &VolumeSlider, &SliderValue)>();
         let found = sliders.iter(world).find(|(_, s, _)| s.0 == Channel::Music);
@@ -1514,7 +1516,7 @@ mod tests {
     #[test]
     fn a_sound_switch_turns_its_sound_off_and_says_so() {
         let mut app = app();
-        activate::<TabButton>(&mut app, |t| t.0 == Tab::Sound);
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Audio);
         let said = |app: &mut App, sound: Sound| {
             let world = app.world_mut();
             let mut toggles = world.query::<(&SoundToggle, &Children)>();

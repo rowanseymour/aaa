@@ -42,10 +42,7 @@ where the original stretches them to fill the screen. See
 
 ## New options
 
-The original's Video and Audio tabs are called Display and Sound, since the first
-now holds options for the interface too.
-
-Options the original doesn't offer, all in the Display tab's Basic section:
+Options the original doesn't offer, all in the Video tab's Basic section:
 
 - **Window:** windowed, borderless or fullscreen.
 - **Anti-aliasing:** how the map's edges are smoothed.
