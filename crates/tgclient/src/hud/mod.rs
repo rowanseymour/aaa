@@ -54,6 +54,12 @@ impl Plugin for HudPlugin {
                         .after(crate::object_display::portray)
                         .after(crate::resource_bar::show),
                 ),
+            )
+            .add_systems(
+                Update,
+                (crate::object_display::show_portrait)
+                    .in_set(Draw)
+                    .run_if(in_state(crate::Screen::Match)),
             );
     }
 }

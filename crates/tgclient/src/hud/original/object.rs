@@ -14,7 +14,6 @@ use bevy::text::Font as Face;
 use bevy::ui_widgets::Button;
 use tgdata::Id;
 use tgdata::widgets::{RESTING, Rect, SCREEN, ViewElement, Widget};
-use tgrender::portrait::Stage;
 use tgsim::Target;
 
 use super::Pictures;
@@ -278,10 +277,6 @@ pub struct Economy {
     font: String,
     shown: Vec<(Id, String)>,
 }
-
-/// Where the portrait shows.
-#[derive(Component)]
-pub struct Portrait;
 
 /// Where each part drawn of a widget was put, by its path from the
 /// widget, e.g. `StatusBar` or `Portrait/Model`; the widget's own node is
@@ -698,7 +693,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
                     ..default()
                 },
                 ImageNode::new(picture.unwrap_or_default()).with_mode(NodeImageMode::Stretch),
-                Portrait,
+                shown::Portrait,
                 Pickable::IGNORE,
             );
             self.s.commands_mut().entity(model).with_child(face);
@@ -1535,27 +1530,6 @@ pub fn economy(
             }
         });
         line.shown = now;
-    }
-}
-
-/// Shows the portrait, once it's drawn, in the portrait's box: a face
-/// filling it, a fitted model keeping its shape across it.
-pub fn portray(stage: Res<Stage>, mut boxes: Query<(&mut ImageNode, &mut Node), With<Portrait>>) {
-    let Some((portrait, fitted)) = stage.picture() else {
-        return;
-    };
-    for (mut shown, mut node) in &mut boxes {
-        if shown.image == portrait {
-            continue;
-        }
-        shown.image = portrait.clone();
-        shown.image_mode = NodeImageMode::Stretch;
-        let (height, aspect) = match fitted {
-            true => (Val::Auto, Some(tgrender::portrait::FIT_ASPECT)),
-            false => (percent(100), None),
-        };
-        node.height = height;
-        node.aspect_ratio = aspect;
     }
 }
 

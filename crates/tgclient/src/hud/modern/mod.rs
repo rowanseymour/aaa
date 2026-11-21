@@ -54,7 +54,6 @@ impl Plugin for ModernHudPlugin {
                     clock::light_button,
                     displays::light_buttons,
                     actions::show,
-                    object_display::portray,
                     // For the buttons on the cards it borrows from the original's.
                     crate::hud::original::show_pressables,
                     resource_bar::show,

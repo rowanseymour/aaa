@@ -9,7 +9,6 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
 use tgdata::Id;
-use tgrender::portrait::Stage;
 use tgsim::Target;
 
 use crate::hud::original::Cards;
@@ -100,11 +99,6 @@ const WEAPON_ROW: f32 = 21.0;
 /// and how far in its words start.
 const DESCRIPTION: [f32; 4] = [244.0, 46.0, 239.0, 104.0];
 const DESCRIPTION_IN: f32 = 5.0;
-
-/// Where the portrait shows, holding the flat picture until there's a
-/// portrait drawn to show.
-#[derive(Component)]
-pub struct PortraitBox;
 
 /// Spawns our interface's object display, at the middle of the window's
 /// lower edge.
@@ -420,10 +414,23 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
         let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
         self.commands.entity(self.root).with_children(|display| {
             display.spawn(framed(at(left, top, width, height)));
-            let inside = || at(left + in_left, top + in_top, PORTRAIT.x, PORTRAIT.y);
-            // What shows round a portrait that doesn't fill its box.
-            display.spawn((inside(), BackgroundColor(Color::BLACK), Pickable::IGNORE));
-            display.spawn((inside(), picture_node(picture), PortraitBox, says(of)));
+            let inside = Node {
+                align_items: AlignItems::Center,
+                overflow: Overflow::clip(),
+                ..at(left + in_left, top + in_top, PORTRAIT.x, PORTRAIT.y)
+            };
+            // Black round a portrait that doesn't fill its box.
+            let backdrop = BackgroundColor(Color::BLACK);
+            display.spawn((inside, backdrop, says(of))).with_child((
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    ..default()
+                },
+                picture_node(picture).with_mode(NodeImageMode::Stretch),
+                Portrait,
+                Pickable::IGNORE,
+            ));
             let bar_top = top + height - in_bottom + 1.0;
             bar(
                 display,
@@ -806,31 +813,6 @@ fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill, of: Option<Say
     if let Some(of) = of {
         // A meter takes no pointer of its own, which a tooltip needs.
         bar.insert((says(of), Pickable::default()));
-    }
-}
-
-/// Shows the portrait in its box once it's there to show.
-pub fn portray(
-    stage: Res<Stage>,
-    mut boxes: Query<(&mut ImageNode, &mut Node), With<PortraitBox>>,
-) {
-    let Some((portrait, fitted)) = stage.picture() else {
-        return;
-    };
-    // A fitted model's picture keeps its shape, in a band across the box.
-    let height = match fitted {
-        true => PORTRAIT.x / tgrender::portrait::FIT_ASPECT,
-        false => PORTRAIT.y,
-    };
-    let top = PORTRAIT_BOX[1] + PORTRAIT_IN[1] + (PORTRAIT.y - height) / 2.0;
-    for (mut shown, mut node) in &mut boxes {
-        if shown.image != portrait {
-            shown.image = portrait.clone();
-            // A face's picture fills its box whatever shape that is.
-            shown.image_mode = bevy::ui::widget::NodeImageMode::Stretch;
-            node.top = px(top * SCALE);
-            node.height = px(height * SCALE);
-        }
     }
 }
 

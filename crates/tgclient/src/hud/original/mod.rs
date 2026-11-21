@@ -78,7 +78,6 @@ impl Plugin for OriginalHudPlugin {
                 (
                     (select_pause_button, show_pressables).chain(),
                     (show_grid, tips::show).chain(),
-                    object::portray,
                     bars::slide,
                 )
                     .in_set(super::Draw),

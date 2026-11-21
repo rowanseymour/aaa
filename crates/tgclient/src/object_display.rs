@@ -2061,6 +2061,37 @@ pub(crate) fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
     ImageNode::new(picture.unwrap_or_default())
 }
 
+/// Where either interface shows the portrait: a picture filling the width
+/// of a box that centres it, holding the flat picture until there's a
+/// portrait drawn to show.
+#[derive(Component)]
+pub struct Portrait;
+
+/// Shows the portrait, once it's drawn, in each [`Portrait`]: a face
+/// filling the box whatever shape that is, a fitted model keeping its
+/// shape, in a band across it.
+pub fn show_portrait(
+    stage: Res<Stage>,
+    mut boxes: Query<(&mut ImageNode, &mut Node), With<Portrait>>,
+) {
+    let Some((portrait, fitted)) = stage.picture() else {
+        return;
+    };
+    for (mut shown, mut node) in &mut boxes {
+        if shown.image == portrait {
+            continue;
+        }
+        shown.image = portrait.clone();
+        shown.image_mode = bevy::ui::widget::NodeImageMode::Stretch;
+        let (height, aspect) = match fitted {
+            true => (Val::Auto, Some(tgrender::portrait::FIT_ASPECT)),
+            false => (percent(100), None),
+        };
+        node.height = height;
+        node.aspect_ratio = aspect;
+    }
+}
+
 /// An organization's card clicked: selects it alone, in place of any building.
 pub(crate) fn pick(
     activate: On<Activate>,
