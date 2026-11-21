@@ -70,9 +70,13 @@ pub(crate) fn spread(i: usize, count: usize, area: Vec2, slot: Vec2) -> Vec2 {
 pub(crate) const EMPTY_SLOT: &str =
     "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
 
-/// How many properties' icons the display has places for: the original's
-/// gathers the rest behind a marker.
+/// How many properties' icons the display has places for: the rest are
+/// gathered behind a marker.
 pub(crate) const MAX_PROPERTIES: usize = 7;
+
+/// How many of a building's commissions the display has places for when
+/// its layout doesn't say: the rest are shown only to be there.
+pub(crate) const MAX_QUEUED: usize = 6;
 
 /// The game's layout's box for the portrait, and how far in from its
 /// left, top, right and bottom the portrait itself is.
@@ -356,6 +360,30 @@ impl Looks {
         let h = crate::ui::read_image(game, path, self.formats).map(|i| images.add(i));
         self.images.insert(path.to_string(), h.clone());
         h
+    }
+
+    /// The icon and tooltip of each of `properties` that has a look, as
+    /// many as the display has places for, and a tooltip listing the rest
+    /// if there are more.
+    pub(crate) fn property_tips(
+        &self,
+        properties: &[Id],
+    ) -> (Vec<(String, String)>, Option<String>) {
+        let mut tips: Vec<_> = (properties.iter())
+            .filter_map(|id| self.properties.get(id))
+            .map(|look| {
+                let said = std::iter::once(look.name.clone()).chain(look.lines.iter().cloned());
+                (look.icon.clone(), said.collect::<Vec<_>>().join("\n"))
+            })
+            .collect();
+        let more = tips.split_off(tips.len().min(MAX_PROPERTIES));
+        let more = (!more.is_empty()).then(|| {
+            let tip = std::iter::once(self.said("additional_properties"));
+            tip.chain(more.into_iter().map(|(_, tip)| tip))
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        (tips, more)
     }
 
     /// What the game's strings have under `key`.

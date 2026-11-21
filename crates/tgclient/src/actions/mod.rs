@@ -307,6 +307,23 @@ pub fn back_out(
     }
 }
 
+/// Has the grid's buttons, of either interface, sound when pressed only
+/// while a press can do something.
+pub fn sound_slots(
+    shown: Res<Shown>,
+    slots: Query<(Entity, &Slot, Has<crate::ui::Click>)>,
+    mut commands: Commands,
+) {
+    for (id, slot, clicks) in &slots {
+        let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
+        match (ready, clicks) {
+            (true, false) => _ = commands.entity(id).insert(crate::ui::Click::COMMAND),
+            (false, true) => _ = commands.entity(id).remove::<crate::ui::Click>(),
+            _ => {}
+        }
+    }
+}
+
 /// Fills the grid's slots for the page and the selection, for its keys
 /// and whichever interface draws it.
 pub fn fill_slots(

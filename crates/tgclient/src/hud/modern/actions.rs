@@ -128,8 +128,6 @@ pub fn spawn(mut commands: Commands) {
 }
 
 type SlotParts<'a> = (
-    Entity,
-    Has<Click>,
     &'a Slot,
     &'a Hovered,
     &'a Children,
@@ -153,7 +151,6 @@ pub fn show(
     mut icons: Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
     mut tooltip: TipParts,
     local: Res<Local>,
-    mut commands: Commands,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
     // Others' things have no buttons.
@@ -163,7 +160,7 @@ pub fn show(
         return;
     }
     let builds = builds(&sim.0, &selected.0);
-    for (id, clicks, slot, hover, children, mut border, mut pickable) in &mut slots {
+    for (slot, hover, children, mut border, mut pickable) in &mut slots {
         let entry = shown.entries[slot.0];
         // Empty slots are just boxes, which nothing should hear clicks on.
         let want = match entry {
@@ -182,16 +179,6 @@ pub fn show(
         let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
         let lit = lit(entry, *page);
         let icon = look.icon.clone();
-        // Only a press that can do something sounds like it.
-        match (ready, clicks) {
-            (true, false) => {
-                commands.entity(id).insert(Click::COMMAND);
-            }
-            (false, true) => {
-                commands.entity(id).remove::<Click>();
-            }
-            _ => {}
-        }
         border.set_if_neq(Edge::lit(lit, hover.get() && ready, Edge::Clear));
         let shade = match ready {
             true => Shade::Full,

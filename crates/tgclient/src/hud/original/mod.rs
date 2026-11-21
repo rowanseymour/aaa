@@ -287,16 +287,36 @@ struct Press {
     /// What ours is [`called`](crate::ui::called), so a script works with
     /// either.
     called: &'static str,
+    click: crate::ui::Click,
     /// Marks it as a button of its subject's, which keeps its state.
     subject: fn(&mut EntityCommands),
 }
 
-static PRESSABLE: [Press; 1] = [Press {
-    widget: "ButtonPause",
-    asks: crate::clock::PAUSE,
-    called: crate::clock::PAUSE_BUTTON,
-    subject: |button| _ = button.insert(crate::clock::Pauses),
-}];
+impl Press {
+    /// The button that opens `panel`, which asks for it by its own name.
+    const fn panel(panel: crate::displays::Panel) -> Press {
+        Press {
+            widget: panel.keys().0,
+            asks: panel.keys().0,
+            called: panel.called(),
+            click: crate::ui::Click::PUSH,
+            subject: |_| {},
+        }
+    }
+}
+
+static PRESSABLE: [Press; 4] = [
+    Press {
+        widget: "ButtonPause",
+        asks: crate::clock::PAUSE,
+        called: crate::clock::PAUSE_BUTTON,
+        click: crate::ui::Click::TOGGLE,
+        subject: |button| _ = button.insert(crate::clock::Pauses),
+    },
+    Press::panel(crate::displays::Panel::Objectives),
+    Press::panel(crate::displays::Panel::Technologies),
+    Press::panel(crate::displays::Panel::MessageLog),
+];
 
 /// The widgets the interface repeats once for each entry a panel lists,
 /// such as a group or a command: templates, not shown themselves, and
@@ -873,7 +893,7 @@ impl BuiltPressable {
             crate::ui::Hint(self.help),
             on_screen(at),
             Button,
-            crate::ui::Click::TOGGLE,
+            press.click,
             crate::ui::called(press.called),
             Hovered::default(),
             Blocks,

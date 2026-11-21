@@ -757,14 +757,7 @@ impl Draw<'_, '_> {
         let at = panel.bounds(self.area);
         let width = bar.bounds(at).width();
         let seen = self.detail.seen_as.map(WhileSeen);
-        let mut tips = Vec::new();
-        for id in &self.detail.properties {
-            if let Some(look) = self.looks.properties.get(id).cloned() {
-                let said = std::iter::once(look.name).chain(look.lines);
-                tips.push((look.icon, said.collect::<Vec<_>>().join("\n")));
-            }
-        }
-        let more = tips.split_off(tips.len().min(shown::MAX_PROPERTIES));
+        let (tips, more) = self.looks.property_tips(&self.detail.properties);
         for (n, (icon, tip)) in tips.into_iter().enumerate() {
             let within = moved(at, n as f32 * (width + separation), 0.0);
             let parts = self.painter.paint(self.s, bar, within, &[]);
@@ -778,13 +771,11 @@ impl Draw<'_, '_> {
             .children
             .iter()
             .find(|c| c.name == "PropertyMoreIndicator");
-        if let (false, Some(indicator)) = (more.is_empty(), indicator) {
+        if let (Some(tip), Some(indicator)) = (more, indicator) {
             let size = indicator.bounds(at);
             let within = moved(size, at.right - size.right, 0.0);
             let parts = self.painter.paint(self.s, indicator, within, &[]);
-            let tip = std::iter::once(self.looks.said("additional_properties"));
-            let tip = tip.chain(more.into_iter().map(|(_, tip)| tip));
-            self.mark_icon(&parts, Hint(tip.collect::<Vec<_>>().join("\n")), seen);
+            self.mark_icon(&parts, Hint(tip), seen);
         }
     }
 
@@ -1052,7 +1043,7 @@ impl Draw<'_, '_> {
                 .value(key)
                 .and_then(|v| v.trim().parse::<usize>().ok())
         };
-        let most = number("max_queue_widgets").unwrap_or(6);
+        let most = number("max_queue_widgets").unwrap_or(shown::MAX_QUEUED);
         let across = number("max_queue_widgets_horizontal").unwrap_or(3).max(1);
         let at = panel.bounds(self.area);
         let queue: Vec<String> = (self.sim.buildings[b].queue.iter())
