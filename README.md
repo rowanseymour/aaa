@@ -20,7 +20,7 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
 <a href="docs/screenshots/main-menu.jpg"><img src="docs/screenshots/main-menu.jpg" width="32%" alt="The main menu"></a>
 <a href="docs/screenshots/stalingrad.jpg"><img src="docs/screenshots/stalingrad.jpg" width="32%" alt="A match on the Stalingrad map"></a>
 <a href="docs/screenshots/el-alamein.jpg"><img src="docs/screenshots/el-alamein.jpg" width="32%" alt="Tanks fighting on the El Alamein map"></a>
-<a href="docs/screenshots/guadalcanal.jpg"><img src="docs/screenshots/guadalcanal.jpg" width="32%" alt="A match on the Guadalcanal map"></a>
+<a href="docs/screenshots/berlin.jpg"><img src="docs/screenshots/berlin.jpg" width="32%" alt="Japan's corps HQ on the Fall of Berlin map, under the original interface"></a>
 <a href="docs/screenshots/normandy.jpg"><img src="docs/screenshots/normandy.jpg" width="32%" alt="A match on the Normandy map"></a>
 <a href="docs/screenshots/pearl-harbor.jpg"><img src="docs/screenshots/pearl-harbor.jpg" width="32%" alt="Battleships and a carrier in Pearl Harbor"></a>
 <a href="docs/screenshots/okinawa.jpg"><img src="docs/screenshots/okinawa.jpg" width="32%" alt="A town on the Okinawa map"></a>
