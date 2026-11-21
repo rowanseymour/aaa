@@ -38,6 +38,18 @@ pub fn button(n: usize, several: bool) -> String {
 #[require(Hint = Hint(String::new()), Marked, Hovered)]
 pub struct FormationButton(pub usize);
 
+/// The `n`th [`FormationButton`] from the top, hidden until there's a
+/// formation for it.
+pub fn button_bundle(n: usize) -> impl Bundle {
+    (
+        FormationButton(n),
+        crate::ui::called(format!("formation.{}", n + 1)),
+        bevy::ui_widgets::Button,
+        Pickable::default(),
+        Visibility::Hidden,
+    )
+}
+
 /// A [`FormationButton`] pressed with the pointer, whose activation as it's
 /// let go is that same press.
 #[derive(Component)]
@@ -92,6 +104,7 @@ pub fn let_go(
 
 /// The picture of the formation on a [`FormationButton`].
 #[derive(Component)]
+#[require(ImageNode, Pickable = Pickable::IGNORE)]
 pub struct FormationIcon;
 
 /// What the buttons offer the selection and which of it is lit.

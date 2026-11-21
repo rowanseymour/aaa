@@ -36,6 +36,38 @@ impl ComputedStates for InMatch {
     }
 }
 
+/// Both interfaces, each drawing only while it's the one chosen.
+pub struct HudPlugin;
+
+impl Plugin for HudPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins((modern::ModernHudPlugin, original::OriginalHudPlugin))
+            .configure_sets(
+                Update,
+                (
+                    LayOut
+                        .after(crate::object_display::choose)
+                        .before(crate::object_display::refresh),
+                    Draw.after(crate::clock::disable_buttons)
+                        .after(crate::displays::Keys)
+                        .after(crate::actions::tell)
+                        .after(crate::object_display::portray)
+                        .after(crate::resource_bar::show),
+                ),
+            );
+    }
+}
+
+/// Where either interface lays its object display out afresh: once
+/// what's shown has been chosen, before what it shows is refreshed.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct LayOut;
+
+/// Where either interface draws what the shared modules have worked out
+/// to show this frame.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Draw;
+
 /// Has [`Chosen`] follow the [`Hud`] chosen in the options.
 pub fn follow(hud: Res<Hud>, chosen: Res<State<Chosen>>, mut next: ResMut<NextState<Chosen>>) {
     if chosen.0 != *hud {

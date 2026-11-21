@@ -8,12 +8,11 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::Button;
-use tgdata::SpecialOperation;
 
 use super::actions::{BUTTON, GAP, PAD};
 use crate::intent::Asks;
 use crate::keys::Bindings;
-use crate::special_ops::{Panel, action, offered, probe};
+use crate::special_ops::{Operation, Panel, action, probe};
 use crate::ui::{
     self, Click, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel,
     tooltip,
@@ -84,17 +83,13 @@ pub fn spawn(
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
-    local: Res<Local>,
-    leaders: Res<Leaders>,
     bindings: Res<Bindings>,
     shared: Option<Res<Panel>>,
 ) {
-    let (Some(shared), Some(faction)) = (shared, (local.0).and_then(|p| leaders.0.get(&p))) else {
+    let Some(shared) = shared else {
         return;
     };
     let game = &loaded.game;
-    let strings = game.strings();
-    let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     let mut cache: HashMap<String, Option<Handle<Image>>> = HashMap::new();
     let mut image = |game: &tgdata::GameData, path: &str| {
         (cache.entry(path.to_string()))
@@ -105,15 +100,10 @@ pub fn spawn(
             .clone()
     };
     let medal = image(game, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
-    let operations = game.special_operations();
-    let cost = said("ui_tooltip_item_title_cost", "Cost");
-    let area = said("ui_tooltip_item_title_area", "Area");
-    let buttons: Vec<_> = offered(&faction.operations, &operations)
-        .map(|(n, o, op)| {
+    let buttons: Vec<_> = (shared.operations.iter())
+        .map(|op| {
             let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
-            let name = bindings.marked(&action(n), &op.name);
-            let figures = figures(op, o.cost, &cost, &area);
-            (n, icon, name, op.clone(), figures)
+            (op, icon, bindings.marked(&action(op.index), &op.name))
         })
         .collect();
     commands
@@ -182,8 +172,9 @@ pub fn spawn(
                     ),
                 ))
                 .with_children(|tray| {
-                    for (index, icon, name, op, figures) in buttons {
-                        let (tip, recharge_line) = pane(tray, &name, &op, &figures);
+                    for (op, icon, name) in buttons {
+                        let index = op.index;
+                        let (tip, recharge_line) = pane(tray, &name, op);
                         tray.spawn((
                             OperationButton {
                                 index,
@@ -242,34 +233,12 @@ pub fn spawn(
         });
 }
 
-/// The Cost and Area rows of an operation's tooltip, where they apply.
-fn figures(
-    op: &SpecialOperation,
-    cost: f32,
-    cost_word: &str,
-    area_word: &str,
-) -> Vec<(String, String)> {
-    let mut rows = Vec::new();
-    if cost > 0.0 {
-        rows.push((cost_word.to_string(), cost.round().to_string()));
-    }
-    if let Some(area) = &op.area {
-        rows.push((area_word.to_string(), area.clone()));
-    }
-    rows
-}
-
 /// Spawns an operation's tooltip, hidden until its button is hovered: its
 /// name, what its effects do, its Cost and Area, how long it has left to
 /// recharge while it is, then its description. It sits a little way right
 /// of the tray, level with its top, as the action palette's sits above the
 /// palette. Gives the tooltip and its recharge line.
-fn pane(
-    tray: &mut ChildSpawnerCommands,
-    name: &Marked,
-    op: &SpecialOperation,
-    figures: &[(String, String)],
-) -> (Entity, Entity) {
+fn pane(tray: &mut ChildSpawnerCommands, name: &Marked, op: &Operation) -> (Entity, Entity) {
     let mut line = Entity::PLACEHOLDER;
     let node = Node {
         display: Display::None,
@@ -303,7 +272,7 @@ fn pane(
                     }
                 });
             }
-            if !figures.is_empty() {
+            if !op.figures.is_empty() {
                 tip.spawn(Node {
                     display: Display::Grid,
                     grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
@@ -312,7 +281,7 @@ fn pane(
                     ..default()
                 })
                 .with_children(|table| {
-                    for (word, value) in figures {
+                    for (word, value) in &op.figures {
                         table.spawn(label(word.clone(), Font::Small, Ink::Help));
                         table.spawn(label(value.clone(), Font::Small, Ink::Body));
                     }
@@ -340,21 +309,6 @@ pub fn tips(buttons: Query<(&OperationButton, &Hovered)>, mut nodes: Query<&mut 
         if let Ok(mut node) = nodes.get_mut(button.tip) {
             crate::ui::show(&mut node, hovered.get());
         }
-    }
-}
-
-/// "Recharging (4:05 left)", the seconds `left` rounded up.
-fn recharging(text: &str, left: f32) -> String {
-    let left = left.ceil() as u32;
-    let (minutes, seconds) = (left / 60, left % 60);
-    (text.replacen("%d", &minutes.to_string(), 1)).replacen("%.2d", &format!("{seconds:02}"), 1)
-}
-
-/// "474/5000": the experience rounded, and the ceiling when there is one.
-fn experience_text(experience: i64, max: Option<f32>) -> String {
-    match max {
-        Some(max) => format!("{experience}/{}", max.round()),
-        None => experience.to_string(),
     }
 }
 
@@ -395,7 +349,7 @@ pub fn refresh(
             let left = op.map_or(0.0, |o| o.left);
             crate::ui::show(&mut node, left > 0.0);
             if left > 0.0 {
-                let said = recharging(&panel.words.recharging, left);
+                let said = panel.recharging(left);
                 if t.0 != said {
                     t.0 = said;
                 }
@@ -407,20 +361,14 @@ pub fn refresh(
     for (mut t, mut shown) in &mut text {
         if shown.0 != Some(rounded) {
             shown.0 = Some(rounded);
-            t.0 = experience_text(rounded, panel.max);
+            t.0 = panel.experience(rounded);
             changed = true;
         }
     }
     if !changed {
         return;
     }
-    let w = &panel.words;
-    let mut said = Vec::new();
-    if !panel.faction.trim().is_empty() {
-        said.push(format!("{}  {}", w.faction, panel.faction));
-    }
-    said.push(format!("{}  {rounded}", w.experience));
-    let hint = format!("{}\n\n{}", said.join("\n"), w.help);
+    let hint = panel.experience_tip(rounded);
     for mut h in &mut boxes {
         h.set_if_neq(Hint(hint.clone()));
     }
@@ -484,41 +432,6 @@ mod tests {
         assert_eq!(display(&app), Some(Display::Flex));
         let said = app.world().get::<Text>(line).map(|t| t.0.clone());
         assert_eq!(said.as_deref(), Some("Recharging (0:10 left)"));
-    }
-
-    #[test]
-    fn recharge_time_shows_in_minutes_and_seconds_rounded_up() {
-        let text = "Recharging (%d:%.2d left)";
-        assert_eq!(recharging(text, 244.2), "Recharging (4:05 left)");
-        assert_eq!(recharging(text, 0.5), "Recharging (0:01 left)");
-    }
-
-    #[test]
-    fn experience_shows_its_ceiling_where_there_is_one() {
-        assert_eq!(experience_text(474, Some(5000.0)), "474/5000");
-        assert_eq!(experience_text(474, None), "474");
-    }
-
-    #[test]
-    fn tooltips_give_cost_and_area_where_they_apply() {
-        let op = SpecialOperation {
-            name: "Armored Resupply".into(),
-            description: None,
-            icon: None,
-            recharge: 300.0,
-            on_self: false,
-            marker: None,
-            area: Some("Large".into()),
-            effects: Vec::new(),
-            summons: None,
-        };
-        let row = |a: &str, b: &str| (a.to_string(), b.to_string());
-        assert_eq!(
-            figures(&op, 300.0, "Cost", "Area"),
-            [row("Cost", "300"), row("Area", "Large")]
-        );
-        let free = SpecialOperation { area: None, ..op };
-        assert!(figures(&free, 0.0, "Cost", "Area").is_empty());
     }
 
     #[test]

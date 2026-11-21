@@ -440,10 +440,7 @@ pub fn run(program: Program) -> ExitCode {
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
         .add_plugins(special_ops::SpecialOpsPlugin)
-        .add_plugins((
-            hud::modern::ModernHudPlugin,
-            hud::original::OriginalHudPlugin,
-        ))
+        .add_plugins(hud::HudPlugin)
         .add_plugins(music::MusicPlugin)
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)

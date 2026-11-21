@@ -634,21 +634,12 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             self.s
                 .spawn((
                     super::Pressable::default(),
-                    crate::formations::FormationButton(n),
-                    ui::called(format!("formation.{}", n + 1)),
+                    crate::formations::button_bundle(n),
                     self.painter.place(at),
-                    Button,
-                    Pickable::default(),
-                    Visibility::Hidden,
                 ))
                 .with_children(|b| {
                     spawn_faces(b, faces);
-                    b.spawn((
-                        share(icon, at),
-                        ImageNode::default(),
-                        crate::formations::FormationIcon,
-                        Pickable::IGNORE,
-                    ));
+                    b.spawn((share(icon, at), crate::formations::FormationIcon));
                 });
         }
     }
@@ -663,14 +654,9 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         let Some(&(label, at)) = parts.get("Label") else {
             return;
         };
-        let Some(player) = self.shows.sim.sides.player(owner) else {
+        let Some(owner) = self.shows.owner(owner) else {
             return;
         };
-        let colour = shown::owner_colour(self.shows.sim, self.shows.local, owner);
-        let name = self
-            .shows
-            .leaders
-            .owner(player, &self.shows.sim.sides, &self.shows.looks.map);
         // The owner's gem, as tall and wide as the line, then its name.
         let line = Node {
             align_items: AlignItems::Center,
@@ -678,9 +664,8 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             ..self.painter.place(at)
         };
         let font = self.font("Owner");
-        let mark = (!player.independent)
-            .then(|| ui::side_mark(self.shows.gem, player.rgb, Node::default()));
-        let words = self.painter.letters.text(&font, &name, colour);
+        let mark = (owner.gem).map(|rgb| ui::side_mark(self.shows.gem, rgb, Node::default()));
+        let words = self.painter.letters.text(&font, &owner.name, owner.colour);
         let gem_size = Vec2::splat(at.height());
         let s = &mut *self.s;
         s.commands_mut().entity(label).despawn();
@@ -760,11 +745,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         };
         let within = values.bounds(self.area);
         let parts = self.painter.paint(self.s, widget, within, &[]);
-        let icon = (self.shows.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
-        let icon = self
-            .shows
-            .looks
-            .image(self.shows.game, self.shows.images, icon.as_deref());
+        let icon = self.shows.defense_icon(template);
         self.show(&parts, "Icon/Decal", icon);
         if let Some(mut label) = self.entity(&parts, "Label/Label") {
             label.insert(Defends(target, Some(Color::WHITE)));
@@ -789,10 +770,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         let apart: f32 = apart.unwrap_or(0.0);
         let within = values.bounds(self.area);
         let row = widget.bounds(within).height() + apart;
-        let icons: Vec<Option<String>> = (self.shows.sim.weapons(target).iter())
-            .take(most)
-            .map(|w| w.shown.icon.clone())
-            .collect();
+        let icons = self.shows.weapon_icons(target, most);
         for (i, icon) in icons.into_iter().enumerate() {
             let down = row * i as f32;
             let within = Rect {
@@ -801,10 +779,6 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
                 ..within
             };
             let parts = self.painter.paint(self.s, widget, within, &[]);
-            let icon = self
-                .shows
-                .looks
-                .image(self.shows.game, self.shows.images, icon.as_deref());
             self.show(&parts, "Icon/Decal", icon);
             if let Some(mut label) = self.entity(&parts, "Label/Label") {
                 label.insert(Strikes(target, i, Some(Color::WHITE)));
@@ -983,7 +957,6 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         let size = place.bounds(at);
         let area = Vec2::new(at.width(), at.height());
         let slot = Vec2::new(size.width(), size.height());
-        let empty = self.shows.looks.said(shown::EMPTY_SLOT);
         for (i, held) in self.shows.detail.slots.clone().into_iter().enumerate() {
             let step = shown::spread(i, count, area, slot);
             let within = moved(at, step.x, step.y);
@@ -1002,27 +975,22 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             skip.extend(pictures.into_iter().filter(|p| *p != shows));
             skip.extend(all.into_iter().filter(|b| !bars.contains(b)));
             let parts = self.painter.paint(self.s, place, within, &skip);
-            let id = ui::called(format!("object.slot.{}", i + 1));
             let fill = |this: &mut Self, name: &str, fill: Option<Fill>| {
                 if let Some(fill) = fill {
                     this.fill(&parts, &format!("{name}/StatusBar"), fill);
                 }
             };
-            match (held, building) {
-                (Place::Organization(r), _) => {
+            let held = self.shows.held(held, building);
+            if let Some(mut card) = self.entity(&parts, "") {
+                held.hook(&mut card, i);
+            }
+            match held {
+                shown::Holding::Organization(r) => {
                     self.banner(&parts, "Button/ButtonModel/Model", r);
                     fill(self, "Health", Some(Fill::Organization(r)));
                     fill(self, "Morale", Some(Fill::Morale(r)));
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        let of = shown::says(Says::Organization(r));
-                        card.insert((Button, id, Pick(r), of, Pickable::default()))
-                            .observe(shown::pick);
-                    }
                 }
-                (Place::Queued(n), Some(b)) => {
-                    let queue = &self.shows.sim.buildings[b].queue;
-                    let template = queue.get(n).map(|c| c.template().to_string());
-                    let picture = template.and_then(|t| self.shows.picture(&t));
+                shown::Holding::Queued(b, n, picture) => {
                     self.show(&parts, "Button/ButtonDecal/Decal", picture);
                     // Only the first is under way.
                     fill(
@@ -1030,31 +998,12 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
                         "RecruitProgress",
                         (n == 0).then_some(Fill::Progress(b)),
                     );
-                    let of = Says::Queued {
-                        building: b,
-                        place: n,
-                        held: true,
-                    };
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        card.insert((Button, id, Queued(n), shown::says(of), Pickable::default()))
-                            .observe(shown::cancel);
-                    }
                 }
-                (Place::Flown(d), _) => {
-                    let template = self.shows.sim.deliveries[d].template.to_string();
-                    let picture = self.shows.picture(&template);
+                shown::Holding::Flown(picture, _) => {
                     self.show(&parts, "Button/ButtonDecal/Decal", picture);
                     fill(self, "HealthTransport", Some(Fill::Flight));
-                    let name = shown::template_name(&self.shows.looks.names, &template);
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        card.insert((Hint(name), Pickable::default()));
-                    }
                 }
-                _ => {
-                    if let Some(mut card) = self.entity(&parts, "") {
-                        card.insert((Hint(empty.clone()), Pickable::default()));
-                    }
-                }
+                shown::Holding::Empty(_) => {}
             }
         }
     }
@@ -1564,11 +1513,8 @@ pub fn economy(
     images: Res<Assets<Image>>,
     mut lines: Query<(Entity, &mut Economy)>,
 ) {
-    let sim = &sim.0;
-    let resources = &sim.rules().economy.resources;
     for (row, mut line) in &mut lines {
-        let now = (shown::counted(sim, local.0, line.of))
-            .map_or_else(Vec::new, |l| shown::economy(&l, resources));
+        let now = shown::economy_line(&sim.0, local.0, line.of);
         if line.shown == now {
             continue;
         }

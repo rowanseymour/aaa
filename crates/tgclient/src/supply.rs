@@ -1,8 +1,7 @@
 //! Supply as the map shows it: a border along the edge of the ground the
 //! player's side is supplied over, and a tint on buildings going without.
 //! Its key shows and hides the border, as the options do. Another steps
-//! through the player's organizations that have no HQ, as either
-//! interface's button does.
+//! through the player's organizations that have no HQ.
 
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;

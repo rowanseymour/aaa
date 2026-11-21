@@ -406,6 +406,7 @@ pub(crate) fn contents(
         })
     });
     Shown {
+        commanded: true,
         entries,
         faces,
         lacks,

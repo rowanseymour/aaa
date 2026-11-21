@@ -164,6 +164,15 @@ impl Quantity {
             self.amount.to_string()
         }
     }
+
+    /// What's written after its resource's glyph, or with the resource's
+    /// name where it has none.
+    pub fn label(&self) -> String {
+        match &self.glyph {
+            Some(_) => self.number(),
+            None => format!("{} {}", self.number(), self.resource),
+        }
+    }
 }
 
 impl Looks {

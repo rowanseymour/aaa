@@ -58,7 +58,7 @@ pub fn armed(armed: Res<Armed>) -> bool {
 pub(crate) struct Panel {
     pub(crate) player: u32,
     /// The operations the player's faction has, in its list's order.
-    operations: Vec<Operation>,
+    pub(crate) operations: Vec<Operation>,
     pub(crate) faction: String,
     pub(crate) max: Option<f32>,
     pub(crate) words: Words,
@@ -86,6 +86,38 @@ impl Panel {
     fn operation(&self, index: usize) -> Option<&Operation> {
         self.operations.iter().find(|o| o.index == index)
     }
+
+    /// "Recharging (4:05 left)", the seconds `left` rounded up.
+    pub(crate) fn recharging(&self, left: f32) -> String {
+        let left = left.ceil() as u32;
+        let (minutes, seconds) = (left / 60, left % 60);
+        let text = self
+            .words
+            .recharging
+            .replacen("%d", &minutes.to_string(), 1);
+        text.replacen("%.2d", &format!("{seconds:02}"), 1)
+    }
+
+    /// "474/5000": the `experience`, rounded, and the ceiling when there
+    /// is one.
+    pub(crate) fn experience(&self, experience: i64) -> String {
+        match self.max {
+            Some(max) => format!("{experience}/{}", max.round()),
+            None => experience.to_string(),
+        }
+    }
+
+    /// The experience's tooltip: the side's faction, where it's named, the
+    /// `experience`, rounded, and what it's for.
+    pub(crate) fn experience_tip(&self, experience: i64) -> String {
+        let w = &self.words;
+        let mut said = Vec::new();
+        if !self.faction.trim().is_empty() {
+            said.push(format!("{}  {}", w.faction, self.faction));
+        }
+        said.push(format!("{}  {experience}", w.experience));
+        format!("{}\n\n{}", said.join("\n"), w.help)
+    }
 }
 
 /// One of the operations a player's faction has, which its key or its
@@ -93,8 +125,15 @@ impl Panel {
 #[derive(Clone, Debug)]
 pub(crate) struct Operation {
     /// Its place in the faction's list.
-    index: usize,
-    name: String,
+    pub(crate) index: usize,
+    pub(crate) name: String,
+    /// Its button's picture, by its path in the game's files.
+    pub(crate) icon: Option<String>,
+    /// Its tooltip's lines saying what it does, its Cost and Area rows
+    /// where they apply, and what it says of itself.
+    pub(crate) effects: Vec<tgdata::EffectLine>,
+    pub(crate) figures: Vec<(String, String)>,
+    pub(crate) description: Option<String>,
     /// The name of what it summons, for one that does.
     summons: Option<String>,
     /// It's used as soon as it's pressed, with no aiming.
@@ -147,10 +186,16 @@ fn setup(mut commands: Commands, loaded: Res<Loaded>, local: Res<Local>, leaders
             "Recharging (%d:%.2d left)",
         ),
     };
+    let cost = said("ui_tooltip_item_title_cost", "Cost");
+    let area = said("ui_tooltip_item_title_area", "Area");
     let listed = offered(&faction.operations, &operations)
-        .map(|(index, _, op)| Operation {
+        .map(|(index, o, op)| Operation {
             index,
             name: op.name.clone(),
+            icon: op.icon.clone(),
+            effects: op.effects.clone(),
+            figures: figures(op, o.cost, &cost, &area),
+            description: op.description.clone(),
             summons: op.summons.clone(),
             on_self: op.on_self,
             marker: op.marker.as_ref().and_then(|m| {
@@ -178,6 +223,23 @@ pub(crate) fn offered<'a>(
     operations: &'a HashMap<tgdata::Id, SpecialOperation>,
 ) -> impl Iterator<Item = (usize, &'a tgdata::FactionOperation, &'a SpecialOperation)> {
     (faction.iter().enumerate()).filter_map(|(n, o)| Some((n, o, operations.get(&o.id)?)))
+}
+
+/// The Cost and Area rows of an operation's tooltip, where they apply.
+fn figures(
+    op: &SpecialOperation,
+    cost: f32,
+    cost_word: &str,
+    area_word: &str,
+) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    if cost > 0.0 {
+        rows.push((cost_word.to_string(), cost.round().to_string()));
+    }
+    if let Some(area) = &op.area {
+        rows.push((area_word.to_string(), area.clone()));
+    }
+    rows
 }
 
 /// The order to use the `i`th operation, where it's aimed being no part of
@@ -466,12 +528,53 @@ pub(crate) mod tests {
         world
     }
 
+    #[test]
+    fn tooltips_give_cost_and_area_where_they_apply() {
+        let op = SpecialOperation {
+            name: "Armored Resupply".into(),
+            description: None,
+            icon: None,
+            recharge: 300.0,
+            on_self: false,
+            marker: None,
+            area: Some("Large".into()),
+            effects: Vec::new(),
+            summons: None,
+        };
+        let row = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            figures(&op, 300.0, "Cost", "Area"),
+            [row("Cost", "300"), row("Area", "Large")]
+        );
+        let free = SpecialOperation { area: None, ..op };
+        assert!(figures(&free, 0.0, "Cost", "Area").is_empty());
+    }
+
+    #[test]
+    fn recharge_time_shows_in_minutes_and_seconds_rounded_up() {
+        let panel = panel();
+        assert_eq!(panel.recharging(244.2), "Recharging (4:05 left)");
+        assert_eq!(panel.recharging(0.5), "Recharging (0:01 left)");
+    }
+
+    #[test]
+    fn experience_shows_its_ceiling_where_there_is_one() {
+        let mut panel = panel();
+        assert_eq!(panel.experience(474), "474/5000");
+        panel.max = None;
+        assert_eq!(panel.experience(474), "474");
+    }
+
     pub(crate) fn panel() -> Panel {
         Panel {
             player: 1,
             operations: vec![Operation {
                 index: 0,
                 name: "Resupply".into(),
+                icon: None,
+                effects: Vec::new(),
+                figures: Vec::new(),
+                description: None,
                 summons: None,
                 on_self: false,
                 marker: None,
