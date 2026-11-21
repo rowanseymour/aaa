@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tgdata::{Id, RuleValues};
 
-use crate::host::{GREETED, LONGEST_HEARD};
+use crate::host::{LONGEST_HEARD, greet, joining, worth_saying};
 use crate::presets::Preset;
 use crate::protocol::{Gone, Join, PROTOCOL, Said, ToClient, ToHost, Welcome, decode, encode};
-use crate::{Clock, Host, Link, Lost, Naming, NotJoined, Refusal, Setup, sayable};
+use crate::{Clock, Host, Link, Lost, Naming, NotJoined, Refusal, Setup, ping, refuse};
 
 /// The seconds a launch counts down, unless the game's data says
 /// otherwise.
@@ -87,6 +87,17 @@ impl Staging {
         self.guests.iter().find(|g| g.client == client)
     }
 
+    fn guest_mut(&mut self, client: u32) -> Option<&mut Guest> {
+        self.guests.iter_mut().find(|g| g.client == client)
+    }
+
+    /// Puts side `player` back to unchosen, as nobody now holds it.
+    fn free(&mut self, player: u32) {
+        self.nations.remove(&player);
+        self.factions.remove(&player);
+        self.handicaps.remove(&player);
+    }
+
     /// Whether someone takes side `player`.
     pub fn taken(&self, player: u32) -> bool {
         self.guests.iter().any(|g| g.side == Some(player))
@@ -120,10 +131,8 @@ impl Staging {
                 _ => false,
             };
         }
-        let side = |&player: &u32| match guest.side == Some(player) {
-            true => true,
-            false => guest.host && !self.taken(player),
-        };
+        let side =
+            |&player: &u32| guest.side == Some(player) || (guest.host && !self.taken(player));
         match choice {
             Choice::Map { .. } | Choice::Rules(_) | Choice::Preset { .. } | Choice::Launch(_) => {
                 guest.host
@@ -179,8 +188,9 @@ impl Staging {
             Choice::Rules(rules) => self.rules = rules,
             Choice::Preset { preset, sides } => self.arrange(preset, sides),
             Choice::Holds(map, holds) => {
-                let guest = self.guests.iter_mut().find(|g| g.client == client);
-                if let Some(guest) = guest.filter(|_| map == self.map) {
+                if map == self.map
+                    && let Some(guest) = self.guest_mut(client)
+                {
                     guest.holds = holds;
                 }
             }
@@ -192,23 +202,19 @@ impl Staging {
             Choice::Faction(player, id) => chosen(&mut self.factions, player, id),
             Choice::Handicap(player, id) => chosen(&mut self.handicaps, player, id),
             Choice::Side(side) => {
-                let Some(guest) = self.guests.iter_mut().find(|g| g.client == client) else {
+                let Some(guest) = self.guest_mut(client) else {
                     return;
                 };
-                let left = std::mem::replace(&mut guest.side, side);
-                // A side nobody then holds goes back to unchosen, and one
-                // a person takes has no handicap.
-                if let Some(left) = left {
-                    self.nations.remove(&left);
-                    self.factions.remove(&left);
-                    self.handicaps.remove(&left);
+                if let Some(left) = std::mem::replace(&mut guest.side, side) {
+                    self.free(left);
                 }
+                // One a person takes has no handicap.
                 if let Some(side) = side {
                     self.handicaps.remove(&side);
                 }
             }
             Choice::Ready(ready) => {
-                if let Some(guest) = self.guests.iter_mut().find(|g| g.client == client) {
+                if let Some(guest) = self.guest_mut(client) {
                     guest.ready = ready;
                 }
             }
@@ -360,7 +366,7 @@ impl<L: Link> Lobby<L> {
             }
         };
         if let Some(refusal) = refused {
-            let _ = link.send(encode(&ToClient::Refused(refusal)));
+            refuse(&mut link, refusal);
             return Err(refusal);
         }
         let client = self.next;
@@ -369,6 +375,10 @@ impl<L: Link> Lobby<L> {
         // Where nobody may watch, they take the first side free.
         let free = self.staging.sides.iter().find(|&&p| !self.staging.taken(p));
         let side = free.copied().filter(|_| !self.staging.observers && !host);
+        // People have no handicap.
+        if let Some(side) = side {
+            self.staging.handicaps.remove(&side);
+        }
         self.staging.guests.push(Guest {
             client,
             name: name.clone(),
@@ -386,12 +396,8 @@ impl<L: Link> Lobby<L> {
 
     /// Takes a link to someone who has yet to say what they want, which
     /// [`Lobby::seat`] lets in once they have.
-    pub fn greet(&mut self, mut link: L) {
-        if self.greeted.len() < GREETED {
-            self.greeted.push(link);
-        } else {
-            let _ = link.send(encode(&ToClient::Refused(Refusal::Full)));
-        }
+    pub fn greet(&mut self, link: L) {
+        greet(&mut self.greeted, link);
     }
 
     /// Lets in those greeted that have since asked to come in, each as
@@ -404,18 +410,13 @@ impl<L: Link> Lobby<L> {
                     self.greeted.push(link);
                     continue;
                 }
-                Ok(Some(message)) if message.len() > LONGEST_HEARD => Err(Refusal::Lost),
-                Ok(Some(message)) => match decode::<Join>(&message) {
-                    Some(join) if join.protocol == PROTOCOL => Ok(join),
-                    Some(_) => Err(Refusal::Protocol(PROTOCOL)),
-                    None => Err(Refusal::Lost),
-                },
+                Ok(Some(message)) => joining(&message),
                 Err(_) => Err(Refusal::Lost),
             };
             seated.push(match asked {
                 Ok(join) => self.admit(link, &join.name, &join.password),
                 Err(refusal) => {
-                    let _ = link.send(encode(&ToClient::Refused(refusal)));
+                    refuse(&mut link, refusal);
                     Err(refusal)
                 }
             });
@@ -443,7 +444,7 @@ impl<L: Link> Lobby<L> {
                     Some(ToHost::Choose(choice)) => {
                         changed |= self.choose(client, choice, &mut gone);
                     }
-                    Some(ToHost::Say(words)) if sayable(&words) && !words.trim().is_empty() => {
+                    Some(ToHost::Say(words)) if worth_saying(&words) => {
                         let guest = self.staging.guest(client);
                         let name = guest.map(|g| g.name.clone()).unwrap_or_default();
                         let from = guest.and_then(|g| g.side);
@@ -459,7 +460,7 @@ impl<L: Link> Lobby<L> {
             }
         }
         for (at, (_, link)) in self.links.iter().enumerate() {
-            let ping = link.round_trip().map(|t| t.as_millis() as u32);
+            let ping = ping(link);
             changed |= std::mem::replace(&mut self.staging.guests[at].ping, ping) != ping;
         }
         let left = !gone.is_empty();
@@ -565,9 +566,7 @@ impl<L: Link> Lobby<L> {
         let (_, mut link) = self.links.remove(at);
         let guest = self.staging.guests.remove(at);
         if let Some(side) = guest.side {
-            // Nobody holds it now.
-            self.staging.nations.remove(&side);
-            self.staging.factions.remove(&side);
+            self.staging.free(side);
         }
         let left = ToClient::Left(Gone {
             client,
@@ -694,17 +693,21 @@ impl<L: Link> Entry<L> {
 
     /// Asks the host for `choice`, which it makes if the person may.
     pub fn choose(&mut self, choice: Choice) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Choose(choice)))
+        self.send(ToHost::Choose(choice))
     }
 
     /// Says `words` to everyone in the game.
     pub fn say(&mut self, words: String) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Say(words)))
+        self.send(ToHost::Say(words))
     }
 
     /// Leaves the game.
     pub fn leave(mut self) {
-        let _ = self.link.send(encode(&ToHost::Leave));
+        let _ = self.send(ToHost::Leave);
+    }
+
+    fn send(&mut self, message: ToHost) -> Result<(), Lost> {
+        self.link.send(encode(&message))
     }
 
     /// What's been said since it was last asked.
@@ -869,6 +872,33 @@ mod tests {
             ask(&mut lobby, "Carol", "").err(),
             refused(Refusal::Full).err()
         );
+    }
+
+    #[test]
+    fn a_side_taken_on_coming_in_has_no_handicap_and_is_freed_on_leaving() {
+        let mut lobby = Lobby::new(
+            Staging {
+                observers: false,
+                ..staging()
+            },
+            String::new(),
+        );
+        let (ours, mut host) = pair();
+        lobby.admit(ours, "Host", "").unwrap();
+        let easy = Choice::Handicap(1, Some(Id::from("easy")));
+        host.send(encode(&ToHost::Choose(easy))).unwrap();
+        lobby.turn();
+        assert_eq!(lobby.staging().handicaps.len(), 1);
+        let mut bob = ask(&mut lobby, "Bob", "").unwrap();
+        assert_eq!(lobby.staging().guest(2).unwrap().side, Some(1));
+        assert!(lobby.staging().handicaps.is_empty());
+        bob.choose(Choice::Nation(1, Some(Id::from("usa"))))
+            .unwrap();
+        lobby.turn();
+        assert_eq!(lobby.staging().nations.len(), 1);
+        bob.leave();
+        lobby.turn();
+        assert!(lobby.staging().nations.is_empty());
     }
 
     #[test]

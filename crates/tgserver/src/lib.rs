@@ -16,6 +16,7 @@ pub mod quic;
 #[cfg(test)]
 mod testing;
 
+use std::collections::hash_map;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
@@ -29,6 +30,7 @@ pub use client::{Client, NotJoined, enter, join, welcome};
 pub use clock::Clock;
 pub use film::{Film, NotFilm};
 pub use host::{Event, Host, Refusal, allows, refuse, sayable};
+use link::ping;
 pub use link::{Link, Local, Lost, pair};
 pub use lobby::{COUNTDOWN, Choice, Entry, Guest, Lobby, Staging, Told, enter_lobby};
 pub use names::{NAME_LONGEST, NUMBERED, Naming, TAKEN_OVER, default_name, name, unique};
@@ -136,14 +138,11 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         .flat_map(|f| &f.builds);
     let mut buildable = HashMap::new();
     for t in builds {
-        if buildable.contains_key(t) {
-            continue;
-        }
-        match raising.building(t) {
-            Some(b) => {
-                buildable.insert(t.clone(), b);
+        if let hash_map::Entry::Vacant(entry) = buildable.entry(t.clone()) {
+            match raising.building(t) {
+                Some(b) => _ = entry.insert(b),
+                None => debug!("can't build {t}"),
             }
-            None => debug!("can't build {t}"),
         }
     }
     let mut recruit_lists = game.recruit_lists();
@@ -166,6 +165,8 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     let combat_value_rules = game.combat_value_rules();
     let combat_means =
         tgsim::CombatMeans::of(&combat_profiles, &combat_value_rules, &hero_templates);
+    let defaults = tgsim::Rules::default();
+    let [climbing, falling] = game.efficiency_rates();
     let mut rules = tgsim::Rules {
         seed,
         terrain_rules: game.terrain_rules(),
@@ -224,37 +225,20 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         numbered: game.numbered(),
         sustaining: game.sustaining(),
         team_victory: game.team_victory(),
-        ..Default::default()
+        plane_fall_tweak: (game.plane_fall_gravity_tweak()).unwrap_or(defaults.plane_fall_tweak),
+        gravity: game.gravity().unwrap_or(defaults.gravity),
+        efficiency_rates: [
+            climbing.unwrap_or(defaults.efficiency_rates[0]),
+            falling.unwrap_or(defaults.efficiency_rates[1]),
+        ],
+        catchup_speed: game.catchup_speed().unwrap_or(defaults.catchup_speed),
+        siege_seconds: game.siege_seconds().unwrap_or(defaults.siege_seconds),
+        kill_credit_seconds: (game.kill_credit_seconds()).unwrap_or(defaults.kill_credit_seconds),
+        attacker_bonus: game.attacker_bonus().unwrap_or(defaults.attacker_bonus),
+        attack_target_first: (game.attack_target_first()).unwrap_or(defaults.attack_target_first),
+        engage_reaction: game.engage_reaction().unwrap_or(defaults.engage_reaction),
+        ..defaults
     };
-    if let Some(tweak) = game.plane_fall_gravity_tweak() {
-        rules.plane_fall_tweak = tweak;
-    }
-    if let Some(gravity) = game.gravity() {
-        rules.gravity = gravity;
-    }
-    let [climbing, falling] = game.efficiency_rates();
-    rules.efficiency_rates = [
-        climbing.unwrap_or(rules.efficiency_rates[0]),
-        falling.unwrap_or(rules.efficiency_rates[1]),
-    ];
-    if let Some(catchup) = game.catchup_speed() {
-        rules.catchup_speed = catchup;
-    }
-    if let Some(seconds) = game.siege_seconds() {
-        rules.siege_seconds = seconds;
-    }
-    if let Some(seconds) = game.kill_credit_seconds() {
-        rules.kill_credit_seconds = seconds;
-    }
-    if let Some(bonus) = game.attacker_bonus() {
-        rules.attacker_bonus = bonus;
-    }
-    if let Some(first) = game.attack_target_first() {
-        rules.attack_target_first = first;
-    }
-    if let Some(seconds) = game.engage_reaction() {
-        rules.engage_reaction = seconds;
-    }
     if let Some(ratio) = rule(tgdata::CITY_VICTORY_RATIO).and_then(tgdata::number) {
         rules.city_victory_ratio = ratio.min(100);
     }
@@ -322,6 +306,11 @@ pub fn nations(
             Some((p.id, nation?.clone()))
         })
         .collect()
+}
+
+/// How many of `voters` it takes to carry a vote: more than half.
+pub(crate) fn majority(voters: usize) -> u32 {
+    voters as u32 / 2 + 1
 }
 
 /// A seed no match has had, for one that isn't given its own.

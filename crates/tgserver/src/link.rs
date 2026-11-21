@@ -39,6 +39,13 @@ impl<L: Link + ?Sized> Link for Box<L> {
     }
 }
 
+/// How long, in whole milliseconds, a message takes over `link` to the
+/// other end and back, where that's measured.
+pub(crate) fn ping(link: &impl Link) -> Option<u32> {
+    let millis = link.round_trip()?.as_millis();
+    Some(u32::try_from(millis).unwrap_or(u32::MAX))
+}
+
 /// An end of a link to another part of the same program.
 #[derive(Debug)]
 pub struct Local {

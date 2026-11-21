@@ -50,9 +50,9 @@ impl Pauses {
             return Vec::new();
         };
         let tally = |votes: &BTreeSet<u32>| {
-            let sided = people.iter().filter(|p| p.side.is_some()).count() as u32;
+            let sided = people.iter().filter(|p| p.side.is_some()).count();
             let votes = votes.iter().filter(|&&c| side(c).is_some()).count() as u32;
-            let needed = sided / 2 + 1;
+            let needed = crate::majority(sided);
             Votes { votes, needed }
         };
         // Three or more people, observers among them, take a vote.
