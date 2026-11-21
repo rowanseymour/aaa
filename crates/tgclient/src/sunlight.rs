@@ -92,6 +92,11 @@ impl Sunlight {
     }
 }
 
+/// `colours` with all their light multiplied `by` a dimmer.
+fn dimmed(colours: Colours, by: f32) -> Colours {
+    colours.map(|c| c.map(|v| v * by))
+}
+
 /// `a` moved `t` of the way to `b`.
 fn mix(a: Colours, b: Colours, t: f32) -> Colours {
     std::array::from_fn(|i| std::array::from_fn(|c| a[i][c] + (b[i][c] - a[i][c]) * t))
@@ -128,12 +133,10 @@ pub(crate) fn follow(
     [sun.target_diffuse, sun.target_ambient, sun.target_specular] = heading;
     effects.set_night(loaded.game.night(diffuse));
     // Night effects go by the sun itself, not by how a pause dims it.
-    let dim = |c: [f32; 3]| match paused {
-        true => c.map(|v| v * sunlight.paused),
-        false => c,
-    };
+    let by = if paused { sunlight.paused } else { 1.0 };
+    let [diffuse, ambient_color, _] = dimmed(shown, by);
     for mut light in &mut lights {
-        tgrender::light::color_lights(&mut light, &mut ambient, dim(diffuse), dim(ambient_color));
+        tgrender::light::color_lights(&mut light, &mut ambient, diffuse, ambient_color);
     }
 }
 
@@ -166,6 +169,12 @@ mod tests {
 
     fn near(a: Colours, b: Colours) -> bool {
         (a.iter().flatten().zip(b.iter().flatten())).all(|(x, y)| (x - y).abs() < 1e-4)
+    }
+
+    #[test]
+    fn a_dimmer_scales_every_colour() {
+        assert!(near(dimmed(DAY, 0.8), [[0.8; 3], [0.64; 3], [0.0; 3]]));
+        assert!(near(dimmed(DUSK, 1.0), DUSK));
     }
 
     #[test]

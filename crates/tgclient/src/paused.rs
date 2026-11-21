@@ -43,7 +43,15 @@ impl Plugin for PausedPlugin {
 }
 
 /// Puts the label up, hidden, where the layouts have it.
-fn spawn(mut commands: Commands, loaded: Res<Loaded>, mut faces: ResMut<Assets<Face>>) {
+fn spawn(
+    mut commands: Commands,
+    loaded: Res<Loaded>,
+    mut faces: ResMut<Assets<Face>>,
+    // Kept from match to match, so the face is read only once.
+    mut letters: Local<Letters>,
+    mut since: ResMut<Since>,
+) {
+    *since = Since::default();
     let game = &loaded.game;
     let Some(widget) = game.screen_widget(FILE, LABEL) else {
         return;
@@ -69,7 +77,6 @@ fn spawn(mut commands: Commands, loaded: Res<Loaded>, mut faces: ResMut<Assets<F
         .font
         .as_deref()
         .unwrap_or(crate::hud::original::lettering::PLAIN);
-    let mut letters = Letters::default();
     letters.read(game, &mut faces, ids);
     let font = letters.font(ids);
     let FontSize::Px(size) = font.font_size else {
