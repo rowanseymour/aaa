@@ -44,6 +44,7 @@ impl Plugin for ModernHudPlugin {
             Update,
             (
                 minimap::tint,
+                object_display::emblem,
                 supply::show_cycle_button,
                 (
                     object_display::lay_out.in_set(super::LayOut),
