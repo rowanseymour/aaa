@@ -1,0 +1,13 @@
+;; How this project's own interface looks for AA: a dark olive and a cream,
+;; to go with the logo, over the beach a match on Normandy starts on.
+
+[ModernInterface]
+{
+	title = AAA
+	logo = logo.png
+	tint = 0.059, 0.078, 0.047
+	light = 0.863, 0.851, 0.776
+	accent = 0.75, 0.6, 0.3
+	backdrop_map = allies06_normandy
+	backdrop_focus = 341, 233
+}

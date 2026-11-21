@@ -7,7 +7,7 @@ use bevy::ui_widgets::Activate;
 use tgrender::textures;
 
 use crate::ui::{Font, Ink, Surface, backed, button, called, disabled, label, panel};
-use crate::{Program, Screen, confirm};
+use crate::{Look, Screen, confirm};
 
 pub struct MenuPlugin;
 
@@ -122,18 +122,22 @@ fn main_menu(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
-    program: Res<Program>,
+    look: Res<Look>,
+    data: Res<crate::Data>,
     // Decoded once and kept, for each return to the menu.
     mut logo: Local<Option<Option<Handle<Image>>>>,
 ) {
     let column = column(&mut commands, MenuPage::Top);
     // Our own emblem, where the game has its logo.
     let logo = logo.get_or_insert_with(|| {
-        let png = program.logo?;
-        textures::decode(png, "logo.png", formats.0, true).map(|i| images.add(i))
+        let path = look.logo.as_deref()?;
+        if !data.0.exists(path) {
+            warn!("no logo {path} in the data");
+        }
+        textures::read(&data.0, path, formats.0, true).map(|i| images.add(i))
     });
     if logo.is_none() {
-        let title = label(program.title, Font::Title, Ink::Body);
+        let title = label(&look.title, Font::Title, Ink::Body);
         commands.spawn((title, ChildOf(column)));
     }
     if let Some(logo) = logo {

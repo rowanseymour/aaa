@@ -80,12 +80,6 @@ mod technologies;
 mod ui;
 mod waypoints;
 
-pub use backdrop::View;
-pub use ui::Palette;
-
-/// For a [`Palette`]'s colours.
-pub use bevy::color::Color;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -127,16 +121,36 @@ pub struct Program {
     pub tag: &'static str,
     /// A map of the game's to name in the usage.
     pub example_map: &'static str,
-    /// Our emblem for the game, as a PNG, crowning the main menu; without
-    /// one that can be read, the menu is headed by [`Program::title`].
-    pub logo: Option<&'static [u8]>,
+}
+
+/// How our interface looks for the game, from this project's own data
+/// ([`GameData::modern_interface`]).
+#[derive(Resource, Clone)]
+pub(crate) struct Look {
     /// What the game is called on its window, and on the main menu
-    /// without a logo.
-    pub title: &'static str,
-    /// The colours the interface is drawn in.
-    pub palette: Palette,
-    /// What the main menu stands over.
-    pub backdrop: View,
+    /// without a logo: the program's name where the data doesn't say.
+    pub(crate) title: String,
+    /// The path in the data of the image crowning the main menu.
+    pub(crate) logo: Option<String>,
+    /// What the main menu stands over, if anything.
+    pub(crate) backdrop: Option<backdrop::View>,
+}
+
+impl Look {
+    fn new(program: &Program, look: &tgdata::defs::ModernInterface) -> Look {
+        let backdrop = look.backdrop_map.clone().and_then(|map| {
+            let Some(focus) = look.backdrop_focus else {
+                warn!("no backdrop_focus for the backdrop {map}");
+                return None;
+            };
+            Some(backdrop::View { map, focus })
+        });
+        Look {
+            title: (look.title.clone()).unwrap_or_else(|| program.name.to_string()),
+            logo: look.logo.clone(),
+            backdrop,
+        }
+    }
 }
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -395,8 +409,10 @@ pub fn run(program: Program) -> ExitCode {
         }
     };
 
+    let modern = game.modern_interface();
+    let look = Look::new(&program, &modern);
     let mut app = App::new();
-    let mut window = shot::window(program.title.into(), screenshot.is_some());
+    let mut window = shot::window(look.title.clone(), screenshot.is_some());
     // Its size, and whether it fills the screen, are chosen in the options.
     if let Some(window) = &mut window.primary_window {
         window.resizable = false;
@@ -469,7 +485,8 @@ pub fn run(program: Program) -> ExitCode {
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
-        .insert_resource(ui::Theme::from(program.palette))
+        .insert_resource(ui::Theme::of(&modern))
+        .insert_resource(look)
         .init_resource::<hud::Hud>()
         // The menu's backdrop has a camera too, which stays put.
         .configure_sets(
@@ -817,11 +834,11 @@ pub fn keys_free(chat: Option<Res<chat::Chat>>, dialog: Option<Res<connection::D
 /// Names the match's map in the window's title.
 fn title_window(
     loaded: Res<Loaded>,
-    program: Res<Program>,
+    look: Res<Look>,
     mut window: Option<Single<&mut Window, With<PrimaryWindow>>>,
 ) {
     if let Some(window) = &mut window {
-        window.title = format!("{} - {}", loaded.map.title, program.title);
+        window.title = format!("{} - {}", loaded.map.title, look.title);
     }
 }
 
