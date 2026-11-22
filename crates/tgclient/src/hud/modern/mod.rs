@@ -48,8 +48,8 @@ impl Plugin for ModernHudPlugin {
                 object_display::spawn,
                 resource_bar::spawn,
                 idle::spawn,
-                special_ops::spawn,
-                groups::spawn,
+                // The panel's tooltips share the strip's box.
+                (groups::spawn, special_ops::spawn).chain(),
                 messages::place,
                 crate::hud::original::load_cards,
                 crate::object_display::redraw,

@@ -1,7 +1,7 @@
 //! Our group strip, hung from the top edge beside the special operations
 //! panel: a slot for each control group showing its picture, or the key
 //! that selects it while there's no such group, with the tooltip under
-//! the strip. What each shows and does is
+//! the strip where the panel's tooltips open. What each shows and does is
 //! [`control_groups`](crate::control_groups)', shared with the original's.
 
 use bevy::picking::hover::Hovered;
@@ -17,16 +17,18 @@ use crate::ui::{self, Blocks, Click, Edge, Font, ImageCache, Ink, Surface, label
 /// A slot's side, and how far in its picture is drawn.
 const SLOT: f32 = 36.0;
 const INSET: f32 = 2.0;
-/// A slot's corners, rounder than that would leave too little square
-/// for its picture.
-const CORNER: f32 = 6.0;
 
 /// How tall and wide the strip is, for what goes under and beside it.
 pub const HEIGHT: f32 = SLOT + 2.0 * GAP;
-pub const WIDTH: f32 = GROUPS as f32 * SLOT + (GROUPS + 1) as f32 * GAP;
+pub const WIDTH: f32 = GROUPS as f32 * SLOT + 2.0 * GAP;
 
 /// The widest the tooltip under the strip is before its words wrap.
 const TIP_WIDTH: f32 = 300.0;
+
+/// The box the strip's tooltips are said in, which the special operations
+/// panel's share.
+#[derive(Resource)]
+pub struct SharedTip(pub Entity);
 
 /// A slot's picture of its group.
 #[derive(Component)]
@@ -36,28 +38,44 @@ pub struct Picture;
 #[derive(Component)]
 pub struct KeyLabel;
 
-/// Spawns the strip on the window's top edge, `left` of its left edge.
+/// Spawns the strip on the window's top edge, clear of the special
+/// operations panel, and its tooltip's box where the panel's open.
 pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crate::Leaders>) {
-    let left = super::special_ops::beside(&local, &leaders);
+    let at = super::special_ops::tips_at(&local, &leaders);
     let said = commands
         .spawn((
-            ui::hint_box(Node::default(), px(TIP_WIDTH)),
+            ui::hint_box(
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(at.x),
+                    top: px(at.y),
+                    ..default()
+                },
+                px(TIP_WIDTH),
+            ),
             // Over the message log, which it opens onto.
             GlobalZIndex(ui::layer::HUD_TOP),
+            DespawnOnExit(super::DRAWN),
         ))
         .id();
-    let strip = commands
+    commands.insert_resource(SharedTip(said));
+    commands
         .spawn((
             Blocks,
             ui::Docks(said),
             ui::hanging(
                 Surface::Hud,
                 Node {
+                    position_type: PositionType::Absolute,
+                    top: px(0),
+                    left: px(at.x),
                     padding: UiRect::all(px(GAP)),
-                    column_gap: px(GAP),
                     ..default()
                 },
             ),
+            // Under the special operations' tooltips, which open onto it.
+            GlobalZIndex(ui::layer::HUD),
+            DespawnOnExit(super::DRAWN),
         ))
         .with_children(|strip| {
             for n in 0..GROUPS {
@@ -74,14 +92,14 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                             Node {
                                 width: px(SLOT),
                                 height: px(SLOT),
+                                // Square and touching, as one row of tiles.
                                 border: UiRect::all(px(1)),
-                                border_radius: BorderRadius::all(px(CORNER)),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
                         ),
-                        Edge::Border,
+                        Edge::Clear,
                     ))
                     .with_children(|slot| {
                         slot.spawn((
@@ -101,25 +119,7 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                         slot.spawn((KeyLabel, label("", Font::Hud, Ink::Muted)));
                     });
             }
-        })
-        .id();
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(0),
-                left: px(left),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Start,
-                row_gap: px(GAP),
-                ..default()
-            },
-            Pickable::IGNORE,
-            // Under the special operations' tooltips, which open onto it.
-            GlobalZIndex(ui::layer::HUD),
-            DespawnOnExit(super::DRAWN),
-        ))
-        .add_children(&[strip, said]);
+        });
 }
 
 /// Shows each slot's group's picture, or its key while there's no group,
@@ -136,7 +136,7 @@ pub fn show(
     mut keys: Query<(&mut Text, &mut Visibility), (With<KeyLabel>, Without<Picture>)>,
 ) {
     for (button, hovered, mut edge, children) in &mut slots {
-        edge.set_if_neq(Edge::lit(false, hovered.get(), Edge::Border));
+        edge.set_if_neq(Edge::lit(false, hovered.get(), Edge::Clear));
         let shown = &strip.0[button.0];
         let picture = match shown {
             Shown::Group(Some(path)) => cache.get(&loaded.game, &mut images, path),
