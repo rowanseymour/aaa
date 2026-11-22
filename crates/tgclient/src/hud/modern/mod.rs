@@ -15,6 +15,7 @@ pub mod object_display;
 pub mod resource_bar;
 pub mod special_ops;
 pub mod supply;
+pub mod times;
 
 /// While a match is played with our interface.
 pub(crate) const DRAWN: InMatch = InMatch(Hud::Modern);
@@ -58,6 +59,7 @@ impl Plugin for ModernHudPlugin {
                     // For the buttons on the cards it borrows from the original's.
                     crate::hud::original::show_pressables,
                     resource_bar::show,
+                    times::show,
                 )
                     .in_set(super::Draw),
                 (special_ops::refresh, special_ops::tips)

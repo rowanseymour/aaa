@@ -1574,6 +1574,9 @@ pub struct UVars {
     pub unit_acknowledgement: Option<bool>,
     #[serde(rename = "UIEventFilterChatSound")]
     pub chat_sound: Option<bool>,
+    /// Whether the options' Elapsed Game Time starts on.
+    #[serde(rename = "ViewShowElapsedGameTime")]
+    pub view_show_elapsed_game_time: Option<bool>,
 }
 
 /// A set of hotkeys players can choose.
