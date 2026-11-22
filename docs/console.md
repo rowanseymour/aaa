@@ -56,7 +56,7 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `uitint [r g b [r g b]]` | shades the interface's backgrounds, borders and text from a dark colour toward a light one, each part 0 to 1; without, says them |  |  |
 | `resolution [width height]` | resizes the window; without, says its size |  |  |
 
-## Developing
+## Developer Only
 
 These run only with --dev, in a match no other machine shares.
 
