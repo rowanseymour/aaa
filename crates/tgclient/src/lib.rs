@@ -476,6 +476,7 @@ pub fn run(program: Program) -> ExitCode {
                     Update,
                     shot::Capture
                         .run_if(in_state(Screen::Match))
+                        .run_if(displays::loaded)
                         .run_if(shot_due),
                 );
         }
