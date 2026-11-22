@@ -38,7 +38,7 @@ pub fn spawn(
         formats.0,
     );
     commands.spawn((
-        rim_button(Quadrant::TopLeft.at(0), glyph, Click::TOGGLE),
+        rim_button(Quadrant::TopLeft.first(), glyph, Click::TOGGLE),
         Named::new(&bindings, ACTIVATE, name),
         (Asks::new(ACTIVATE), Hint(help)),
         crate::ui::called(BUTTON),

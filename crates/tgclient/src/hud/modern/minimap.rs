@@ -60,23 +60,19 @@ pub fn spawn(mut commands: Commands, minimap: Res<Minimap>) {
 #[derive(Component)]
 pub struct Backdrop;
 
-/// Places the round buttons on the rim, once they're all spawned, and
-/// draws the backdrop under them.
-pub fn lay_out_rim(
-    mut buttons: Query<(&Rim, &mut Node)>,
+/// Draws the backdrop under the disc and the round buttons on its rim,
+/// once they're all spawned.
+pub fn draw_backdrop(
+    buttons: Query<&Rim>,
     mut backdrops: Query<&mut ImageNode, With<Backdrop>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let rims: Vec<Rim> = buttons.iter().map(|(rim, _)| *rim).collect();
-    let corner = crate::ui_scale::MARGIN + DISC / 2.0 - RIM_BUTTON / 2.0;
-    for (rim, mut node) in &mut buttons {
-        let at = corner + rim.centre(&rims);
-        node.left = px(at.x);
-        node.bottom = px(at.y);
-    }
-    let centres: Vec<Vec2> = (rims.iter())
-        .map(|r| r.centre(&rims) / (DISC / 2.0))
-        .collect();
+    let rims: Vec<&Rim> = buttons.iter().collect();
+    debug_assert!(
+        (rims.iter().enumerate()).all(|(i, r)| !rims[..i].contains(r)),
+        "two buttons share a spot on the minimap's rim"
+    );
+    let centres: Vec<Vec2> = (rims.iter()).map(|r| r.centre() / (DISC / 2.0)).collect();
     let backdrop = images.add(silhouette(BACKDROP_TEXELS, |x, y| {
         backdrop_shape(&centres, Vec2::new(x, -y))
     }));
