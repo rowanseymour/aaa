@@ -353,7 +353,7 @@ static PRESSABLE: [Press; 10] = [
     Press::toggle(
         "ButtonChat",
         crate::chat::ACTIVATE,
-        "control.chat",
+        crate::chat::BUTTON,
         Follows::Chat,
     ),
     Press::push(

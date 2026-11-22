@@ -20,6 +20,8 @@ const AT: Vec2 = Vec2::new(318.0, 496.0);
 const WIDTH: f32 = 461.0;
 /// What opens the bar, as the hotkey files name it.
 pub(crate) const ACTIVATE: &str = "ChatActivate";
+/// What the button that opens the bar is called, in either interface.
+pub(crate) const BUTTON: &str = "control.chat";
 
 /// What the bar says.
 #[derive(Resource, Clone)]
@@ -119,6 +121,15 @@ impl Plugin for ChatPlugin {
 impl Chat {
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// The bar, opened with nothing typed.
+    #[cfg(test)]
+    pub(crate) fn opened() -> Chat {
+        Chat {
+            open: true,
+            ..default()
+        }
     }
 }
 
