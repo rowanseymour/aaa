@@ -20,6 +20,11 @@
   the reading crate's module docs. Elsewhere, link to them.
 - Intentional differences from the original go in `docs/divergences.md`.
 
+## Running
+
+- Run the game with `--headless` when driving it from the console, so it
+  opens no window and plays no sound.
+
 ## Docs
 
 - Say "this project" rather than its name, so a rename stays cheap.
