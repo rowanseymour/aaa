@@ -46,6 +46,7 @@ mod hud;
 mod intent;
 mod keys;
 mod lan;
+mod leaving;
 mod loading;
 mod lobby;
 mod marks;
@@ -162,6 +163,7 @@ enum Screen {
     Lobby,
     Loading,
     Match,
+    Debriefing,
 }
 
 /// The game's data, which a match shares as it's loaded and played.
@@ -545,10 +547,14 @@ pub fn run(program: Program) -> ExitCode {
             fields::FieldsPlugin,
             lan::LanPlugin,
             staging::StagingPlugin,
+            leaving::LeavingPlugin,
             times::TimesPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
-        .add_systems(OnEnter(Screen::Loading), (open_screen, messages::start))
+        .add_systems(
+            OnEnter(Screen::Loading),
+            (leaving::note_kept, (open_screen, messages::start)).chain(),
+        )
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
             OnEnter(Screen::Match),

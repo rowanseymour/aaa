@@ -4,16 +4,14 @@
 use bevy::prelude::*;
 use tgsim::Outcome;
 
-use bevy::ui_widgets::Activate;
-
 use crate::confirm::{self, ask, nothing, offer};
 use crate::{Local, Orders, Screen, Sim, menu};
 
 /// What the dialog says.
 #[derive(Resource)]
 pub struct Words {
-    won: String,
-    lost: String,
+    pub(crate) won: String,
+    pub(crate) lost: String,
     end: String,
     keep_playing: String,
     /// Not the game's words: there, another machine takes over as host.
@@ -101,7 +99,7 @@ fn tell(
         asked,
         words.end.clone(),
         "outcome.end",
-        ask_end,
+        crate::leaving::ask_end,
     );
     if won {
         let keep = words.keep_playing.clone();
@@ -131,20 +129,21 @@ fn tell_host_gone(
     }
     let asked = ask(&mut commands, Screen::Match, words.host_gone.clone());
     let end = words.end.clone();
-    offer(&mut commands, asked, end, "outcome.end", ask_end);
+    offer(
+        &mut commands,
+        asked,
+        end,
+        "outcome.end",
+        crate::leaving::ask_end,
+    );
     offer(&mut commands, asked, ok, "outcome.ok", nothing);
-}
-
-/// Asks whether to end the mission, which leaves the game, and does if so.
-fn ask_end(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) {
-    let question = words.sure.clone();
-    confirm::confirm(&mut commands, &words, Screen::Match, question, menu::quit);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::state::app::StatesPlugin;
+    use bevy::ui_widgets::Activate;
     use tgmap::{Domain, Pathing};
     use tgsim::{Sides, World};
 

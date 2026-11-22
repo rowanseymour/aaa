@@ -124,7 +124,7 @@ pub(crate) struct ContinueSlot;
 /// window responding. A thread of its own rather than a task pool's, which
 /// would hold up quitting mid-load until it finished.
 #[derive(Resource)]
-struct Preparing {
+pub(crate) struct Preparing {
     thread: std::thread::JoinHandle<Result<Prepared, String>>,
     /// Where the thread has got to.
     stage: Arc<Mutex<Stage>>,
@@ -357,6 +357,9 @@ pub(crate) fn load(world: &mut bevy::ecs::world::World) {
         let side = *world.resource::<Side>();
         let name = world.resource::<Nickname>().0.clone();
         let (from_menu, back) = (pending.from_menu, pending.back);
+        world.insert_resource(crate::leaving::Mission {
+            title: pending.title.clone(),
+        });
         // Heard from all the while the match is set up, as its host hears
         // from the game.
         let joined = pending.joined.take().map(|(link, welcome, at)| {
