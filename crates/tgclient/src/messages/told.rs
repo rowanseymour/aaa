@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use tgserver::protocol::Said;
-use tgsim::{Channel, Notice, Pause, Pausing, Piece, Relation, Seen, Votes, World};
+use tgsim::{Channel, Notice, Pause, Pausing, Piece, Relation, Seen, Standing, Votes, World};
 
 use crate::actions::{self, Aim, fill};
 use crate::sound::Sounds;
@@ -537,6 +537,24 @@ pub(crate) fn told(
             vec![look.name(technology.as_str()).into()],
             None,
         ),
+        Notice::Objective {
+            player,
+            text,
+            primary,
+            standing,
+        } if ours(player) => {
+            let event = match (standing, primary) {
+                (Some(Standing::Active), true) => "display_when_loading_primary_objective",
+                (Some(Standing::Active), false) => "display_when_loading_secondary_objective",
+                (Some(Standing::Completed), true) => "complete_primary_objective",
+                (Some(Standing::Completed), false) => "complete_secondary_objective",
+                (Some(Standing::Failed), true) => "failed_primary_objective",
+                (Some(Standing::Failed), false) => "failed_secondary_objective",
+                (None, true) => "remove_primary_objective",
+                (None, false) => "remove_secondary_objective",
+            };
+            Told::Event(event, vec![text.clone().into()], None)
+        }
         Notice::TechnologyLost { player, technology } if ours(player) => Told::Event(
             "technology_lost",
             vec![look.name(technology.as_str()).into()],

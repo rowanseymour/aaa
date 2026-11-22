@@ -175,6 +175,10 @@ impl World {
             self.buildings[b].id
         );
         self.organizations[r].hq = self.hq_of(b);
+        self.happen(crate::triggers::Happening::Recruited {
+            player: self.buildings[b].owner,
+            template: self.organizations[r].template.clone(),
+        });
         self.notices.push(Notice::PutOut {
             player: self.buildings[b].owner,
             building: b,

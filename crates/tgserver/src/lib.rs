@@ -248,6 +248,14 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(ratio) = rule(tgdata::CITY_VICTORY_RATIO).and_then(tgdata::number) {
         rules.city_victory_ratio = ratio.min(100);
     }
+    let difficulty =
+        (game.lobby_rules().into_iter()).find(|r| r.id == Id::from(tgdata::DIFFICULTY_LEVEL));
+    if let Some(level) = difficulty {
+        if let tgdata::RuleKind::Choice(choices) = &level.kind {
+            rules.difficulties = choices.iter().map(|c| c.id.clone()).collect();
+        }
+        rules.difficulty = Some(Id::from(level.value(&world_rules)));
+    }
     let mut world = World::new(&map, rules);
     let fog = rule(tgdata::FOG_OF_WAR).and_then(FogSetting::named);
     world.set_fog(fog.unwrap_or_else(|| game.fog_setting()));

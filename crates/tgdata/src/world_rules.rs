@@ -15,6 +15,7 @@ pub const SUN: &str = "Sun";
 pub const STOCKPILE: &str = "ResourceStockpileDefault";
 pub const STARTING_EXPERIENCE: &str = "StartingExperience";
 pub const CITY_VICTORY_RATIO: &str = "CityVictoryRatio";
+pub const DIFFICULTY_LEVEL: &str = "DifficultyLevel";
 
 /// What world rules are set to, as the data writes them, by the rule's
 /// id.

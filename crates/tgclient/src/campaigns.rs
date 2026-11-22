@@ -22,7 +22,7 @@ use crate::{Data, Screen, Seed, confirm, menu};
 const FILE: &str = "campaigns.toml";
 
 /// The world rule a campaign's difficulty sets.
-pub(crate) const DIFFICULTY: &str = "DifficultyLevel";
+pub(crate) const DIFFICULTY: &str = tgdata::DIFFICULTY_LEVEL;
 
 pub struct CampaignsPlugin;
 

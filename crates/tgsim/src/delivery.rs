@@ -322,9 +322,12 @@ impl World {
         let building = &self.buildings[b];
         let (player, from, facing) = (building.owner, building.position, building.facing);
         let (entry, hq) = (self.entry(from, to), self.hq_of(b));
+        let template = organization.template.clone();
         let Some(d) = self.airlift(player, organization, entry, to, facing, hq) else {
             return false;
         };
+        // Heard as it sets off, not as it lands.
+        self.happen(crate::triggers::Happening::Recruited { player, template });
         self.notices.push(Notice::Recruited {
             player,
             building: b,
