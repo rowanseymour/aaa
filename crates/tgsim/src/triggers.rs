@@ -2960,4 +2960,44 @@ mod tests {
         assert!(w.carry_out(&attack(7)));
         assert_eq!(w.stockpile(2), money);
     }
+
+    #[test]
+    fn a_triggers_slower_move_holds_through_a_fight_on_the_way() {
+        let rifle = crate::testing::rifle(8.0, 50.0);
+        let fighters = vec![soldier(vec![rifle]), soldier(vec![])];
+        let mut w = with(battle(&[1, 2], fighters, at_war()), vec![], &[]);
+        w.organizations[1].formations[0].aggressive = false;
+        let top = w.regiment_speed(0);
+        let moves = element(
+            "actor_moves_to_location",
+            vec![actor_id(1), place([10.0, 38.0]), fixed(0.5)],
+        );
+        assert!(w.carry_out(&moves));
+        let mut fought = false;
+        for _ in 0..(60.0 / crate::TICK) as usize {
+            w.tick();
+            fought |= !w.organizations[0].engaged.is_empty();
+            if fought && w.organizations[0].engaged.is_empty() && w.underway(0) {
+                break;
+            }
+        }
+        assert!(fought, "never fought");
+        assert!(w.underway(0), "never set off again");
+        assert_eq!(w.regiment_speed(0), top / 2.0);
+    }
+
+    #[test]
+    fn a_lone_unit_switched_off_by_its_own_id_is_left_alone() {
+        let mut truck = crate::testing::truck();
+        (truck.id, truck.owner, truck.members[0].id) = (5, 1, 6);
+        let mut w = World::from_organizations(
+            at_war(),
+            tgmap::Pathing::uniform(40, tgmap::Domain::Land),
+            &[truck],
+        );
+        assert!(w.carry_out(&element("sai_disabled_for_actor", vec![actor_id(6)])));
+        assert!(!w.computer_may_order(0));
+        assert!(w.carry_out(&element("sai_enabled_for_actor", vec![actor_id(6)])));
+        assert!(w.computer_may_order(0));
+    }
 }

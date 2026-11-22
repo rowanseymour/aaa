@@ -620,7 +620,14 @@ impl World {
                     || own.is_some_and(|(_, p)| within(at, p, ARRIVAL_REACH))
                 {
                     true => self.end_route(r),
-                    false => self.organizations[r].route_end = None,
+                    false => {
+                        let organization = &mut self.organizations[r];
+                        organization.route_end = None;
+                        // Stopped short of the end for good, not to fight.
+                        if organization.resume.is_none() {
+                            organization.ordered_speed = None;
+                        }
+                    }
                 }
                 continue;
             }

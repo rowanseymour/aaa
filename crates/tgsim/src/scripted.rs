@@ -298,7 +298,13 @@ impl World {
     /// this index into [`World::organizations`].
     pub fn computer_may_order(&self, organization: usize) -> bool {
         let r = &self.organizations[organization];
-        self.computer_may_play(r.owner) && !self.triggers.computer.off_for_things.contains(&r.id)
+        let off = &self.triggers.computer.off_for_things;
+        // A lone unit can be named by its own id.
+        let lone = match &r.units[..] {
+            [u] if self.lone(organization) => off.contains(&self.units[*u].id),
+            _ => false,
+        };
+        self.computer_may_play(r.owner) && !off.contains(&r.id) && !lone
     }
 
     fn stop_by_trigger(&mut self, organization: usize) {
