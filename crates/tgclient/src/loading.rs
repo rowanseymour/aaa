@@ -99,19 +99,22 @@ pub(crate) struct Readying {
     wait: bool,
 }
 
-/// A loading screen left up over a match that's set up, until its host,
-/// which is elsewhere and may be waiting on others, begins it.
+/// A loading screen left up over a match that's started, until its first
+/// tick has been played. Its map's triggers first run then, and may change
+/// how it looks from the start (its sun, say), so nothing before that is
+/// shown. A host elsewhere may hold that tick until every copy is set up.
 #[derive(Component)]
-pub(crate) struct AwaitingHost;
+pub(crate) struct AwaitingPlay;
 
-/// Takes down a loading screen that's [`AwaitingHost`] once the match has
-/// begun, or its host has gone.
+/// Takes down a loading screen that's [`AwaitingPlay`] once the match's
+/// first tick has been played, or its host has gone.
 pub(crate) fn stop_awaiting(
     mut commands: Commands,
+    sim: Res<Sim>,
     orders: Res<Orders>,
-    awaiting: Query<Entity, With<AwaitingHost>>,
+    awaiting: Query<Entity, With<AwaitingPlay>>,
 ) {
-    if !orders.waiting() {
+    if sim.0.ticks > 0 || orders.gone() {
         awaiting.iter().for_each(|e| commands.entity(e).despawn());
     }
 }
@@ -467,15 +470,13 @@ pub(crate) fn ready(
     commands.remove_resource::<Readying>();
     if !readying.wait {
         orders.ready();
-        if !orders.waiting() {
-            screen.iter().for_each(|e| commands.entity(e).despawn());
-            return;
-        }
         for screen in &screen {
-            commands.entity(screen).insert(AwaitingHost);
+            commands.entity(screen).insert(AwaitingPlay);
         }
-        for mut text in &mut status {
-            text.0 = words.of_stage(Stage::Waiting).into();
+        if orders.waiting() {
+            for mut text in &mut status {
+                text.0 = words.of_stage(Stage::Waiting).into();
+            }
         }
         return;
     }
@@ -494,15 +495,69 @@ pub(crate) fn ready(
     }
 }
 
-/// Takes the loading screen away and starts the match.
+/// Starts the match, leaving the loading screen to go once it's played its
+/// first tick.
 pub(crate) fn start(
-    _: On<bevy::ui_widgets::Activate>,
+    continued: On<bevy::ui_widgets::Activate>,
     mut commands: Commands,
     mut orders: ResMut<Orders>,
     mut time: ResMut<Time<Virtual>>,
+    mut status: Query<&mut Text, With<LoadingStatus>>,
+    words: Res<StageWords>,
     screen: Query<Entity, With<LoadingScreen>>,
 ) {
     orders.ready();
-    screen.iter().for_each(|e| commands.entity(e).despawn());
+    if orders.waiting() {
+        for mut text in &mut status {
+            text.0 = words.of_stage(Stage::Waiting).into();
+        }
+    }
+    commands.entity(continued.event_target()).despawn();
+    for screen in &screen {
+        commands.entity(screen).insert(AwaitingPlay);
+    }
     time.unpause();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_loading_screen_stays_up_until_the_first_tick_has_been_played() {
+        let pathing = tgmap::Pathing::uniform(4, tgmap::Domain::Land);
+        let sim = World::from_organizations(Default::default(), pathing, &[]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Sim(sim))
+            .init_resource::<Orders>()
+            .add_systems(Update, stop_awaiting);
+        let screen = app.world_mut().spawn((LoadingScreen, AwaitingPlay)).id();
+        app.update();
+        assert!(app.world().get_entity(screen).is_ok());
+        app.world_mut().resource_mut::<Sim>().0.tick();
+        app.update();
+        assert!(app.world().get_entity(screen).is_err());
+    }
+
+    #[test]
+    fn the_loading_screen_comes_down_if_the_host_goes_before_the_first_tick() {
+        let (host, orders, sim) = orders::testing::joined(&[1]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Sim(sim))
+            .insert_resource(orders)
+            .add_systems(Update, stop_awaiting);
+        let screen = app.world_mut().spawn((LoadingScreen, AwaitingPlay)).id();
+        app.update();
+        assert!(app.world().get_entity(screen).is_ok());
+        drop(host);
+        let world = app.world_mut();
+        world.resource_scope(|world, mut orders: Mut<Orders>| {
+            orders.step(&mut world.resource_mut::<Sim>().0);
+        });
+        assert_eq!(app.world().resource::<Sim>().0.ticks, 0);
+        app.update();
+        assert!(app.world().get_entity(screen).is_err());
+    }
 }

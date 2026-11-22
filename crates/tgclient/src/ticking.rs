@@ -24,8 +24,8 @@ pub(crate) fn carry_out(mut sim: ResMut<Sim>, mut orders: ResMut<Orders>) {
     log_refused(orders.carry_out(&mut sim.0));
 }
 
-/// The match has been shown once, so the sim may step. Until then what's
-/// shown is how the match begins, however long its first frame took.
+/// The match has been drawn once, so the sim may step: its first tick
+/// comes a tick after that frame, however long the frame took.
 #[derive(Resource)]
 pub(crate) struct Shown;
 
