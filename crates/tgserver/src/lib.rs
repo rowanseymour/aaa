@@ -178,6 +178,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         supplies: game.supplies(),
         supply_rules: game.supply_rules(),
         guard_rules: game.guard_rules(),
+        explore_rules: game.explore_rules(),
         guard_zones: game.guard_zones(),
         remains: game.remains(),
         stances: game.stances(),

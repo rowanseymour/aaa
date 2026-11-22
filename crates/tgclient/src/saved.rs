@@ -160,7 +160,7 @@ impl Saved {
         }
     }
 
-    fn resolution(&self) -> Option<[u32; 2]> {
+    pub fn resolution(&self) -> Option<[u32; 2]> {
         self.chosen.resolution.filter(|r| r.iter().all(|&n| n > 0))
     }
 

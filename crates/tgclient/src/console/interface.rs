@@ -69,6 +69,46 @@ pub(crate) fn click(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
+pub(crate) fn hover(world: &mut World, args: &[&str]) -> Reply {
+    let id = match args {
+        [] => None,
+        [id] => Some(*id),
+        _ => return Err(usage("hover")),
+    };
+    crate::drive::hover(world, id)?;
+    world.resource_mut::<Console>().settling = SETTLE_FRAMES;
+    Ok(String::new())
+}
+
+pub(crate) fn pointer(world: &mut World, args: &[&str]) -> Reply {
+    let placed = &mut world.resource_mut::<crate::pointing::Placed>().0;
+    match args {
+        [] => Ok(placed.map_or("the window's".into(), |[x, y]| format!("{x} {y}"))),
+        ["off"] => {
+            *placed = None;
+            Ok(String::new())
+        }
+        [x, y] => {
+            *placed = Some([number(x)?, number(y)?]);
+            Ok(String::new())
+        }
+        _ => Err(usage("pointer")),
+    }
+}
+
+pub(crate) fn mouse(world: &mut World, args: &[&str]) -> Reply {
+    let button = match args {
+        ["left"] => MouseButton::Left,
+        ["right"] => MouseButton::Right,
+        _ => return Err(usage("mouse")),
+    };
+    crate::drive::mouse(world, button, bevy::input::ButtonState::Pressed);
+    let mut console = world.resource_mut::<Console>();
+    console.held_mouse = Some(button);
+    console.settling = SETTLE_FRAMES;
+    Ok(String::new())
+}
+
 pub(crate) fn press(world: &mut World, args: &[&str]) -> Reply {
     let [chord] = args else {
         return Err(usage("press"));

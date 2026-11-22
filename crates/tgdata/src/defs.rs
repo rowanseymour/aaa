@@ -1463,6 +1463,31 @@ pub struct SVars {
     /// How much nearer the intruder a guard is already after counts.
     #[serde(rename = "GuardOldTargetBias")]
     pub guard_old_target_bias: Option<f32>,
+    /// What [`crate::ExploreRules`] are read from.
+    #[serde(rename = "ExploreNumActorLocations")]
+    pub explore_num_actor_locations: Option<u32>,
+    #[serde(rename = "ExploreNumWaypointLocations")]
+    pub explore_num_waypoint_locations: Option<u32>,
+    #[serde(rename = "ExploreActorRadiusMin")]
+    pub explore_actor_radius_min: Option<f32>,
+    #[serde(rename = "ExploreActorRadiusMax")]
+    pub explore_actor_radius_max: Option<f32>,
+    #[serde(rename = "ExploreWaypointTilesIntoFog")]
+    pub explore_waypoint_tiles_into_fog: Option<u32>,
+    #[serde(rename = "ExploreActorBaseValue")]
+    pub explore_actor_base_value: Option<f32>,
+    #[serde(rename = "ExploreWaypointBaseValue")]
+    pub explore_waypoint_base_value: Option<f32>,
+    #[serde(rename = "ExploreDistanceMultiplier")]
+    pub explore_distance_multiplier: Option<f32>,
+    #[serde(rename = "ExploreDotProductMultiplier")]
+    pub explore_dot_product_multiplier: Option<f32>,
+    #[serde(rename = "ExploreFinishAreaBonus")]
+    pub explore_finish_area_bonus: Option<f32>,
+    #[serde(rename = "ExploreFuzzyFactor")]
+    pub explore_fuzzy_factor: Option<f32>,
+    #[serde(rename = "ExploreInertiaCloseEnough")]
+    pub explore_inertia_close_enough: Option<f32>,
     /// The slowest and fastest a match is played, as powers of two.
     #[serde(rename = "GameSpeedMin")]
     pub game_speed_min: Option<f32>,

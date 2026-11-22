@@ -46,7 +46,7 @@ pub const WIDGET: &str = "ActionButtonsButton";
 /// The game leaves the rest of the commands off an organization's grid.
 /// They're in the game's own order of commands, which decides who keeps a
 /// slot two want.
-const ORDERS: [(&str, Option<Give>); 17] = [
+const ORDERS: [(&str, Option<Give>); 18] = [
     ("kill", Some(Give::Aim(Aim::Attack))),
     ("bombard", Some(Give::Aim(Aim::Bombard))),
     ("guard", Some(Give::Aim(Aim::Guard))),
@@ -56,6 +56,7 @@ const ORDERS: [(&str, Option<Give>); 17] = [
     ("stop", Some(Give::Stop)),
     ("retreat", Some(Give::Aim(Aim::Run))),
     ("rout", Some(Give::Rout)),
+    ("explore", Some(Give::Aim(Aim::Explore))),
     ("disband", Some(Give::Disband)),
     ("unpack", Some(Give::Aim(Aim::Unpack))),
     ("attach", Some(Give::AttachHero)),
@@ -152,10 +153,11 @@ pub enum Aim {
     Unpack,
     /// Given on a thing, not a place.
     Repair,
+    Explore,
 }
 
 impl Aim {
-    pub const ALL: [Aim; 7] = [
+    pub const ALL: [Aim; 8] = [
         Aim::Move,
         Aim::Attack,
         Aim::Bombard,
@@ -163,6 +165,7 @@ impl Aim {
         Aim::Guard,
         Aim::Unpack,
         Aim::Repair,
+        Aim::Explore,
     ];
 }
 

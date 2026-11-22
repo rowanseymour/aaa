@@ -7,7 +7,8 @@ use crate::{Orders, Screen, Sim};
 
 use super::camera::{camera, look_at, pitch, with_camera, yaw, zoom};
 use super::interface::{
-    ask, click, game_pause, game_speed, press, resolution, screenshot, ui, ui_scale, ui_tint, wait,
+    ask, click, game_pause, game_speed, hover, mouse, pointer, press, resolution, screenshot, ui,
+    ui_scale, ui_tint, wait,
 };
 use super::parse::commands;
 use super::play::{
@@ -121,6 +122,25 @@ pub(crate) const VERBS: &[Verb] = &[
         "button",
         "presses a button, by its id; ui lists them",
         |world, args, _| click(world, args),
+    ),
+    verb(
+        "hover",
+        "[button]",
+        "holds the pointer over a button, by its id, as the mouse would be; without one, takes it off",
+        |world, args, _| hover(world, args),
+    ),
+    verb(
+        "pointer",
+        "[x y | off]",
+        "puts the cursor on the map at x y, in metres, in place of the window's; off gives it back; without, says where it is",
+        |world, args, _| pointer(world, args),
+    )
+    .in_match(),
+    verb(
+        "mouse",
+        "left | right",
+        "clicks a mouse button where the cursor is",
+        |world, args, _| mouse(world, args),
     ),
     verb(
         "press",
@@ -273,6 +293,14 @@ pub(crate) const VERBS: &[Verb] = &[
         "organization (x y | other)",
         "posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight",
         |world, args, _| order(world, args, Aim::Guard),
+    )
+    .original()
+    .in_match(),
+    verb(
+        "explore",
+        "organization x y",
+        "has an organization, by its id, explore around x y",
+        |world, args, _| order(world, args, Aim::Explore),
     )
     .original()
     .in_match(),

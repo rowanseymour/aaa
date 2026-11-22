@@ -9,7 +9,7 @@ use tgsim::World;
 
 use crate::marks::SelectionBox;
 use crate::orders::Orders;
-use crate::pointing::pointed;
+use crate::pointing::GroundCursor;
 use crate::ui_scale::place_on_map;
 use crate::{
     Drawn, Focus, Loaded, Local, Selected, SelectedBuilding, Sim, actions, banners, control_groups,
@@ -211,8 +211,7 @@ pub(crate) fn select(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn command(
     buttons: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
+    cursor: GroundCursor,
     loaded: Res<Loaded>,
     local: Res<Local>,
     focus: Res<Focus>,
@@ -235,7 +234,7 @@ pub(crate) fn command(
         return;
     }
     let ground = &loaded.map.ground;
-    let Some(point) = pointed(&windows, &cameras, ground) else {
+    let Some(point) = cursor.at(ground) else {
         return;
     };
     if selected.0.is_empty() {
@@ -459,6 +458,7 @@ pub(crate) fn send(
             },
             actions::Aim::Run => tgsim::Command::Run { organization, to },
             actions::Aim::Guard => tgsim::Command::Guard { organization, to },
+            actions::Aim::Explore => tgsim::Command::Explore { organization, to },
             actions::Aim::Unpack => tgsim::Command::Unpack {
                 organization,
                 at: to,

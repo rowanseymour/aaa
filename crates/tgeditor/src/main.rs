@@ -129,6 +129,7 @@ fn main() -> ExitCode {
     };
     let screenshot = screenshot.map(|path| ShotPlugin {
         path: Some(path.into()),
+        size: tgrender::shot::SIZE,
     });
     let camera = match camera.map(|c| floats(&c)) {
         None => None,

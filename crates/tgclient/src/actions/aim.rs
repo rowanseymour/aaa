@@ -412,7 +412,7 @@ pub fn aim(
         }
         // Given above.
         Aim::Repair | Aim::Bombard => return,
-        Aim::Move | Aim::Attack | Aim::Run | Aim::Guard => {
+        Aim::Move | Aim::Attack | Aim::Run | Aim::Guard | Aim::Explore => {
             crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
             crate::commanding::send(
                 &sim.0,

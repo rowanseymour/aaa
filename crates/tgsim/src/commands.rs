@@ -47,6 +47,7 @@ impl World {
             }
             Command::Run { organization, .. } => self.may_run(player, organization),
             Command::Rout { organization } => self.may_rout(player, organization),
+            Command::Explore { organization, .. } => self.may_explore(player, organization),
             Command::Bombard {
                 organization,
                 target,
@@ -168,6 +169,9 @@ impl World {
                 target,
             } => self.order_bombard(player, organization, target)?,
             Command::Guard { organization, to } => self.order_guard(player, organization, to)?,
+            Command::Explore { organization, to } => {
+                self.order_explore(player, organization, to)?
+            }
             Command::GuardPiece {
                 organization,
                 piece,
@@ -665,6 +669,7 @@ pub(crate) fn steered(command: &Command) -> Option<usize> {
         | Command::Pursue { organization, .. }
         | Command::Bombard { organization, .. }
         | Command::Guard { organization, .. }
+        | Command::Explore { organization, .. }
         | Command::GuardPiece { organization, .. }
         | Command::MoveOnto { organization, .. }
         | Command::Stop { organization }

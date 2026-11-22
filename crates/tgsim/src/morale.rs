@@ -89,6 +89,7 @@ impl World {
             && organization.order == Order::Move
             && organization.engaged.is_empty()
             && organization.guard.is_none()
+            && organization.explore.is_none()
             && !organization.bombarding
             && !organization.arriving
             && organization.unpacked_into.is_none()
@@ -118,6 +119,7 @@ impl World {
             _ if matches!(organization.order, Order::Pursue(_)) => "mind_attacking",
             _ if organization.guarding() => "mind_guarding",
             _ if organization.bombarding => "mind_bombard",
+            _ if organization.explore.is_some() => "mind_exploring",
             _ if self.underway(r) || organization.unpack_at.is_some() => match organization.order {
                 Order::Run => "mind_retreating",
                 Order::Attack | Order::Pursue(_) => "mind_attacking",
@@ -634,7 +636,10 @@ impl World {
             Mind::Routing { .. } => false,
             // Standing still under a guard, or while some of it lands,
             // counts as well as resting.
-            Mind::Steady => (self.idle(r) && !organization.bombarding) || organization.guarding(),
+            Mind::Steady => {
+                (self.idle(r) && !organization.bombarding && organization.explore.is_none())
+                    || organization.guarding()
+            }
         }
     }
 

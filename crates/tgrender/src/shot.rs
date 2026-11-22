@@ -18,8 +18,12 @@ use bevy::render::{Render, RenderApp};
 use bevy::ui::IsDefaultUiCamera;
 use bevy::window::ExitCondition;
 
-/// The size of the picture, the default window's.
+/// The size of the picture unless one is given, the default window's.
 pub const SIZE: UVec2 = UVec2::new(1280, 720);
+
+/// The size of the picture cameras draw into, in place of a window's.
+#[derive(Resource, Clone, Copy)]
+pub struct Frame(pub UVec2);
 
 /// Frames to let the scene build before looking for a quiet moment.
 const SETTLE_FRAMES: u32 = 10;
@@ -51,6 +55,7 @@ pub fn window(title: String, shooting: bool) -> WindowPlugin {
 /// saves it there once the scene is ready, then exits. Goes with [`window`].
 pub struct ShotPlugin {
     pub path: Option<PathBuf>,
+    pub size: UVec2,
 }
 
 /// A frame [`take`] was asked for is on disk, or why it isn't.
@@ -132,8 +137,9 @@ impl Plugin for ShotPlugin {
         let target = app
             .world_mut()
             .resource_mut::<Assets<Image>>()
-            .add(target(SIZE));
+            .add(target(self.size));
         app.insert_resource(compiling.clone())
+            .insert_resource(Frame(self.size))
             .insert_resource(Shot {
                 target,
                 once: self.path.clone().map(Wanted::new),
