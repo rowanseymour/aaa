@@ -267,6 +267,7 @@ impl World {
             turn_to: None,
             group: None,
             group_speed: None,
+            ordered_speed: None,
             taking_part: false,
             entrenched: None,
             morale: 0.0,

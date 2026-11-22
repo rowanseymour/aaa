@@ -1079,14 +1079,14 @@ impl crate::hash::Digest for Leg {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::testing::*;
     use crate::{Command, Pathing};
     use tgmap::{AirGroup, Aircraft, Airfield, Domain, Runway};
 
     /// The airfield's index in [`World::buildings`].
-    const FIELD: usize = 1;
+    pub(crate) const FIELD: usize = 1;
 
     /// A plane of `template` that flies at `speed`, of `health`, armed
     /// with `weapons` and `mana` to pay for them.
@@ -1121,7 +1121,7 @@ mod tests {
     /// one or two fighters, a runway from 5 ahead of it with a second
     /// between take-offs, and an attack costing 150. Player 2 has a house
     /// at 80,50.
-    fn field() -> World {
+    pub(crate) fn field() -> World {
         let mut w = economy();
         w.pathing = Pathing::uniform(120, Domain::Land);
         let mut airfield = building(6, 1, [20.0, 50.0]);

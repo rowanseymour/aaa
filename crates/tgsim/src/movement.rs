@@ -414,10 +414,12 @@ impl World {
     /// member present can.
     pub(crate) fn regiment_speed(&self, r: usize) -> f32 {
         let own = self.unhurried_speed(r);
-        // Its group's, which only ever slows it.
-        self.organizations[r]
-            .group_speed
-            .map_or(own, |s| s.min(own))
+        // Its group's and its order's, which only ever slow it.
+        let r = &self.organizations[r];
+        [r.group_speed, r.ordered_speed]
+            .into_iter()
+            .flatten()
+            .fold(own, f32::min)
     }
 
     /// How fast the organization at `r` moves left to itself: as fast as
@@ -570,6 +572,7 @@ impl World {
     fn end_route(&mut self, r: usize) {
         let organization = &mut self.organizations[r];
         organization.route_end = None;
+        organization.ordered_speed = None;
         if let Some(facing) = organization.turn_to.take() {
             organization.facing = facing;
         }

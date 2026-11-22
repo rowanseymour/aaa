@@ -45,6 +45,7 @@ mod remains;
 mod research;
 mod rules;
 mod schedule;
+mod scripted;
 mod setup;
 mod stances;
 mod strikes;
@@ -277,6 +278,9 @@ pub struct Organization {
     pub group: Option<u32>,
     /// The speed its group hands it to arrive with the rest, while it does.
     group_speed: Option<f32>,
+    /// The speed a trigger's move order set it going at, below its top
+    /// speed, until that move's over.
+    ordered_speed: Option<f32>,
     /// Whether it was inside its group's zone when its group last looked,
     /// and so takes part in its timing.
     taking_part: bool,
@@ -434,6 +438,7 @@ impl Organization {
     /// it forgets. What it's engaged with it stays engaged with.
     pub(crate) fn take_order(&mut self, order: Order) {
         self.order = order;
+        self.ordered_speed = None;
         self.follow = None;
         self.guard = None;
         self.build = None;
@@ -1441,7 +1446,7 @@ digest!(Sides { names, computers } skip {
 });
 
 digest!(Organization {
-    group, group_speed, taking_part,
+    group, group_speed, ordered_speed, taking_part,
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
