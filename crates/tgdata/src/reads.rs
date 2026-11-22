@@ -37,6 +37,7 @@ static READS: LazyLock<HashMap<&str, Vec<Read>>> = LazyLock::new(|| {
         ("banner", vec![read::<defs::Banner>()]),
         ("biome", vec![read::<defs::Biome>()]),
         ("bone", vec![read::<defs::Bone>()]),
+        ("campaign", vec![read::<defs::Campaign>()]),
         ("cursor", vec![read::<defs::Cursor>()]),
         ("damagetype", vec![read::<defs::DamageType>()]),
         ("description", vec![read::<defs::Description>()]),

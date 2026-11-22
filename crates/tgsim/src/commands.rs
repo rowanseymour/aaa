@@ -371,7 +371,7 @@ impl World {
         template: &Id,
     ) -> Result<&tgmap::Organization, Refused> {
         let b = self.standing_for(player, building)?;
-        if b.deploy.is_none() || b.busy() {
+        if b.busy() {
             return Err(Refused::Unable);
         }
         let listed =

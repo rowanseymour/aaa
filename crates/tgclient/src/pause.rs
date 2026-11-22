@@ -29,12 +29,35 @@ struct Overlay;
 #[derive(Resource)]
 pub struct Words {
     connection: String,
+    /// The entry that leaves for the debriefing: once the match is over,
+    /// before then alone, and as an observer.
+    end: String,
+    abort: String,
+    leave: String,
 }
 
 impl Words {
     pub fn of(strings: &tgdata::Strings) -> Self {
+        let said = ui::said(strings);
         Words {
             connection: crate::connection::Words::menu_entry(strings),
+            end: said("ui_game_menu_leave_game_host_game_over", "End Mission"),
+            abort: said(
+                "ui_game_menu_leave_game_host_game_not_over_only_ai_left",
+                "Abort Mission",
+            ),
+            leave: said("game_menu_ButtonLeaveGame_Client_View_text", "Leave Game"),
+        }
+    }
+
+    /// What the entry that leaves for the debriefing reads, if there's one:
+    /// a player with others to play on against resigns instead.
+    fn leaving(&self, over: bool, shared: bool, side: bool) -> Option<&str> {
+        match (over, shared, side) {
+            (true, _, _) => Some(&self.end),
+            (false, false, _) => Some(&self.abort),
+            (false, true, false) => Some(&self.leave),
+            (false, true, true) => None,
         }
     }
 }
@@ -153,10 +176,14 @@ fn toggle(
         focus.set_if_neq(Focus::Nothing);
         boxes.iter_mut().for_each(|mut v| *v = Visibility::Hidden);
         // A side of the player's own that's still in a match going on.
-        let playing = |&side: &u32| sim.is_some_and(|s| !s.0.over && s.0.held(side));
+        let playing = |&side: &u32| sim.as_ref().is_some_and(|s| !s.0.over && s.0.held(side));
         let side = local.and_then(|l| l.0).filter(playing);
+        let over = sim.as_ref().is_some_and(|s| s.0.over);
+        let shared = orders.players().is_some();
+        let leaving = words.leaving(over, shared, side.is_some());
+        let leaving = leaving.map(str::to_string);
         let side = side.filter(|&side| orders.may(&Action::Resign(side)));
-        open(&mut commands, &words, menu, orders, side);
+        open(&mut commands, &words, menu, orders, side, leaving);
     }
 }
 
@@ -167,6 +194,7 @@ fn open(
     mut menu: ResMut<PauseMenu>,
     mut orders: ResMut<Orders>,
     side: Option<u32>,
+    leaving: Option<String>,
 ) {
     menu.open = true;
     // A match hosted elsewhere is other people's too, and plays on.
@@ -211,6 +239,15 @@ fn open(
                 ChildOf(column),
             ))
             .observe(ask_resign(side));
+    }
+    if let Some(leaving) = leaving {
+        commands
+            .spawn((
+                ui::button(leaving, Font::Large),
+                ui::called("pause.leave"),
+                ChildOf(column),
+            ))
+            .observe(crate::leaving::ask_end);
     }
     commands
         .spawn((
@@ -493,6 +530,16 @@ mod tests {
         let world = app.world_mut();
         let mut texts = world.query::<&Text>();
         texts.iter(world).map(|t| t.0.clone()).collect()
+    }
+
+    #[test]
+    fn the_entry_that_leaves_suits_how_the_match_stands() {
+        let words = Words::default();
+        // Over, alone, shared: with a side, then without.
+        assert_eq!(words.leaving(true, true, true), Some("End Mission"));
+        assert_eq!(words.leaving(false, false, true), Some("Abort Mission"));
+        assert_eq!(words.leaving(false, true, false), Some("Leave Game"));
+        assert_eq!(words.leaving(false, true, true), None);
     }
 
     #[test]

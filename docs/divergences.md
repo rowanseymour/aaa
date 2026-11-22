@@ -59,6 +59,17 @@ usual folder for a program's settings, rather than in the original's files in th
 game's folder: the original, installed alongside, keeps its own options, which ours
 needn't match. See [saved.rs](../crates/tgclient/src/saved.rs).
 
+## Campaigns
+
+- **Videos.** Campaign videos aren't shown: each counts as watched the moment it's
+  reached, so the mission after it starts at once.
+- **The last mission.** Winning a campaign's last mission goes to its debriefing,
+  where the original cuts to the credits.
+- **Progress.** Kept beside the options file in a file of this project's own, rather
+  than the original's progress files, for the same reason as the options.
+
+See [campaigns.rs](../crates/tgclient/src/campaigns.rs).
+
 ## Multiplayer
 
 Matches between machines work as the original's do: every machine plays its own copy

@@ -8,6 +8,7 @@
 //! share what it keeps: a table read on one is there for the others.
 
 mod audio;
+mod campaigns;
 
 mod combat;
 mod combat_value;
@@ -50,6 +51,7 @@ pub use audio::{
     AnimationAudio, Audio, AudioCategory, AudioControl, AudioPriority, AudioWho, AudioWorld, Cue,
     MusicSettings, ObjectAudio, SoundSwitches, Volumes,
 };
+pub use campaigns::{Campaign, Mission, MissionKind};
 pub use combat::{
     AimHeights, Body, Choice, Damage, Does, Fighter, Flight, FlightKind, PropertyTypes, Ratings,
     Repair, Shape, Targets, Turret, Weapon, WeaponHit, WeaponShown,
@@ -686,6 +688,14 @@ impl GameData {
     /// with its place goes at most, if the data says.
     pub fn catchup_speed(&self) -> Option<f32> {
         self.svars().iter().find_map(|v| v.mover_catchup_speed)
+    }
+
+    /// How far from where a lone recruit is looked for room the search's
+    /// later rings are centred.
+    pub fn recruit_search_step(&self) -> Option<f32> {
+        self.svars()
+            .iter()
+            .find_map(|v| v.recruit_search_radius_small)
     }
 
     /// Seconds since a site's health last changed that it counts as being
