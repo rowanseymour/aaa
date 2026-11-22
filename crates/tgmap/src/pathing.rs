@@ -31,11 +31,16 @@ const EDGE: f32 = 0.0001;
 
 /// The tiles from the one under a box's low corner to the one just short
 /// of its high corner, which may be off the map.
-pub(crate) fn spanned((lo, hi): ([f32; 2], [f32; 2])) -> impl Iterator<Item = Tile> {
+pub(crate) fn spanned(bounds: ([f32; 2], [f32; 2])) -> impl Iterator<Item = Tile> {
+    let (low, high) = span(bounds);
+    (low.y..=high.y).flat_map(move |y| (low.x..=high.x).map(move |x| Tile::new(x, y)))
+}
+
+/// The first and last of the tiles [`spanned`] gives.
+pub(crate) fn span((lo, hi): ([f32; 2], [f32; 2])) -> (Tile, Tile) {
     let low = Tile::at(lo);
     let high = Tile::at([hi[0] - EDGE, hi[1] - EDGE]);
-    let (x1, y1) = (high.x.max(low.x), high.y.max(low.y));
-    (low.y..=y1).flat_map(move |y| (low.x..=x1).map(move |x| Tile::new(x, y)))
+    (low, Tile::new(high.x.max(low.x), high.y.max(low.y)))
 }
 
 /// What a diagonal step between tiles costs, in steps straight across.
@@ -375,7 +380,7 @@ pub(crate) fn covered(o: &Obstacle) -> Vec<Tile> {
 }
 
 /// How far a shape reaches from its centre at most.
-fn reach(shape: Shape) -> f32 {
+pub(crate) fn reach(shape: Shape) -> f32 {
     match shape {
         Shape::Point => 0.0,
         Shape::Circle { radius } => radius,

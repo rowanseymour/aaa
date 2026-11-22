@@ -1,6 +1,7 @@
 //! A map as the editor and the game work with it, built from the stored form
 //! that [`tgck::Map`] reads and the definitions in [`tgdata`].
 
+mod areas;
 mod buildings;
 #[cfg(test)]
 mod fixtures;
@@ -12,6 +13,7 @@ mod tile;
 mod tile_terrains;
 mod units;
 
+pub use areas::{Area, AreaShape};
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
 pub use obstacle::Obstacle;
@@ -85,6 +87,11 @@ pub struct Map {
     pub triggers: Option<Triggers>,
     /// The objectives its triggers can give the sides.
     pub objectives: Vec<Objective>,
+    /// The regions its triggers test things against.
+    pub areas: Vec<Area>,
+    /// The soft shape of each organization template, which places a
+    /// regiment of it in an area.
+    pub organization_soft: HashMap<Id, Shape>,
     /// The world rules the map stores, which those chosen for the match
     /// replace.
     pub rules: StoredRules,
@@ -164,6 +171,7 @@ impl Map {
         let ground = Ground::new(&hm, &mountain, &terrain, &variations)
             .map_err(|e| format!("{name}: {e}"))?;
         let mut things = map.things().map_err(err)?;
+        let areas = things.iter().filter_map(Area::of).collect();
         // Past every id the map has, kept or not, since triggers name things
         // by id.
         let next = next_id(&things);
@@ -305,6 +313,8 @@ impl Map {
             warnings,
             triggers,
             objectives,
+            areas,
+            organization_soft: recruits.organization_soft(),
             rules: StoredRules::read(game, &mut map).map_err(err)?,
         })
     }

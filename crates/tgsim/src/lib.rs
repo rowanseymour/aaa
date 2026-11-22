@@ -6,6 +6,7 @@
 //! in it, controlled by a person or an AI.
 
 mod abilities;
+mod areas;
 mod attach;
 mod capture;
 mod combat;
@@ -1291,6 +1292,7 @@ impl World {
         self.look();
         self.ticks += 1;
         self.clear_remains();
+        self.check_areas();
         self.run_triggers();
         self.settle_outcomes();
         self.clear_out_resigned();
@@ -1507,6 +1509,17 @@ impl Digest for Piece {
         match *self {
             Piece::Organization(r) => (0u8, r).digest(h),
             Piece::Building(b) => (1u8, b).digest(h),
+        }
+    }
+}
+
+impl Digest for crate::targets::Thing {
+    fn digest(&self, h: &mut Hasher) {
+        use crate::targets::Thing;
+        match *self {
+            Thing::Organization(r) => (0u8, r).digest(h),
+            Thing::Unit(u) => (1u8, u).digest(h),
+            Thing::Building(b) => (2u8, b).digest(h),
         }
     }
 }
