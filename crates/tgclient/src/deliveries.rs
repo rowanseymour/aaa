@@ -1,6 +1,6 @@
 //! The aircraft bringing organizations in, flying over the map or diving
 //! to the ground shot down, and what they've dropped coming down under
-//! its parachute.
+//! its parachute; and the aircraft airfields send out.
 
 use std::collections::HashMap;
 
@@ -20,6 +20,8 @@ pub struct Flights {
     /// `None` for one with no model to draw.
     planes: HashMap<usize, Option<Entity>>,
     falling: HashMap<usize, Option<Entity>>,
+    /// Each airfield's plane out, by its sortie's index.
+    sorties: HashMap<usize, Option<Entity>>,
     /// How many of the sim's deliveries, from the first, are over: gone,
     /// with all they brought on the ground.
     over: usize,
@@ -138,6 +140,35 @@ pub fn show(
     // Those over, from the first, are passed over from here on.
     let rest = sim.0.deliveries.iter().skip(flights.over);
     flights.over += rest.take_while(|d| done(d)).count();
+    for (s, sortie) in sim.0.sorties.iter().enumerate() {
+        let flying = matches!(
+            sortie.stage,
+            tgsim::Stage::Out | tgsim::Stage::Home | tgsim::Stage::Falling
+        );
+        let Some(u) = sortie.plane.filter(|_| flying) else {
+            if let Some(Some(e)) = flights.sorties.remove(&s) {
+                commands.entity(e).despawn();
+            }
+            continue;
+        };
+        let unit = &sim.0.units[u];
+        let at = unit.drawn_at(t);
+        let plane = *flights.sorties.entry(s).or_insert_with(|| {
+            let template = unit.template.as_str();
+            let thing = thing_at(ground, Footing::Ground, unit.id, template, at, unit.facing);
+            let mut models = assets.models();
+            let e = drawn
+                .0
+                .spawn_unit(&mut commands, &mut models, &thing, sortie.owner, 0.0)?;
+            commands.entity(e).insert(DespawnOnExit(Screen::Match));
+            Some(e)
+        });
+        let (mut over, turned) = pose(ground, at, unit.facing, None, Footing::Ground);
+        over.y = ground.stand_at(Footing::Ground, at) + sortie.height;
+        if let Some(e) = plane {
+            place(e, over, turned, seen(sortie.owner, at));
+        }
+    }
 }
 
 /// Forgets what was drawn of the last match's deliveries.

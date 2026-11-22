@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 
 use crate::control_groups::ControlGroups;
-use crate::messages::{About, Failed, Refused};
+use crate::messages::{About, By, Failed, Refused};
 use crate::{Loaded, Local, Orders, Selected, SelectedBuilding, Sim};
 
 use super::card_buttons::AimedFor;
@@ -72,6 +72,39 @@ fn guard_at(
         .then_some(piece)
 }
 
+/// Sends the airfield at `b`'s air attack on what's at `focus`, or at
+/// `point` on the ground; the player's own things and allies' it refuses,
+/// telling them so.
+fn air_attack(
+    sim: &tgsim::World,
+    orders: &mut Orders,
+    refused: &mut MessageWriter<Refused>,
+    player: u32,
+    b: usize,
+    focus: crate::Focus,
+    point: [f32; 2],
+) {
+    let on = focus.piece();
+    if let Some(piece) = on {
+        let toward = sim.sides.relation(player, sim.piece_owner(piece));
+        if !matches!(toward, tgsim::Relation::Enemy | tgsim::Relation::Neutral) {
+            refused.write(Refused {
+                about: About::from(piece),
+                by: Some(By::AirAttack),
+            });
+            return;
+        }
+    }
+    let attack = tgsim::Command::AirAttack {
+        building: b,
+        at: point,
+        on,
+    };
+    if let Err(e) = orders.give(sim, player, attack) {
+        debug!("can't air attack from {}: {e:?}", sim.buildings[b].template);
+    }
+}
+
 /// While an order is aimed, a left click on the map or minimap gives it
 /// there and a right click calls it off. Attacking an enemy organization, or
 /// its mark on the minimap, sends the selected after it instead, and
@@ -102,7 +135,10 @@ pub fn aim(
     mut sent: MessageWriter<crate::waypoints::Sent>,
     (mut refused, mut failed): (MessageWriter<Refused>, MessageWriter<Failed>),
 ) {
-    if !matches!(*page, Page::Aiming(_) | Page::Rally | Page::Delivering(_)) {
+    if !matches!(
+        *page,
+        Page::Aiming(_) | Page::Rally | Page::AirAttack | Page::Delivering(_)
+    ) {
         return;
     }
     if buttons.just_pressed(MouseButton::Right) {
@@ -167,6 +203,13 @@ pub fn aim(
             .map_or(crate::Focus::Nothing, crate::Focus::Organization)
         }
     };
+    if *page == Page::AirAttack {
+        *page = Page::Orders;
+        if let Some(b) = chosen.0 {
+            air_attack(&sim.0, &mut orders, &mut refused, player, b, focus, point);
+        }
+        return;
+    }
     let Page::Aiming(aim) = *page else {
         if let Some(b) = chosen.0
             && let Err(e) = orders.give(
@@ -213,7 +256,7 @@ pub fn aim(
         if organizations.is_empty() {
             refused.write(Refused {
                 about: About::from(piece),
-                by: Some(aim),
+                by: Some(aim.into()),
             });
             return;
         }
@@ -232,7 +275,7 @@ pub fn aim(
         if let Struck::Friend(about) = attack_at(&sim.0, player, focus) {
             refused.write(Refused {
                 about,
-                by: Some(aim),
+                by: Some(aim.into()),
             });
             return;
         }
@@ -268,7 +311,7 @@ pub fn aim(
             Struck::Friend(about) => {
                 refused.write(Refused {
                     about,
-                    by: Some(aim),
+                    by: Some(aim.into()),
                 });
                 *page = Page::Orders;
                 return;
@@ -323,7 +366,7 @@ pub fn aim(
     {
         refused.write(Refused {
             about,
-            by: Some(aim),
+            by: Some(aim.into()),
         });
         *page = Page::Orders;
         return;

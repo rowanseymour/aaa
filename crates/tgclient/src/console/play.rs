@@ -590,6 +590,49 @@ pub(super) fn building_order(
     Ok(String::new())
 }
 
+pub(super) fn air_attack(world: &mut World, args: &[&str]) -> Reply {
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let b = selected_building(world)?;
+    let (at, on) = match args {
+        [x, y] => (place(&world.resource::<Loaded>().map.ground, x, y)?, None),
+        [id] => {
+            let sim = &world.resource::<Sim>().0;
+            let piece = match organization_by_id(sim, id) {
+                Ok(r) => tgsim::Piece::Organization(r),
+                Err(_) => (sim.buildings.iter())
+                    .position(|b| b.id.to_string() == *id && !b.gone())
+                    .map(tgsim::Piece::Building)
+                    .ok_or_else(|| format!("nothing {id}"))?,
+            };
+            let at = match piece {
+                tgsim::Piece::Organization(r) => sim.centre(r),
+                tgsim::Piece::Building(b) => sim.buildings[b].position,
+            };
+            (at, Some(piece))
+        }
+        _ => return Err(usage("airattack")),
+    };
+    let attack = tgsim::Command::AirAttack {
+        building: b,
+        at,
+        on,
+    };
+    give(world, player, attack)?;
+    Ok(String::new())
+}
+
+pub(super) fn escort(world: &mut World, args: &[&str]) -> Reply {
+    let on = match args {
+        ["on"] => true,
+        ["off"] => false,
+        _ => return Err(usage("escort")),
+    };
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let building = selected_building(world)?;
+    give(world, player, tgsim::Command::Escort { building, on })?;
+    Ok(String::new())
+}
+
 pub(crate) fn disband(world: &mut World, args: &[&str]) -> Reply {
     let [id] = args else {
         return Err(usage("disband"));

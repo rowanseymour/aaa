@@ -119,6 +119,8 @@ impl World {
             units: Vec::new(),
             buildings: Vec::new(),
             deliveries: Vec::new(),
+            sorties: Vec::new(),
+            next_wave: 0,
             scenery: Vec::new(),
             props: Vec::new(),
             clearable: Vec::new(),
@@ -412,6 +414,7 @@ impl World {
     pub(crate) fn push_buildings(&mut self, buildings: &[tgmap::Building], numbered: bool) {
         for b in buildings {
             let health = b.fighter.health * b.health;
+            let hangar = self.hangar(&b.template, true);
             self.buildings.push(Building {
                 id: b.id,
                 template: b.template.clone(),
@@ -458,6 +461,8 @@ impl World {
                 created: self.ticks,
                 remembered: Vec::new(),
                 constructing: false,
+                hangar,
+                escort: false,
             });
             self.next_id = self.next_id.max(b.id + 1);
             if numbered {

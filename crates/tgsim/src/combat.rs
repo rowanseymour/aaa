@@ -403,6 +403,7 @@ impl World {
     pub(crate) fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
         let mut launched = Vec::new();
+        self.air_shots(&mut hits, &mut launched);
         // Buildings that defend themselves sit idle until woken, and once
         // woken fire even while disabled.
         let defends = |b: usize| self.buildings[b].fighter.notice.is_some();
@@ -561,6 +562,10 @@ impl World {
     /// the weapon, hold until it's ready or for [`WAIT_SECONDS`] if that's
     /// sooner, or go after its target.
     fn act(&mut self, u: usize, hits: &mut Vec<Hit>, launched: &mut Vec<Projectile>) {
+        // What flies fires as its sortie has it, in [`World::air_shots`].
+        if self.units[u].aloft {
+            return;
+        }
         let unit = &mut self.units[u];
         for ago in unit.fired_ago.iter_mut().chain(&mut unit.mended_ago) {
             *ago += TICK;

@@ -458,6 +458,51 @@ pub struct DenizenComponent {
     pub deployment_info: Option<DeploymentInfo>,
     pub guard_range: Option<f32>,
     pub guard_operational_range: Option<f32>,
+    /// The places in its stock, a block for each kind.
+    #[serde(default)]
+    pub inventory: Vec<Inventory>,
+    /// Which of its stock go out together, for which jobs.
+    #[serde(default)]
+    pub denizen_group: Vec<DenizenGroup>,
+    /// Where its aircraft take off and land.
+    pub runway: Option<Runway>,
+    /// What sending out an air attack costs.
+    pub air_attack_cost: Option<Resources>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Inventory {
+    pub actor_ids: Option<Id>,
+    #[serde(default)]
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DenizenGroup {
+    /// Comma separated templates of its members.
+    pub actor_ids: Option<String>,
+    /// The fewest and most that go out.
+    pub size: Option<[f32; 2]>,
+    /// `+` separated jobs, such as `AIR_OFFENSIVE`.
+    pub behavior: Option<String>,
+    /// Where each member flies from the first.
+    #[serde(default)]
+    pub formation_positions: Vec<GroupPosition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupPosition {
+    pub offset: Option<[f32; 3]>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Runway {
+    /// Where it starts from its building's root node, in the building's
+    /// axes, and the way it runs.
+    pub offset: Option<[f32; 3]>,
+    pub orientation: Option<[f32; 2]>,
+    /// Seconds between aircraft taking off.
+    pub delay: Option<f32>,
 }
 
 /// What makes a thing a settlement: the invisible thing that groups a
@@ -630,6 +675,9 @@ pub struct PerformerComponent {
     pub attack_height: Option<f32>,
     #[serde(default)]
     pub turret: Vec<Turret>,
+    /// The most mana it holds, which its abilities' `mana_cost` is paid
+    /// from.
+    pub mana_max: Option<f32>,
 }
 
 /// A part of an object that turns to aim its abilities. Left-out fields
@@ -715,6 +763,9 @@ pub struct AbilityDefinition {
     pub range: Option<f32>,
     #[serde(default)]
     pub min_range: f32,
+    /// The mana each use takes from its user.
+    #[serde(default)]
+    pub mana_cost: f32,
     /// Seconds between uses.
     #[serde(default)]
     pub recharge_time: f32,
@@ -1430,6 +1481,10 @@ pub struct SVars {
     /// Seconds an enemy's damage keeps what it hurt under siege.
     #[serde(rename = "UnderSiegeRecentlyDamagedSeconds")]
     pub under_siege_recently_damaged_seconds: Option<f32>,
+    /// What a building's denizens are resupplied at while it's under
+    /// siege, as a share of their usual rate.
+    #[serde(rename = "DenizenResupplyRateUnderSiege")]
+    pub denizen_resupply_rate_under_siege: Option<f32>,
     #[serde(rename = "KillCreditTimeout")]
     pub kill_credit_timeout: Option<f32>,
     /// Added to a target's score for a unit it's attacking.

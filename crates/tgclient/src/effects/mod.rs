@@ -832,6 +832,7 @@ mod tests {
             range: 10.0,
             min_range: 0.0,
             recharge: 1.0,
+            mana_cost: 0.0,
             area: 0.0,
             max_targets: 0,
             full_within: 0.0,

@@ -6,6 +6,7 @@
 //! in it, controlled by a person or an AI.
 
 mod abilities;
+mod airfields;
 mod areas;
 mod attach;
 mod bombard;
@@ -65,6 +66,7 @@ use tgmap::{
     Unpacks, Weapon,
 };
 
+pub use airfields::{AirAim, Berth, Job, Sortie, Stage};
 pub use attach::Hq;
 pub use bombard::{Bombardment, Shelled};
 pub use combat::Struck;
@@ -177,6 +179,11 @@ pub struct World {
     pub buildings: Vec<Building>,
     /// The aircraft bringing organizations in, and those that have gone.
     pub deliveries: Vec<Delivery>,
+    /// The aircraft airfields have sent out, and those that are back or
+    /// gone.
+    pub sorties: Vec<Sortie>,
+    /// The wave the next planes sent out together share.
+    next_wave: u32,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
     /// The sight-givers and markers placed and made, those gone included.
@@ -807,6 +814,10 @@ pub struct Building {
     /// Whether it's a site still going up, which does nothing a finished
     /// building does until its health is full.
     pub constructing: bool,
+    /// For an airfield, the places in its stock of aircraft.
+    pub hangar: Vec<Berth>,
+    /// For an airfield, whether its air attacks take an escort.
+    pub escort: bool,
 }
 
 /// How a building stands.
@@ -1107,6 +1118,18 @@ pub enum Command {
         at: [f32; 2],
         on: Option<Piece>,
     },
+    /// Sends an air attack from an airfield on `on`, or at `at` for none:
+    /// its attack group's planes that are ready, and its escort if that's
+    /// on, paid for as they go. One its side can't afford sends nothing
+    /// and tells it so. Refused for a building with no planes for one, and
+    /// while too few are ready.
+    AirAttack {
+        building: usize,
+        at: [f32; 2],
+        on: Option<Piece>,
+    },
+    /// Sets whether an airfield's air attacks take an escort.
+    Escort { building: usize, on: bool },
     /// Tells the map's triggers the player ran this interface command,
     /// such as `ActorCommand move`, which they're listening for.
     Heard { command: String },
@@ -1313,6 +1336,8 @@ impl World {
         self.tend_heroes();
         self.produce();
         self.deliver();
+        self.fly_sorties();
+        self.rebuild_planes();
         self.rally();
         self.unpack();
         self.grant_from_buildings();
@@ -1397,7 +1422,7 @@ impl Sides {
 }
 
 digest!(World {
-    organizations, units, buildings, props, deliveries, cleared, technologies, objectives, fates, over,
+    organizations, units, buildings, props, deliveries, sorties, next_wave, cleared, technologies, objectives, fates, over,
     groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng, sides,
 } skip {
@@ -1479,6 +1504,7 @@ digest!(Building {
     noticed, awake,
     inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
     captured, unpacked_from, zone, members, supply, properties, created, remembered, constructing,
+    hangar, escort,
 } skip {
     // Its template's, or as the map has it.
     fighter, deploy, organization, obstacle,

@@ -39,6 +39,8 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `research technology` | asks the selected building to research a technology it lists |  | ✓ |
 | `usefactionability n x y` | uses the nth of the faction's special operations, from 0 as the panel lists them, on the ground at x y | ✓ | ✓ |
 | `pack` | packs up the selected building |  | ✓ |
+| `airattack (x y \| id)` | sends the selected airfield's air attack at x y, or on a building or organization by its id |  | ✓ |
+| `escort on \| off` | switches the selected airfield's escort for its air attacks on or off |  | ✓ |
 | `sell` | sells the selected building |  | ✓ |
 | `disband organization` | disbands an organization, by its id |  | ✓ |
 | `attach organization` | attaches an organization, by its id, to an HQ with a place for it, or moves it on to the next |  | ✓ |

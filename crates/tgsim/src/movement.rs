@@ -405,7 +405,7 @@ impl World {
 
     /// The unit at `u`'s top speed: its own, times what its properties and
     /// the `handed` down from its organization make of it.
-    fn top_speed(&self, u: usize, handed: f32) -> f32 {
+    pub(crate) fn top_speed(&self, u: usize, handed: f32) -> f32 {
         let factor = 1.0 + self.boost(u).speed + handed;
         self.units[u].speed_max * factor.max(MULTIPLY_FLOOR)
     }

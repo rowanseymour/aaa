@@ -17,8 +17,8 @@ use super::layout::builds;
 use super::looks::{Looks, Recruit};
 use super::tips::fill;
 use super::{
-    Aim, CANCEL_LOOK, CONSTRUCT, DEPLOY, DEPLOY_TO_LOCATION, Entry, Give, Menu, ORDERS, PACK, Page,
-    RALLY, RESEARCH, Refusal, SELL, SLOTS, Shown, WIDGET,
+    AIR_ATTACK, Aim, CANCEL_LOOK, CONSTRUCT, DEPLOY, DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON,
+    Entry, Give, Menu, ORDERS, PACK, Page, RALLY, RESEARCH, Refusal, SELL, SLOTS, Shown, WIDGET,
 };
 
 /// What the game's hotkeys call what a button does, and the button
@@ -50,6 +50,9 @@ pub(crate) fn bound(
         Entry::Pack => vec![command(PACK)],
         Entry::Sell => vec![command(SELL)],
         Entry::Rally => vec![command(RALLY)],
+        Entry::AirAttack => vec![command(AIR_ATTACK)],
+        // Either switch, whichever shows.
+        Entry::Escort => vec![command(ESCORT_ON), command(ESCORT_OFF)],
         Entry::CommandAll => vec!["CommandAll".into()],
         Entry::Build(i) => {
             let template = builds.get(i).map_or("", Id::as_str);
@@ -194,6 +197,16 @@ impl Presser<'_, '_> {
             Entry::Cancel => *self.page = Page::Orders,
             Entry::Open(menu) => *self.page = Page::Menu(menu),
             Entry::Rally => *self.page = Page::Rally,
+            Entry::AirAttack => *self.page = Page::AirAttack,
+            Entry::Escort => {
+                if let Some(b) = self.chosen.0 {
+                    let on = !sim.buildings[b].escort;
+                    let escort = tgsim::Command::Escort { building: b, on };
+                    if let Err(e) = self.orders.give(sim, player, escort) {
+                        debug!("can't set {}'s escort: {e:?}", sim.buildings[b].template);
+                    }
+                }
+            }
             Entry::CommandAll => {
                 let building = self.chosen.0.filter(|_| self.selected.0.is_empty());
                 let attached: Vec<usize> = shown_hq(sim, &self.selected.0, building)
