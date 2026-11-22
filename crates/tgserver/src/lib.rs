@@ -237,6 +237,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
             falling.unwrap_or(defaults.efficiency_rates[1]),
         ],
         catchup_speed: game.catchup_speed().unwrap_or(defaults.catchup_speed),
+        recruit_search_step: (game.recruit_search_step()).unwrap_or(defaults.recruit_search_step),
         siege_seconds: game.siege_seconds().unwrap_or(defaults.siege_seconds),
         kill_credit_seconds: (game.kill_credit_seconds()).unwrap_or(defaults.kill_credit_seconds),
         attacker_bonus: game.attacker_bonus().unwrap_or(defaults.attacker_bonus),

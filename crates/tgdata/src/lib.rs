@@ -688,6 +688,14 @@ impl GameData {
         self.svars().iter().find_map(|v| v.mover_catchup_speed)
     }
 
+    /// How far from where a lone recruit is looked for room the search's
+    /// later rings are centred.
+    pub fn recruit_search_step(&self) -> Option<f32> {
+        self.svars()
+            .iter()
+            .find_map(|v| v.recruit_search_radius_small)
+    }
+
     /// Seconds since a site's health last changed that it counts as being
     /// worked on.
     pub fn active_construction_seconds(&self) -> Option<f32> {
