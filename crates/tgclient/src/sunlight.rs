@@ -104,9 +104,11 @@ fn mix(a: Colours, b: Colours, t: f32) -> Colours {
 
 /// Lights the match with the sun's colours as its changes have left them,
 /// showing night effects while it's dark enough, and darker while it's
-/// paused.
+/// paused. Portraits take them undimmed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn follow(
+    mut commands: Commands,
+    stage: Option<ResMut<tgrender::portrait::Stage>>,
     sim: Res<Sim>,
     orders: Option<Res<crate::Orders>>,
     mut loaded: ResMut<Loaded>,
@@ -132,6 +134,9 @@ pub(crate) fn follow(
     (sun.diffuse, sun.ambient, sun.specular) = (diffuse, ambient_color, specular);
     [sun.target_diffuse, sun.target_ambient, sun.target_specular] = heading;
     effects.set_night(loaded.game.night(diffuse));
+    if let Some(mut stage) = stage {
+        stage.sun(&mut commands, diffuse, ambient_color);
+    }
     // Night effects go by the sun itself, not by how a pause dims it.
     let by = if paused { sunlight.paused } else { 1.0 };
     let [diffuse, ambient_color, _] = dimmed(shown, by);

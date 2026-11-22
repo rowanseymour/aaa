@@ -40,6 +40,11 @@ where the original stretches them to fill the screen. See
   mapping, which needn't match what the original shades or the shapes it gives. A
   shadow takes away the share of the sun's light the data's `DynamicShadowSunModulate`
   gives, as the original's do. See [lib.rs](../crates/tgrender/src/lib.rs).
+- **Portrait lighting.** The original lights a portrait's skinned shapes by the map's sun
+  and its other shapes by a white light of the portrait's own. Here a face's portrait is
+  lit wholly by the sun, and a fitted model wholly by the white light, since one view's
+  light can't be kept to some of its shapes. So an officer's breath and snow take the
+  night's colours too. See [portrait.rs](../crates/tgrender/src/portrait.rs).
 - **Fidgets.** Idle men always fidget. The original lets the `CharacterFidget` game
   variable turn them off, which the stock data never does. See
   [stances.rs](../crates/tgsim/src/stances.rs).
