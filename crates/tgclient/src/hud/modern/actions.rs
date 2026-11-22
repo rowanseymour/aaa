@@ -10,7 +10,7 @@ use bevy::ui_widgets::Button;
 
 use crate::actions::{COLUMNS, Page, Quantity, ROWS, SLOTS, Said, Shown, Slot, lit, widget};
 use crate::intent::Asks;
-use crate::ui::{self, Blocks, Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
+use crate::ui::{self, Blocks, Click, Edge, Font, Ink, Shade, Surface, label, tooltip};
 
 /// A button's side, in logical pixels; the icons are drawn 42 across.
 pub const BUTTON: f32 = 56.0;
@@ -51,7 +51,7 @@ pub fn spawn(mut commands: Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 right: px(crate::ui_scale::MARGIN),
-                bottom: px(crate::ui_scale::MARGIN),
+                bottom: px(0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::End,
                 row_gap: px(PAD),
@@ -76,7 +76,7 @@ pub fn spawn(mut commands: Commands) {
                 Grid,
                 Blocks,
                 RelativeCursorPosition::default(),
-                panel(
+                ui::shelf(
                     Surface::Hud,
                     Node {
                         display: Display::Grid,

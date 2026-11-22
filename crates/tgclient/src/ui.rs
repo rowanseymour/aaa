@@ -539,6 +539,18 @@ pub fn panel(surface: Surface, node: Node) -> impl Bundle {
     )
 }
 
+/// A [`panel`] that sits on the window's lower edge, so rounded only at
+/// the top.
+pub fn shelf(surface: Surface, node: Node) -> impl Bundle {
+    backed(
+        surface,
+        Node {
+            border_radius: BorderRadius::top(px(CORNER)),
+            ..node
+        },
+    )
+}
+
 /// A [`panel`] of text over the map, which the pointer passes through.
 pub fn tooltip(node: Node) -> impl Bundle {
     (
