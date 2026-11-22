@@ -49,6 +49,11 @@ impl World {
     /// on the map, which stands where its leader does.
     pub(crate) fn soft_place(&self, t: Thing) -> Option<Obstacle> {
         let (position, facing, soft) = match t {
+            // Found by name alone, and taken as where it stands.
+            Thing::Prop(p) => {
+                let prop = self.props.get(p).filter(|p| p.standing())?;
+                (prop.position, prop.facing, Shape::Point)
+            }
             Thing::Unit(u) => {
                 let unit = &self.units[u];
                 let fighter = unit.fighter.as_ref().filter(|_| unit.alive())?;

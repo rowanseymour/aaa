@@ -28,6 +28,7 @@ mod groups;
 mod guard;
 mod hash;
 mod heroes;
+mod making;
 mod morale;
 mod movement;
 mod notices;
@@ -37,6 +38,7 @@ mod packing;
 pub mod path;
 mod production;
 mod properties;
+mod props;
 mod remains;
 mod research;
 mod rules;
@@ -78,6 +80,7 @@ pub use objectives::{Objective, Objectives, Standing};
 pub use outcome::Fate;
 pub use packing::unpack_site;
 pub use properties::Held;
+pub use props::Prop;
 pub use remains::Remains;
 pub use research::{Granted, Lacking, Researchable, Source};
 pub use rules::Rules;
@@ -172,6 +175,8 @@ pub struct World {
     pub deliveries: Vec<Delivery>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
+    /// The sight-givers and markers placed and made, those gone included.
+    pub props: Vec<Prop>,
     /// The scenery still standing that a building going up clears away,
     /// as [`tgmap::Map::clearable`] has it.
     pub clearable: Vec<(u32, Obstacle)>,
@@ -1369,7 +1374,7 @@ impl Sides {
 }
 
 digest!(World {
-    organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
+    organizations, units, buildings, props, deliveries, cleared, technologies, objectives, fates, over,
     groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng, sides,
 } skip {
@@ -1521,6 +1526,7 @@ impl Digest for crate::targets::Thing {
             Thing::Organization(r) => (0u8, r).digest(h),
             Thing::Unit(u) => (1u8, u).digest(h),
             Thing::Building(b) => (2u8, b).digest(h),
+            Thing::Prop(p) => (3u8, p).digest(h),
         }
     }
 }

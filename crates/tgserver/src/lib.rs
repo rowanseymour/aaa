@@ -228,6 +228,8 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         granted: game.granted_technologies(),
         experience_per_second: experience.per_second,
         sights: game.sights(),
+        props: raising.prop_templates(),
+        organization_shapes: raising.organization_shapes(),
         numbered: game.numbered(),
         sustaining: game.sustaining(),
         team_victory: game.team_victory(),

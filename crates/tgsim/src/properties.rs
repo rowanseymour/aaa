@@ -140,12 +140,14 @@ impl World {
 }
 
 impl World {
-    /// The properties `t` holds of its own, for a time or for good.
-    fn held_mut(&mut self, t: Thing) -> &mut Vec<Held> {
+    /// The properties `t` holds of its own, for a time or for good; props
+    /// hold none.
+    fn held_mut(&mut self, t: Thing) -> Option<&mut Vec<Held>> {
         match t {
-            Thing::Organization(r) => &mut self.organizations[r].properties,
-            Thing::Unit(u) => &mut self.units[u].properties,
-            Thing::Building(b) => &mut self.buildings[b].properties,
+            Thing::Organization(r) => Some(&mut self.organizations[r].properties),
+            Thing::Unit(u) => Some(&mut self.units[u].properties),
+            Thing::Building(b) => Some(&mut self.buildings[b].properties),
+            Thing::Prop(_) => None,
         }
     }
 
@@ -163,6 +165,7 @@ impl World {
             }
             Thing::Unit(u) => vec![&self.units[u].template],
             Thing::Building(b) => vec![&self.buildings[b].template],
+            Thing::Prop(_) => return false,
         };
         let kinds = &self.rules.kinds;
         if !kinds.contains_key(templates[0]) {
@@ -181,17 +184,21 @@ impl World {
         if !self.can_carry(t, &property) {
             return;
         }
-        self.held_mut(t).push(Held {
-            property,
-            until: KEPT,
-            by: None,
-        });
+        if let Some(held) = self.held_mut(t) {
+            held.push(Held {
+                property,
+                until: KEPT,
+                by: None,
+            });
+        }
     }
 
     /// Takes away one of `t`'s own copies of `property` it has for good.
     /// Returns whether there was one.
     pub(crate) fn lose_own(&mut self, t: Thing, property: &Id) -> bool {
-        let held = self.held_mut(t);
+        let Some(held) = self.held_mut(t) else {
+            return false;
+        };
         let copy = (held.iter()).rposition(|h| h.property == *property && h.until == KEPT);
         copy.map(|i| held.remove(i)).is_some()
     }

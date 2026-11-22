@@ -112,7 +112,7 @@ impl World {
             let r = match t {
                 Thing::Organization(r) => Some(r),
                 Thing::Unit(u) => Some(self.units[u].organization),
-                Thing::Building(_) => None,
+                Thing::Building(_) | Thing::Prop(_) => None,
             };
             if let Some(r) = r {
                 match e.morale > 0.0 {
@@ -158,7 +158,10 @@ impl World {
             return;
         }
         let until = self.ticks + (seconds / TICK).round() as u64;
-        self.timed_mut(t).push(Held {
+        let Some(timed) = self.timed_mut(t) else {
+            return;
+        };
+        timed.push(Held {
             property: property.clone(),
             until,
             by: Some(player),
@@ -170,7 +173,9 @@ impl World {
             })
             .map(|h| h.property.clone())
             .collect();
-        self.timed_mut(t).retain(|h| !cleared.contains(&h.property));
+        if let Some(timed) = self.timed_mut(t) {
+            timed.retain(|h| !cleared.contains(&h.property));
+        }
     }
 
     /// Whether `t` keeps off enchantments of type `kind` that `player`
@@ -178,10 +183,12 @@ impl World {
     /// immune to.
     fn keeps_off(&self, player: u32, kind: Option<&Id>, t: Thing) -> bool {
         let owner = self.thing_owner(t);
-        let friendly = matches!(
-            self.sides.relation(player, owner),
-            Relation::Itself | Relation::Ally
-        );
+        let friendly = owner.is_some_and(|o| {
+            matches!(
+                self.sides.relation(player, o),
+                Relation::Itself | Relation::Ally
+            )
+        });
         !friendly && kind.is_some_and(|k| self.thing_effect(t).immune_to(k))
     }
 
@@ -194,6 +201,7 @@ impl World {
             }
             Thing::Unit(u) => self.boost(u),
             Thing::Building(b) => self.building_boost(b),
+            Thing::Prop(_) => CombatEffect::default(),
         }
     }
 
@@ -203,14 +211,17 @@ impl World {
             Thing::Organization(r) => &self.organizations[r].properties,
             Thing::Unit(u) => &self.units[u].properties,
             Thing::Building(b) => &self.buildings[b].properties,
+            Thing::Prop(_) => &[],
         }
     }
 
-    fn timed_mut(&mut self, t: Thing) -> &mut Vec<Held> {
+    /// Where `t` keeps the properties it holds for a time; props hold none.
+    fn timed_mut(&mut self, t: Thing) -> Option<&mut Vec<Held>> {
         match t {
-            Thing::Organization(r) => &mut self.organizations[r].properties,
-            Thing::Unit(u) => &mut self.units[u].properties,
-            Thing::Building(b) => &mut self.buildings[b].properties,
+            Thing::Organization(r) => Some(&mut self.organizations[r].properties),
+            Thing::Unit(u) => Some(&mut self.units[u].properties),
+            Thing::Building(b) => Some(&mut self.buildings[b].properties),
+            Thing::Prop(_) => None,
         }
     }
 
@@ -285,7 +296,7 @@ fn target_of(t: Thing) -> Option<Target> {
     match t {
         Thing::Unit(u) => Some(Target::Unit(u)),
         Thing::Building(b) => Some(Target::Building(b)),
-        Thing::Organization(_) => None,
+        Thing::Organization(_) | Thing::Prop(_) => None,
     }
 }
 

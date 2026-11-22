@@ -730,6 +730,19 @@ impl Recruits {
             .unwrap_or_default()
     }
 
+    /// The templates whose things are props.
+    pub fn prop_templates(&self) -> HashMap<Id, crate::PropTemplate> {
+        let organizations = self.components.keys().cloned().collect();
+        crate::props::prop_templates(&self.bodies, &self.fighters, &organizations)
+    }
+
+    /// The blocking shape of each organization template.
+    pub fn organization_shapes(&self) -> HashMap<Id, Shape> {
+        (self.components.keys())
+            .filter_map(|t| Some((t.clone(), self.bodies.get(t)?.shape)))
+            .collect()
+    }
+
     /// The soft shape of each organization template.
     pub fn organization_soft(&self) -> HashMap<Id, Shape> {
         (self.components.keys())

@@ -199,7 +199,12 @@ impl World {
         let to = match lone {
             true => {
                 let shape = organization.members[0].shape;
-                self.first_clear(rings(at, 1.0, RINGS), FACING, shape, &self.blocking())
+                self.first_clear(
+                    rings(at, FACING, 1.0, RINGS),
+                    FACING,
+                    shape,
+                    &self.blocking(),
+                )
             }
             false => Some(at),
         };
@@ -214,7 +219,7 @@ impl World {
                 organization.place(to, FACING);
                 Some(self.add_new_organization(organization))
             }
-            (Some(_), false) => self.summon_regiment(organization, at),
+            (Some(_), false) => self.summon_regiment(organization, at, FACING),
         };
         match r {
             Some(r) => self.summoned.push(Summoned {
@@ -230,24 +235,26 @@ impl World {
         Ok(())
     }
 
-    /// Puts a regiment down with its leader at the clear spot nearest
-    /// `at`, then each other member where it finds room, returning its
-    /// index; none if its leader finds none.
-    fn summon_regiment(
+    /// Puts a regiment down facing `facing` with its leader at the clear
+    /// spot nearest `at`, then each other member where it finds room,
+    /// returning its index; none if its leader finds none.
+    pub(crate) fn summon_regiment(
         &mut self,
         mut organization: tgmap::Organization,
         at: [f32; 2],
+        facing: [f32; 2],
     ) -> Option<usize> {
+        organization.place(at, facing);
         let leader = organization.primary.unwrap_or(0);
         let shape = organization.members[leader].shape;
         let mut blocking = self.blocking();
         let found = self.first_clear(
-            rings(at, step(shape), REGIMENT_RINGS),
-            FACING,
+            rings(at, facing, step(shape), REGIMENT_RINGS),
+            facing,
             shape,
             &blocking,
         )?;
-        blocking.push(spot(found, FACING, shape));
+        blocking.push(spot(found, facing, shape));
         let [x, y] = organization.members[leader].position;
         for m in &mut organization.members {
             m.position = [m.position[0] + found[0] - x, m.position[1] + found[1] - y];
@@ -267,19 +274,19 @@ impl World {
             }
             let (place, shape) = (self.units[u].position, self.units[u].shape);
             let found = self.first_clear(
-                rings(place, step(shape), REGIMENT_RINGS),
-                FACING,
+                rings(place, facing, step(shape), REGIMENT_RINGS),
+                facing,
                 shape,
                 &blocking,
             );
             // One with nowhere to stand is refilled as if lost.
             if let Some(p) = found {
                 if shape.is_some() {
-                    blocking.push(spot(p, FACING, shape));
+                    blocking.push(spot(p, facing, shape));
                 }
                 let unit = &mut self.units[u];
                 unit.awaited = false;
-                unit.stand_at(p, FACING);
+                unit.stand_at(p, facing);
             }
         }
         Some(r)
@@ -301,10 +308,16 @@ fn step(shape: Option<Shape>) -> f32 {
     shape.map_or(0.0, bounding_radius).max(CELL_SIZE / 4.0)
 }
 
-/// The spots tried for a summon aimed at `at`, nearest first: there,
-/// then `rings` rings round it `step` apart.
-fn rings(at: [f32; 2], step: f32, rings: u32) -> impl Iterator<Item = [f32; 2]> {
-    std::iter::once(at).chain(rings_round(at, FACING, step, rings))
+/// The spots tried for something aimed at `at`, nearest first: there,
+/// then `rings` rings round it `step` apart, each starting the way
+/// `facing` points.
+pub(crate) fn rings(
+    at: [f32; 2],
+    facing: [f32; 2],
+    step: f32,
+    rings: u32,
+) -> impl Iterator<Item = [f32; 2]> {
+    std::iter::once(at).chain(rings_round(at, facing, step, rings))
 }
 
 /// `rings` rings of [`RING`] points round `at`, nearest first and `step`

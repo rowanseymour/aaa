@@ -319,6 +319,13 @@ impl World {
                 }
             }
         }
+        // A prop fights no one, so is shown to no one by its remote sight.
+        for prop in self.props.iter().filter(|p| p.standing()) {
+            let (Some(owner), Some(s)) = (prop.owner, self.sight_of(&prop.template)) else {
+                continue;
+            };
+            discs.push((owner, prop.position, s.range));
+        }
         discs.extend(self.watches.iter().map(|w| (w.player, w.at, w.range)));
         for (p, at, radius) in discs {
             self.fog.stamp(p, at, radius, false);

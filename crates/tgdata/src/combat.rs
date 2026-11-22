@@ -24,6 +24,8 @@ pub struct Body {
     pub tile_locked: bool,
     /// Nothing gets in its way, so it can stand anywhere on the map.
     pub ethereal: bool,
+    /// It can belong to a side.
+    pub ownable: bool,
     /// It never moves: it has no mover with a top speed, and is neither an
     /// organization nor a projectile. Only such things get in the way of
     /// what's placed as a map loads or a building unpacks.
@@ -519,6 +521,7 @@ fn body(thing: &defs::Thing) -> Body {
         water_based: flag(|f| f.water_based),
         tile_locked: flag(|f| f.tile_locked),
         ethereal: flag(|f| f.ethereal),
+        ownable: thing.flags.iter().rev().find_map(|f| f.ownable) != Some(false),
         fixed: speed.is_none()
             && thing.organization_component.is_none()
             && thing.projectile_component.is_none(),

@@ -34,6 +34,7 @@ impl World {
         world.detach_from_missing();
         world.tile_terrains = map.tile_terrains.clone();
         world.scenery = map.scenery.clone();
+        world.props = map.props.iter().map(crate::Prop::placed).collect();
         world.clearable = map.clearable.clone();
         world.holdings = holdings(
             map.roles()
@@ -119,6 +120,7 @@ impl World {
             buildings: Vec::new(),
             deliveries: Vec::new(),
             scenery: Vec::new(),
+            props: Vec::new(),
             clearable: Vec::new(),
             cleared: Vec::new(),
             ticks: 0,

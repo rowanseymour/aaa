@@ -9,6 +9,7 @@ mod ground;
 mod obstacle;
 mod outline;
 pub mod pathing;
+mod props;
 mod tile;
 mod tile_terrains;
 mod units;
@@ -19,6 +20,7 @@ pub use ground::{Ground, Tilt};
 pub use obstacle::Obstacle;
 pub use outline::Outline;
 pub use pathing::{Domain, Pathing, Zone};
+pub use props::{Prop, PropTemplate};
 pub use tgck::map::Relation;
 
 /// A map's triggers, as its file holds them.
@@ -89,6 +91,8 @@ pub struct Map {
     pub objectives: Vec<Objective>,
     /// The regions its triggers test things against.
     pub areas: Vec<Area>,
+    /// The sight-givers and markers placed in it.
+    pub props: Vec<Prop>,
     /// The soft shape of each organization template, which places a
     /// regiment of it in an area.
     pub organization_soft: HashMap<Id, Shape>,
@@ -255,6 +259,12 @@ impl Map {
         );
         let settlements = founded(&centres, &buildings, next);
         let ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
+        let props = props::props(
+            buildings::standing(&standing),
+            &recruits.prop_templates(),
+            &game.sights(),
+            &ids,
+        );
         let scenery = obstacles
             .into_iter()
             .filter(|(id, _)| !ids.contains(id))
@@ -314,6 +324,7 @@ impl Map {
             triggers,
             objectives,
             areas,
+            props,
             organization_soft: recruits.organization_soft(),
             rules: StoredRules::read(game, &mut map).map_err(err)?,
         })
