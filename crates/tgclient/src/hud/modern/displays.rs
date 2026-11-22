@@ -18,28 +18,35 @@ use crate::ui::{self, Click, Edge, Hint, Ink, Surface, Theme};
 /// A glyph's size on its button.
 pub const GLYPH_SIZE: f32 = 22.0;
 
-/// The quarters of the minimap's rim, between the diamond's corners.
+/// The quarters of the minimap's rim, between the diamond's corners, that
+/// hold buttons.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Quadrant {
     TopLeft,
-    TopRight,
     BottomLeft,
     BottomRight,
 }
 
 impl Quadrant {
-    /// The `place`th spot for a round button in it.
-    pub const fn at(self, place: u8) -> Rim {
+    /// Its first spot for a round button, the clockwise one of its pair.
+    pub const fn first(self) -> Rim {
         Rim {
             quadrant: self,
-            place,
+            second: false,
+        }
+    }
+
+    /// Its second spot for a round button, anticlockwise of the first.
+    pub const fn second(self) -> Rim {
+        Rim {
+            quadrant: self,
+            second: true,
         }
     }
 
     /// The angle of its middle, anticlockwise from the disc's right.
     fn middle(self) -> f32 {
         let degrees: f32 = match self {
-            Quadrant::TopRight => 45.0,
             Quadrant::TopLeft => 135.0,
             Quadrant::BottomLeft => 225.0,
             Quadrant::BottomRight => 315.0,
@@ -48,36 +55,34 @@ impl Quadrant {
     }
 }
 
-/// Where on the minimap's rim a round button sits: a quadrant's buttons
-/// are spread evenly about its middle, anticlockwise in order of their
-/// places, so one more can join them without the others being moved by
-/// hand.
-#[derive(Component, Clone, Copy, Debug)]
+/// Where on the minimap's rim a round button sits: one of the pair of
+/// spots either side of a quadrant's middle.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rim {
     quadrant: Quadrant,
-    place: u8,
+    second: bool,
 }
 
-/// The angle between neighbouring buttons in a quadrant, a little more
-/// than their width at the rim.
+/// The angle between the two buttons in a quadrant, a little more than
+/// their width at the rim.
 const RIM_STEP: f32 = 20.0;
 
 impl Rim {
-    /// Its centre from the disc's, y up, when the rim's buttons are at
-    /// `all`.
-    pub fn centre(self, all: &[Rim]) -> Vec2 {
-        let mates = || all.iter().filter(|r| r.quadrant == self.quadrant);
-        let count = mates().count().max(1) as f32;
-        let index = mates().filter(|r| r.place < self.place).count() as f32;
-        let angle = self.quadrant.middle() + (index - (count - 1.0) / 2.0) * RIM_STEP.to_radians();
+    /// Its centre from the disc's, y up.
+    pub fn centre(self) -> Vec2 {
+        let side = if self.second { 0.5 } else { -0.5 };
+        let angle = self.quadrant.middle() + side * RIM_STEP.to_radians();
         Vec2::from_angle(angle) * minimap::DISC / 2.0
     }
 
-    /// A round button's node, placed there by
-    /// [`lay_out_rim`](minimap::lay_out_rim) once all are spawned.
-    fn node() -> Node {
+    /// A round button's node, placed here.
+    fn node(self) -> Node {
+        let corner = crate::ui_scale::MARGIN + minimap::DISC / 2.0 - minimap::RIM_BUTTON / 2.0;
+        let at = corner + self.centre();
         Node {
             position_type: PositionType::Absolute,
+            left: px(at.x),
+            bottom: px(at.y),
             width: px(minimap::RIM_BUTTON),
             height: px(minimap::RIM_BUTTON),
             border: UiRect::all(px(1)),
@@ -112,7 +117,7 @@ pub fn spawn_buttons(
     for panel in PANELS {
         let (rim, path, [name, name_or], [help, help_or]) = match panel {
             Panel::Objectives => (
-                Quadrant::BottomLeft.at(0),
+                Quadrant::BottomLeft.first(),
                 icon("objectives"),
                 [
                     "control_panel_ButtonObjectives_ToolTip",
@@ -124,7 +129,7 @@ pub fn spawn_buttons(
                 ],
             ),
             Panel::Technologies => (
-                Quadrant::TopRight.at(0),
+                Quadrant::BottomRight.second(),
                 icon("technologies"),
                 [
                     "control_panel_ButtonTechnology_ToolTip",
@@ -136,7 +141,7 @@ pub fn spawn_buttons(
                 ],
             ),
             Panel::MessageLog => (
-                Quadrant::TopLeft.at(1),
+                Quadrant::TopLeft.second(),
                 icon("message-log"),
                 [
                     "control_panel_ButtonMessageLog_ToolTip",
@@ -148,7 +153,7 @@ pub fn spawn_buttons(
                 ],
             ),
             Panel::Politics => (
-                Quadrant::BottomLeft.at(1),
+                Quadrant::BottomLeft.second(),
                 icon("politics"),
                 ["control_panel_ButtonPolitics_ToolTip", "Display Politics"],
                 [
@@ -192,7 +197,7 @@ fn spawn_button(
 /// A round button at `rim` drawn with `glyph`, sounding `click` when
 /// pressed.
 pub fn rim_button(rim: Rim, glyph: Handle<Image>, click: Click) -> impl Bundle {
-    (rim, round_button(Rim::node(), glyph, GLYPH_SIZE, click))
+    (rim, round_button(rim.node(), glyph, GLYPH_SIZE, click))
 }
 
 /// A round button laid out as `node`, drawn with `glyph` `size` across,

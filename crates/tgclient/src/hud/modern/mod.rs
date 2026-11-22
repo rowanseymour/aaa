@@ -37,7 +37,7 @@ impl Plugin for ModernHudPlugin {
                     chat::spawn,
                     politics::spawn,
                 ),
-                minimap::lay_out_rim,
+                minimap::draw_backdrop,
             )
                 .chain(),
         )
