@@ -45,6 +45,11 @@ where the original stretches them to fill the screen. See
 
 ## View
 
+- **First frame.** The loading screen stays up until the match's first tick has
+  played, so the map is first seen after its start-up triggers have run. The original
+  shows the map as play begins, so depending on timing it can flash a frame of how
+  the map was saved (Berlin's daylight before its trigger turns it to night). See
+  [loading.rs](../crates/tgclient/src/loading.rs).
 - **Widescreen.** The original always renders a 4:3 view, stretched to fill wider
   screens. With our own interface, we keep the window's true aspect, with the same vertical view as the
   original, so a wider window sees more of the map to each side rather than stretching
