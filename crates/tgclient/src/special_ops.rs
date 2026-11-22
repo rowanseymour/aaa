@@ -33,14 +33,39 @@ impl Plugin for SpecialOpsPlugin {
                 commands.remove_resource::<Panel>();
             })
             .init_resource::<Armed>()
+            .init_resource::<ColumnOpen>()
             .add_systems(OnExit(Screen::Match), |mut armed: ResMut<Armed>| {
                 armed.0 = None
             })
             .add_systems(
                 Update,
-                mark.run_if(in_state(Screen::Match))
-                    .run_if(resource_exists::<Panel>),
+                (mark.run_if(resource_exists::<Panel>), toggle_column)
+                    .run_if(in_state(Screen::Match)),
             );
+    }
+}
+
+/// What asks to open or close the column of operation buttons.
+pub const TOGGLE_COLUMN: &str = "ToggleSpecialOps";
+
+/// Whether the column of operation buttons is open, kept from one match to
+/// the next.
+#[derive(Resource, Clone, Copy, PartialEq, Debug)]
+pub struct ColumnOpen(pub bool);
+
+impl Default for ColumnOpen {
+    fn default() -> Self {
+        ColumnOpen(true)
+    }
+}
+
+/// Opens or closes the column as asked.
+fn toggle_column(mut intents: MessageReader<Intent>, mut open: ResMut<ColumnOpen>) {
+    if Asked::read(&mut intents)
+        .all()
+        .any(|i| i.0 == TOGGLE_COLUMN)
+    {
+        open.0 = !open.0;
     }
 }
 
@@ -489,6 +514,22 @@ pub(crate) mod tests {
 
     use super::*;
     use tgdata::Id;
+
+    #[test]
+    fn the_column_starts_open_and_each_toggle_flips_it() {
+        let mut app = App::new();
+        app.add_message::<Intent>()
+            .init_resource::<ColumnOpen>()
+            .add_systems(Update, toggle_column);
+        let open = |app: &App| app.world().resource::<ColumnOpen>().0;
+        app.update();
+        assert!(open(&app));
+        for expected in [false, true] {
+            app.world_mut().write_message(Intent(TOGGLE_COLUMN.into()));
+            app.update();
+            assert_eq!(open(&app), expected);
+        }
+    }
 
     pub(crate) fn words() -> Words {
         Words {
