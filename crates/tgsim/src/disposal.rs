@@ -19,7 +19,7 @@ impl World {
         self.may_command(player, organization)?;
         let r = &self.organizations[organization];
         let fighting = !r.engaged.is_empty() || r.hq.is_some();
-        if r.unpack_at.is_some() || (!self.lone(organization) && fighting) {
+        if !self.lone(organization) && fighting {
             return Err(Refused::Unable);
         }
         Ok(())
@@ -173,26 +173,6 @@ mod tests {
         assert!(w.destroyed(0));
         assert_eq!(w.organizations[r].hq, None);
         assert!(w.notices.is_empty());
-    }
-
-    #[test]
-    fn trucks_on_their_way_to_unpack_cant_be_disbanded() {
-        let mut w = headquarters();
-        let mut t = truck();
-        t.owner = 1;
-        t.renumber(30);
-        t.place([30.0, 30.0], [0.0, 1.0]);
-        let r = w.add_organization(&t);
-        let unpack = Command::Unpack {
-            organization: r,
-            at: [30.0, 40.0],
-            facing: NORTH,
-        };
-        w.apply(1, unpack).unwrap();
-        assert_eq!(
-            w.check(1, &Command::Disband { organization: r }),
-            Err(Refused::Unable)
-        );
     }
 
     #[test]

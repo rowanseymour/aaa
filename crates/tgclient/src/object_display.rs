@@ -1443,18 +1443,13 @@ fn hq_state(sim: &World, b: usize) -> Option<Option<&'static str>> {
 /// at rest.
 fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     let building = &sim.buildings[b];
+    let structure = crate::actions::structure_state(building);
     // A queue outweighs being out of supply, which outweighs disabled,
     // even while either holds the queue up.
-    let queue = match building.queue.front().map(|c| &c.work) {
-        Some(tgsim::Work::Research(_)) => Some("structure_researching"),
-        Some(tgsim::Work::Raise(_)) => Some("structure_recruiting"),
-        None => None,
-    };
-    match () {
-        _ if building.packing.is_some() => Some("structure_packing"),
-        _ if building.unpacking.is_some() => Some("structure_unpacking"),
+    match structure {
+        "structure_packing" | "structure_unpacking" => Some(structure),
         _ if building.constructing => Some("construction"),
-        _ if queue.is_some() => queue,
+        "structure_researching" | "structure_recruiting" => Some(structure),
         _ if sim.out_of_supply(b) && building.standing() => Some("out_of_supply"),
         _ if building.state == State::Disabled => Some("disabled"),
         _ => None,

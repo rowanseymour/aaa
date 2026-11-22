@@ -28,6 +28,8 @@ pub struct Command {
     /// Whether each of a group goes to its own place, keeping its place
     /// relative to the rest, rather than all to the one place.
     pub group_offset: bool,
+    /// Whether it's offered only with one thing selected.
+    pub alone: bool,
 }
 
 /// The images the connection dialog draws, by archive path.
@@ -286,6 +288,7 @@ impl GameData {
                     cursor: not_null(c.cursor_ids),
                     marker: c.command_vfx_ids_location,
                     group_offset: c.apply_group_offset.unwrap_or(true),
+                    alone: c.non_group_command,
                 })
             })
             .collect()

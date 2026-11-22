@@ -229,6 +229,7 @@ pub fn setup(
         .into_iter()
         .map(|c| (c.ids.clone(), c))
         .collect();
+    let has = GameHas::of(sim.0.rules(), &commands_by_id);
     let mut look_of = |game: &GameData, ids: &str| match commands_by_id.get(&Id::from(ids)) {
         Some(c) => (
             c.slot.map(|slot| Place {
@@ -466,7 +467,7 @@ pub fn setup(
         research_refused,
         choose_hero,
         no_target,
-        has: GameHas::of(sim.0.rules()),
+        has,
         research_requires,
         menus,
         researches,

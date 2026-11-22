@@ -218,6 +218,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         logistics: game.logistics(),
         resupply_rates: game.resupply_rates(),
         resupplying: game.resupplying(),
+        busy_states: game.busy_states(),
         recruit_lists,
         raisable,
         airlifts,

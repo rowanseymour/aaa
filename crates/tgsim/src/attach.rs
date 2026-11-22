@@ -173,7 +173,7 @@ impl World {
 
     /// Whether an HQ is one the organization at `r` could attach to, places
     /// aside: its own side's, and one whose building recruits its kind.
-    fn suits(&self, hq: &Hq, r: usize) -> bool {
+    pub fn suits(&self, hq: &Hq, r: usize) -> bool {
         let organization = &self.organizations[r];
         let recruits = self.rules.recruit_lists.get(&hq.building);
         hq.owner == organization.owner
@@ -318,6 +318,9 @@ mod tests {
         assert_eq!((w.packed_hq(0), w.packed_hq(1)), (Some(50), None));
         assert_eq!((w.detached(1), w.detached(2)), (vec![1], vec![]));
         assert!(w.attachable(1) && !w.attachable(2));
+        // The HQ itself is of a kind no HQ takes.
+        let hq = &w.hqs()[0];
+        assert!(w.suits(hq, 1) && !w.suits(hq, 0));
         // The HQ itself is in no supply and attaches to nothing.
         assert_eq!(
             w.check(1, &Command::Attach { organization: 0 }),
@@ -396,6 +399,9 @@ mod tests {
         w.apply(1, Command::Attach { organization: 1 }).unwrap();
         assert_eq!(w.detached(1), [2]);
         assert!(!w.attachable(1));
+        // Attached or not, the company's kind is one an HQ takes.
+        let hq = &w.hqs()[0];
+        assert!(w.suits(hq, 1) && !w.suits(hq, 2) && !w.suits(hq, 3));
     }
 
     #[test]

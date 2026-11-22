@@ -533,6 +533,10 @@ pub struct ActorState {
     pub ids: Option<Id>,
     /// Whether a regiment doing this may resupply.
     pub resupply: Option<bool>,
+    /// What sort of state it is, such as `busy`, for what a building in it
+    /// offers.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
     /// The shared [`Property`]s it gives what's in it.
     #[serde(default)]
     pub property: Vec<PropertyRef>,
@@ -1322,6 +1326,9 @@ pub struct ActorCommand {
     /// Whether each of a group keeps its place relative to the rest, rather
     /// than all going to the one place; true unless set.
     pub apply_group_offset: Option<bool>,
+    /// Whether it's offered only with one thing selected.
+    #[serde(default)]
+    pub non_group_command: bool,
 }
 
 /// A mouse cursor, drawn from numbered frames that loop.

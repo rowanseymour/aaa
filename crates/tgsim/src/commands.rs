@@ -16,6 +16,7 @@ impl World {
             .is_some_and(|r| r.owner == player)
             && !self.destroyed(organization)
             && !self.flown(organization)
+            && !self.unpacking(organization)
     }
 
     /// Whether anyone may give `player`'s orders: nobody plays a side
@@ -357,7 +358,10 @@ impl World {
         let Some(packs) = self.rules.packing.get(&b.template) else {
             return Err(Refused::Unable);
         };
-        if b.busy() || b.health <= packs.health_min * b.fighter.health * b.health_factor {
+        // Nor while it researches or recruits.
+        let working = !b.queue.is_empty();
+        if b.busy() || working || b.health <= packs.health_min * b.fighter.health * b.health_factor
+        {
             return Err(Refused::Unable);
         }
         Ok((packs.seconds / TICK).round() as u64)
@@ -680,7 +684,6 @@ mod tests {
             let r = &mut w.organizations[0];
             r.rally = Some([1.0, 1.0]);
             r.unpack_at = Some(([2.0, 2.0], [0.0, 1.0]));
-            r.unpack_again = Some(99);
             r.resume = Some(([3.0, 3.0], [0.0, 1.0]));
             w.apply(7, order.clone()).unwrap();
             let r = &w.organizations[0];

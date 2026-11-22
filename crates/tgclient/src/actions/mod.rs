@@ -24,7 +24,7 @@ pub(crate) use card_buttons::{
     AimedFor, CARD_BUTTON, CardButton, card_order, hold_card_button, let_go_card_buttons,
     press_card_button, show_card_buttons,
 };
-pub(crate) use layout::{builder, builds, contents, lit};
+pub(crate) use layout::{builder, builds, contents, lit, structure_state};
 pub(crate) use looks::{Looks, Quantity, setup};
 pub(crate) use press::{act, widget};
 pub(crate) use tips::{Said, Tip, fill, hover, tell};

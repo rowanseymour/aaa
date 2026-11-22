@@ -39,6 +39,15 @@ impl World {
             .room_for(&placed, Domain::Land, others.chain(&self.scenery))
     }
 
+    /// Whether the organization at `r` is unpacking, when it takes no
+    /// orders: at the spot it was sent to unpack, or with the building it
+    /// unpacked into still unpacking. On its way there it takes them all.
+    pub fn unpacking(&self, r: usize) -> bool {
+        let r = &self.organizations[r];
+        r.unpack_again.is_some()
+            || (r.unpacked_into).is_some_and(|b| self.buildings[b].unpacking.is_some())
+    }
+
     /// Unpacks the packed buildings that have reached where they were sent
     /// to unpack, each leaving the map for the building it makes, and
     /// calls it off for those that can't get there or no longer have room.
@@ -381,8 +390,16 @@ mod tests {
         w.add_buildings(&[building(40, 1, [30.0, 40.0])]);
         run(&mut w, 4.0);
         assert!(w.organizations[r].unpack_at.is_some() && w.notices.is_empty());
+        // At its spot it takes no orders, nor can it be disbanded.
+        assert_eq!(
+            w.check(1, &Command::Stop { organization: r }),
+            Err(Refused::NotYours)
+        );
+        let disband = Command::Disband { organization: r };
+        assert_eq!(w.check(1, &disband), Err(Refused::NotYours));
         run(&mut w, 1.5);
         assert!(w.organizations[r].unpack_at.is_none() && w.units[0].alive());
+        assert!(w.commands(1, r));
         let told = Notice::CannotUnpack {
             player: 1,
             organization: r,
@@ -407,6 +424,9 @@ mod tests {
         )
         .unwrap();
         run(&mut w, 1.0);
+        // On its way it takes every order, being disbanded among them.
+        let disband = Command::Disband { organization: r };
+        assert_eq!(w.check(1, &disband), Ok(()));
         w.apply(1, Command::Stop { organization: r }).unwrap();
         run(&mut w, 5.0);
         assert!(w.units[0].alive());
@@ -608,13 +628,30 @@ mod tests {
         // Not while it's unpacking, nor someone else's, nor what packs to
         // nothing.
         assert_eq!(w.order_pack(1, depot), Err(Refused::Unable));
+        // Nor does what it unpacked from take orders until it's done.
+        assert!(w.unpacking(r) && !w.commands(1, r));
         run(&mut w, 7.0);
+        assert!(!w.unpacking(r));
         assert_eq!(w.order_pack(2, depot), Err(Refused::NotYours));
         assert_eq!(w.order_pack(1, 0), Err(Refused::Unable));
         let full = w.buildings[depot].health;
         w.buildings[depot].health = full * 0.5;
         assert_eq!(w.order_pack(1, depot), Err(Refused::Unable));
         w.buildings[depot].health = full * 0.8;
+        let research = tgmap::Research {
+            technology: "tech".into(),
+            grant: tgmap::Grant::Side,
+            seconds: 1.0,
+            cost: Default::default(),
+            structures: Vec::new(),
+            structures_any: false,
+            properties: Vec::new(),
+            properties_any: false,
+        };
+        (w.buildings[depot].queue)
+            .push_back(crate::Commission::of(crate::Work::Research(research), 1.0));
+        assert_eq!(w.order_pack(1, depot), Err(Refused::Unable));
+        w.buildings[depot].queue.clear();
         w.apply(1, Command::Pack { building: depot }).unwrap();
         run(&mut w, 6.9);
         assert!(w.buildings[depot].standing());
