@@ -28,20 +28,38 @@ impl Plugin for ModernHudPlugin {
         app.add_systems(
             OnEnter(DRAWN),
             (
-                minimap::spawn,
+                (
+                    minimap::spawn,
+                    displays::spawn_buttons,
+                    clock::spawn,
+                    politics::spawn,
+                ),
+                minimap::lay_out_rim,
+            )
+                .chain(),
+        )
+        .add_systems(
+            OnEnter(DRAWN),
+            (
                 actions::spawn,
                 object_display::spawn,
                 resource_bar::spawn,
                 supply::spawn,
-                clock::spawn,
-                displays::spawn_buttons,
                 special_ops::spawn,
                 messages::place,
                 crate::hud::original::load_cards,
                 crate::object_display::redraw,
+                politics::take_over,
             ),
         )
-        .add_systems(OnExit(DRAWN), crate::hud::original::unload_cards)
+        .add_systems(
+            OnExit(DRAWN),
+            (
+                crate::hud::original::unload_cards,
+                // Switching interfaces, rather than leaving the match.
+                politics::close.run_if(in_state(crate::Screen::Match)),
+            ),
+        )
         .add_systems(
             Update,
             (
@@ -62,7 +80,6 @@ impl Plugin for ModernHudPlugin {
                     resource_bar::show,
                     times::show,
                     politics::show,
-                    politics::light_button,
                 )
                     .in_set(super::Draw),
                 (special_ops::refresh, special_ops::tips)

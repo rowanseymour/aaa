@@ -5,6 +5,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use super::displays::Rim;
 use crate::minimap::Minimap;
 
 /// Width of the disc on screen, in logical pixels, which the diamond's
@@ -12,15 +13,11 @@ use crate::minimap::Minimap;
 pub const DISC: f32 = 236.0;
 /// Width of the round buttons on the disc's rim.
 pub const RIM_BUTTON: f32 = 34.0;
-/// How far the buttons' centres are from the disc's, across and up: on the
-/// rim, midway between the diamond's corners.
-pub const BOLT: f32 = DISC / 2.0 * std::f32::consts::FRAC_1_SQRT_2;
 /// Texels across the backdrop the disc and its buttons share.
 const BACKDROP_TEXELS: u32 = 512;
 
 /// Spawns our interface's disc, in the window's lower left corner.
-pub fn spawn(mut commands: Commands, minimap: Res<Minimap>, mut images: ResMut<Assets<Image>>) {
-    let backdrop = images.add(silhouette(BACKDROP_TEXELS, backdrop_shape));
+pub fn spawn(mut commands: Commands, minimap: Res<Minimap>) {
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -37,7 +34,7 @@ pub fn spawn(mut commands: Commands, minimap: Res<Minimap>, mut images: ResMut<A
         children![
             (
                 Backdrop,
-                ImageNode::new(backdrop),
+                ImageNode::default(),
                 Node {
                     position_type: PositionType::Absolute,
                     width: percent(100),
@@ -63,12 +60,36 @@ pub fn spawn(mut commands: Commands, minimap: Res<Minimap>, mut images: ResMut<A
 #[derive(Component)]
 pub struct Backdrop;
 
-/// Whether a point of the disc's square is on the disc or one of the
-/// buttons on its rim.
-fn backdrop_shape(x: f32, y: f32) -> bool {
-    let (bolt, radius) = (BOLT / (DISC / 2.0), RIM_BUTTON / DISC);
-    let (bx, by) = (x.abs() - bolt, y.abs() - bolt);
-    x * x + y * y <= 1.0 || bx * bx + by * by <= radius * radius
+/// Places the round buttons on the rim, once they're all spawned, and
+/// draws the backdrop under them.
+pub fn lay_out_rim(
+    mut buttons: Query<(&Rim, &mut Node)>,
+    mut backdrops: Query<&mut ImageNode, With<Backdrop>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let rims: Vec<Rim> = buttons.iter().map(|(rim, _)| *rim).collect();
+    let corner = crate::ui_scale::MARGIN + DISC / 2.0 - RIM_BUTTON / 2.0;
+    for (rim, mut node) in &mut buttons {
+        let at = corner + rim.centre(&rims);
+        node.left = px(at.x);
+        node.bottom = px(at.y);
+    }
+    let centres: Vec<Vec2> = (rims.iter())
+        .map(|r| r.centre(&rims) / (DISC / 2.0))
+        .collect();
+    let backdrop = images.add(silhouette(BACKDROP_TEXELS, |x, y| {
+        backdrop_shape(&centres, Vec2::new(x, -y))
+    }));
+    for mut image in &mut backdrops {
+        image.image = backdrop.clone();
+    }
+}
+
+/// Whether `point` of the disc's square, y up, is on the disc or on one of
+/// the buttons centred at `buttons`.
+fn backdrop_shape(buttons: &[Vec2], point: Vec2) -> bool {
+    let radius = RIM_BUTTON / DISC;
+    point.length_squared() <= 1.0 || buttons.iter().any(|b| b.distance(point) <= radius)
 }
 
 /// Fills the backdrop with the colour the interface over the map has.

@@ -1,23 +1,18 @@
-//! Our politics panel: a round button at the end of the resource bar's
-//! row, and under the bars while it's open, the shared
-//! [rows](crate::politics::Rows), each with its side's gem and name and
-//! the font's marker for how the player stands to it.
+//! Our politics panel: one of the [display panels](crate::displays),
+//! opened by its button on the minimap's rim, whose window lists the
+//! shared [rows](crate::politics::Rows), each with its side's gem and name
+//! and the font's marker for how the player stands to it.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
-use super::displays::{Glyph, Lighting, RimLook, light, round_button};
-use crate::intent::Asks;
-use crate::keys::{Bindings, Named};
-use crate::politics::{BUTTON, CALLED, Politics, Rows};
-use crate::ui::{self, Click, Font, Gem, Hint, Ink, Marked, Surface, Theme, backed, label};
+use crate::Loaded;
+use crate::displays::{self, Window};
+use crate::politics::{Look, Rows};
+use crate::ui::{self, Font, Gem, Hint, Ink, Marked, label};
 
-/// The button that opens and closes the panel.
-#[derive(Component)]
-pub struct PoliticsButton;
-
-/// The panel, holding its rows.
+/// The box in the panel's window holding its rows.
 #[derive(Component)]
 pub struct Panel {
     /// The ally, neutral and enemy markers.
@@ -28,68 +23,61 @@ pub struct Panel {
 const MARKER: f32 = 16.0;
 const NAME: f32 = 180.0;
 
-/// Spawns the button in `row`, the size of the bars, with `glyph` on it.
-pub fn spawn_button(
-    row: &mut ChildSpawnerCommands,
-    size: f32,
-    glyph: Handle<Image>,
-    bindings: &Bindings,
-    (name, help): (String, String),
+/// Spawns the panel's window, hidden, in the middle of the screen, its
+/// markers as the font draws them.
+pub fn spawn(
+    mut commands: Commands,
+    loaded: Res<Loaded>,
+    mut cache: ResMut<ui::ImageCache>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    let node = Node {
-        width: px(size),
-        height: px(size),
-        border: UiRect::all(px(1)),
-        border_radius: BorderRadius::MAX,
-        justify_content: JustifyContent::Center,
-        align_items: AlignItems::Center,
-        ..default()
+    let game = &loaded.game;
+    let strings = game.strings();
+    let said = ui::said(&strings);
+    let mut marker = |name: &str| {
+        let path = format!("{}/{name}.png", ui::GLYPH_DIR);
+        cache.get(game, &mut images, &path)
     };
-    row.spawn((
-        round_button(node, glyph, size * 0.7, Click::TOGGLE),
-        Named::new(bindings, BUTTON, name),
-        (Asks::new(BUTTON), Hint(help)),
-        ui::called(CALLED),
-        PoliticsButton,
-    ));
-}
-
-/// Spawns the panel in `column`, hidden, its markers as the font draws
-/// them.
-pub fn spawn_panel(column: &mut ChildSpawnerCommands, markers: Vec<Option<Handle<Image>>>) {
-    let mut markers = markers.into_iter();
+    let mut markers =
+        (Look::new(game).glyphs.into_iter()).map(|g| g.as_deref().and_then(&mut marker));
     let markers = std::array::from_fn(|_| markers.next().flatten());
-    column.spawn((
-        Panel { markers },
-        backed(
-            Surface::Hud,
-            Node {
-                display: Display::None,
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::axes(px(10), px(6)),
-                row_gap: px(3),
-                border_radius: BorderRadius::all(px(6)),
-                ..default()
-            },
-        ),
-        crate::ui::Blocks,
-        RelativeCursorPosition::default(),
-    ));
+    let (window, contents) = displays::spawn_window(
+        &mut commands,
+        Window {
+            panel: displays::Panel::Politics,
+            title: said("politics_display_Child_text", "Politics"),
+            at: Vec2::new(382.0, 264.0),
+            size: Vec2::new(260.0, 240.0),
+            pane: true,
+        },
+    );
+    commands.entity(contents).insert(Panel { markers });
+    // Gone with our interface, so the original's draws politics its own way.
+    commands.entity(window).insert(DespawnOnExit(super::DRAWN));
 }
 
-/// Shows the panel while it's open, its rows written afresh whenever they
-/// change.
+/// Closes the original's panel as our interface takes over, since ours
+/// can't.
+pub fn take_over(mut politics: ResMut<crate::politics::Politics>) {
+    if politics.open {
+        politics.open = false;
+    }
+}
+
+/// Closes the panel as our interface goes, letting the match go on if
+/// opening it held it.
+pub fn close(mut toggling: displays::Toggling) {
+    toggling.close_panel(displays::Panel::Politics);
+}
+
+/// Writes the rows afresh whenever they change.
 pub fn show(
     mut commands: Commands,
-    politics: Res<Politics>,
     rows: Res<Rows>,
     gem: Res<Gem>,
-    mut panels: Query<(Entity, Ref<Panel>, &mut Node)>,
+    panels: Query<(Entity, Ref<Panel>)>,
 ) {
-    for (entity, panel, mut node) in &mut panels {
-        if (node.display == Display::None) == politics.open {
-            ui::show(&mut node, politics.open);
-        }
+    for (entity, panel) in &panels {
         if !rows.is_changed() && !panel.is_added() {
             continue;
         }
@@ -150,22 +138,4 @@ fn write(lines: &mut ChildSpawnerCommands, panel: &Panel, gem: &Gem, row: &crate
             None => line.spawn(square(MARKER)),
         };
     });
-}
-
-/// Lights the button while the panel's open.
-pub fn light_button(
-    politics: Res<Politics>,
-    theme: Res<Theme>,
-    mut buttons: Query<(Ref<PoliticsButton>, RimLook)>,
-    mut glyphs: Query<&mut ImageNode, With<Glyph>>,
-) {
-    let restyle = politics.is_changed() || theme.is_changed();
-    for (button, look) in &mut buttons {
-        let lighting = Lighting {
-            lit: politics.open,
-            usable: true,
-            restyle: restyle || button.is_added(),
-        };
-        light(look, lighting, &theme, &mut glyphs);
-    }
 }
