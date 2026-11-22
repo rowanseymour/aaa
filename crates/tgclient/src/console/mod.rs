@@ -454,16 +454,33 @@ mod tests {
     fn docs_list_the_verbs() {
         let mut page = String::from(
             "# Console commands\n\n\
-             <!-- Written from the verbs in crates/tgclient/src/console.rs by its \
+             <!-- Written from the verbs in crates/tgclient/src/console/verbs.rs by the \
              docs_list_the_verbs test; run it with UPDATE_DOCS=1 to rewrite. -->\n\n\
              How lines are written, and how scripts and a port feed them in, is in \
-             [console.rs](../crates/tgclient/src/console.rs). Words in [brackets] are \
-             optional, and (a | b) means either.\n\n",
+             [the console module](../crates/tgclient/src/console/mod.rs). Words in \
+             [brackets] are optional, and (a | b) means either.\n\n\
+             - **Original**: the original games have a command of that name, though \
+             not always taking the same words.\n\
+             - **Match**: only during a match.\n",
         );
-        for v in VERBS {
-            let usage = format!("{} {}", v.name, v.args);
-            let dev = if v.dev { DEV_ONLY } else { "" };
-            page += &format!("- `{}`: {}{dev}\n", usage.trim_end(), v.does);
+        let tick = |on: bool| if on { "✓" } else { "" };
+        let dev = DEV_ONLY.trim_start_matches("; ");
+        for (heading, dev_only) in [("Playing", false), ("Developing", true)] {
+            page += &format!("\n## {heading}\n\n");
+            if dev_only {
+                page += &format!("These run {dev}.\n\n");
+            }
+            page += "| Command | What it does | Original | Match |\n|---|---|:-:|:-:|\n";
+            for v in VERBS.iter().filter(|v| v.dev == dev_only) {
+                let usage = format!("{} {}", v.name, v.args);
+                page += &format!(
+                    "| `{}` | {} | {} | {} |\n",
+                    usage.trim_end().replace('|', "\\|"),
+                    v.does.replace('|', "\\|"),
+                    tick(v.original),
+                    tick(v.in_match),
+                );
+            }
         }
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/console.md");
         if std::env::var_os("UPDATE_DOCS").is_some() {
