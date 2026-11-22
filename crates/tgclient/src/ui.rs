@@ -551,6 +551,18 @@ pub fn shelf(surface: Surface, node: Node) -> impl Bundle {
     )
 }
 
+/// A [`panel`] that sits on the window's left edge, so rounded only on
+/// the right.
+pub fn ledge(surface: Surface, node: Node) -> impl Bundle {
+    backed(
+        surface,
+        Node {
+            border_radius: BorderRadius::right(px(CORNER)),
+            ..node
+        },
+    )
+}
+
 /// A [`panel`] of text over the map, which the pointer passes through.
 pub fn tooltip(node: Node) -> impl Bundle {
     (
