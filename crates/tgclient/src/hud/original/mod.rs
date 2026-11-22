@@ -36,6 +36,7 @@ pub(crate) use object::{Cards, fill_bars};
 
 use super::{Hud, InMatch};
 use crate::actions::{COLUMNS, ROWS, Shown, Slot};
+use crate::idle::Idle;
 use crate::intent::Asks;
 use crate::ui::Blocks;
 use crate::{Loaded, Local, Sim};
@@ -87,6 +88,7 @@ impl Plugin for OriginalHudPlugin {
                     (groups::open, groups::show),
                     experience::refresh,
                     shortage::show,
+                    crate::idle::show,
                     times::show,
                     politics::show,
                     (show_grid, tips::show).chain(),
@@ -300,6 +302,9 @@ struct Press {
     click: crate::ui::Click,
     /// What it's switched on while, for one that stays on or off.
     follows: Option<Follows>,
+    /// What it steps through, for an idle button, shown only while
+    /// there's something to.
+    idle: Option<Idle>,
 }
 
 impl Press {
@@ -311,6 +316,15 @@ impl Press {
             called,
             click: crate::ui::Click::PUSH,
             follows: None,
+            idle: None,
+        }
+    }
+
+    /// The idle button stepping through what `idle` does.
+    const fn idle(idle: Idle) -> Press {
+        Press {
+            idle: Some(idle),
+            ..Press::push("IdleButton", idle.asks(), idle.called())
         }
     }
 
@@ -332,9 +346,13 @@ impl Press {
             called,
             click: crate::ui::Click::TOGGLE,
             follows: Some(follows),
+            idle: None,
         }
     }
 }
+
+/// The idle buttons, each in the panel its [`Idle`] names.
+static IDLE: [Press; 2] = [Press::idle(Idle::ALL[0]), Press::idle(Idle::ALL[1])];
 
 static PRESSABLE: [Press; 10] = [
     Press::push("ButtonMenu", crate::pause::MENU, "control.menu"),
@@ -520,6 +538,16 @@ pub fn spawn(
         } else if name == experience::WIDGET {
             let fonts = (&mut letters, &mut *faces);
             experience = experience::build(widget, &within, &mut drawer, panel, fonts);
+        }
+    }
+    for press in &IDLE {
+        let panel = press.idle.and_then(|idle| named(idle.widget()));
+        if let Some(panel) = panel
+            && let Some(within) = drawer.own(panel, &[])
+        {
+            for button in panel.children.iter().filter(|b| b.visible) {
+                drawer.pressable(press, button, &within);
+            }
         }
     }
     // The message log goes in the corner between the floater along the top
@@ -833,6 +861,14 @@ impl Drawer<'_> {
             chain.push(Step::Into(part.bounds));
             self.faces(part, &chain, &[], &mut faces);
         }
+        // Such as the picture a frame's drawn around.
+        for child in widget.children.iter().filter(|c| c.visible) {
+            self.widget_faces(child, &chain, &mut faces);
+        }
+        // An idle panel the game leaves empty has no button.
+        if faces.is_empty() && press.idle.is_some() {
+            return;
+        }
         let (name, help) = widget.tooltip(&self.pictures.game.strings());
         self.pressables.push(BuiltPressable {
             press,
@@ -841,6 +877,24 @@ impl Drawer<'_> {
             at: reach(&chain),
             faces,
         });
+    }
+
+    /// Adds a widget's pictures within a [`PRESSABLE`] one to `faces`,
+    /// `within` the steps to its parent.
+    fn widget_faces(&mut self, widget: &Widget, within: &[Step], faces: &mut Vec<Face>) {
+        let mut chain = within.to_vec();
+        if let Some(view) = &widget.view {
+            chain.push(Step::Into(view.bounds));
+            self.faces(view, &chain, &[], faces);
+        }
+        for part in &widget.parts {
+            let mut chain = chain.clone();
+            chain.push(Step::Into(part.bounds));
+            self.faces(part, &chain, &[], faces);
+        }
+        for child in widget.children.iter().filter(|c| c.visible) {
+            self.widget_faces(child, &chain, faces);
+        }
     }
 
     /// Adds `element`'s pictures and its children's to `faces`, each drawn
@@ -1019,6 +1073,9 @@ impl BuiltPressable {
             Blocks,
             RelativeCursorPosition::default(),
         ));
+        if let Some(idle) = press.idle {
+            button.insert(idle);
+        }
         if let Some(follows) = press.follows {
             button.insert(follows);
             // The pause button's greyed for those who may not pause.

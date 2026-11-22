@@ -11,6 +11,8 @@ use tgdata::Hotkey;
 use crate::intent::Intent;
 use crate::ui::Marked;
 
+/// Stepping through the player's builders with nothing to do.
+pub const CYCLE_IDLE: &str = "CycleSelection 1";
 /// Stepping through the player's organizations that have no HQ.
 pub const CYCLE_DETACHED: &str = "CycleSelection 2";
 /// Showing or hiding the supply border.

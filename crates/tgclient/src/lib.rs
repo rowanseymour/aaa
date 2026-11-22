@@ -45,6 +45,7 @@ mod formations;
 mod ghost;
 mod heard;
 mod hud;
+mod idle;
 mod intent;
 mod keys;
 mod lan;
@@ -534,6 +535,7 @@ pub fn run(program: Program) -> ExitCode {
         .init_resource::<ghost::Landing>()
         .init_resource::<deliveries::Flights>()
         .init_resource::<supply::Border>()
+        .init_resource::<idle::Shown>()
         .init_resource::<clock::PauseState>()
         .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
@@ -634,6 +636,7 @@ pub fn run(program: Program) -> ExitCode {
                 selection_sounds,
                 show_focus,
                 (supply::show_border, supply::tint_buildings),
+                idle::refresh,
                 (
                     clock::follow.run_if(resource_exists::<Orders>),
                     clock::disable_buttons,
@@ -735,7 +738,7 @@ pub fn run(program: Program) -> ExitCode {
                 keys::send.run_if(keys_free).run_if(keys_heard),
                 (
                     special_ops::act,
-                    supply::cycle_detached,
+                    idle::cycle,
                     messages::cycle,
                     supply::toggle_border,
                     fog::cheat,
