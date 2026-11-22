@@ -897,6 +897,9 @@ pub struct Flags {
     pub invisible: bool,
     /// It counts as `invulnerable` to target filters.
     pub invulnerable: Option<bool>,
+    /// It can belong to a side; one that can't belongs to nobody, whoever
+    /// placed or made it.
+    pub ownable: Option<bool>,
     pub blocking: Option<bool>,
     /// Its model tilts to follow the ground under its soft shape.
     pub conform_to_terrain: Option<bool>,

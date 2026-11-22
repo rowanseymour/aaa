@@ -195,6 +195,11 @@ pub struct Rules {
     pub experience_per_second: f32,
     /// How far each template sees, by template.
     pub sights: HashMap<Id, tgmap::Sight>,
+    /// The templates whose things are props.
+    pub props: HashMap<Id, tgmap::PropTemplate>,
+    /// The blocking shape of each organization template, which it needs
+    /// room for where it's made.
+    pub organization_shapes: HashMap<Id, tgmap::Shape>,
     /// The templates whose organizations are numbered, as are the buildings
     /// standing in their organizations.
     pub numbered: HashSet<Id>,
@@ -283,6 +288,8 @@ impl Default for Rules {
             granted: HashMap::new(),
             experience_per_second: 0.0,
             sights: HashMap::new(),
+            props: HashMap::new(),
+            organization_shapes: HashMap::new(),
             numbered: HashSet::new(),
             sustaining: HashSet::new(),
             team_victory: true,

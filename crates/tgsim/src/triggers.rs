@@ -30,8 +30,9 @@ pub struct Triggers {
     /// One for each of `list`.
     pub switches: Vec<Switch>,
     pub variables: BTreeMap<String, f32>,
-    /// The things the map gives a name, with their ids, in its order.
-    pub(crate) names: Arc<[(String, u32)]>,
+    /// The things given a name, with their ids: the map's in its order,
+    /// then those made in play as they're made.
+    pub(crate) names: Vec<(String, u32)>,
     /// The changes of the sun's colours triggers have made, oldest first.
     pub suns: Vec<SunChange>,
     /// The countdown a trigger has put on screen, for every side to see.
@@ -144,7 +145,7 @@ impl Triggers {
             list: t.triggers.clone().into(),
             switches: t.triggers.iter().map(switch).collect(),
             variables: t.variables.iter().cloned().collect(),
-            names: Arc::default(),
+            names: Vec::new(),
             suns: Vec::new(),
             counter: None,
             objectives: Arc::default(),
@@ -167,8 +168,9 @@ impl Triggers {
 
 impl crate::hash::Digest for Triggers {
     fn digest(&self, h: &mut crate::hash::Hasher) {
-        // The list and names are fixed by the map.
+        // The list is fixed by the map.
         self.switches.digest(h);
+        self.names.digest(h);
         self.variables.digest(h);
         self.suns.digest(h);
         self.counter.digest(h);
@@ -221,6 +223,10 @@ const HANDLED: &[&str] = &[
     "objective_incomplete_for_kingdom",
     "object_destroyed",
     "object_removed",
+    "actor_create_named",
+    "unit_create_named",
+    "organization_create_named",
+    "building_create_named",
     "actor_transfer_control_to_kingdom",
     "true",
     "activation_time",
@@ -537,7 +543,7 @@ impl World {
             // Naming nothing counts as dead.
             "actor_is_dead" => thing(self).is_none_or(|t| self.dying(t)),
             "actor_owned_by_kingdom" => match (thing(self), kingdom(self, 1)) {
-                (Some(t), Some(k)) => self.thing_owner(t) == k,
+                (Some(t), Some(k)) => self.thing_owner(t) == Some(k),
                 _ => false,
             },
             "actor_comparison_life" | "actor_comparison_morale" => {
@@ -610,7 +616,7 @@ impl World {
                     let piece = match t {
                         Thing::Organization(r) => Piece::Organization(r),
                         Thing::Building(b) => Piece::Building(b),
-                        Thing::Unit(_) => return false,
+                        Thing::Unit(_) | Thing::Prop(_) => return false,
                     };
                     self.selection(k).contains(&piece)
                 }
@@ -645,6 +651,7 @@ impl World {
             Thing::Unit(u) => self.units[u].died.is_some(),
             Thing::Organization(r) => self.destroyed(r),
             Thing::Building(b) => matches!(self.buildings[b].state, State::Destroyed(_)),
+            Thing::Prop(p) => !self.props[p].standing(),
         }
     }
 
@@ -654,7 +661,7 @@ impl World {
         let (health, most) = match t {
             Thing::Unit(u) => (self.units[u].health, self.max_health(u)),
             Thing::Building(b) => (self.buildings[b].health, self.building_max_health(b)),
-            Thing::Organization(_) => return None,
+            Thing::Organization(_) | Thing::Prop(_) => return None,
         };
         (most > 0.0).then(|| health.max(0.0) / most)
     }
@@ -701,6 +708,7 @@ impl World {
     fn sees_thing(&self, player: u32, t: Thing) -> bool {
         match t {
             Thing::Building(b) => self.sees_building(player, b),
+            Thing::Prop(p) => self.seen(player, self.props[p].position) == crate::Seen::Visible,
             Thing::Unit(_) | Thing::Organization(_) => self.regiment_of(t).is_some_and(|r| {
                 let units = &self.organizations[r].units;
                 units.iter().any(|&u| self.sees_unit(player, u))
@@ -931,6 +939,19 @@ impl World {
                 Some(t) => self.remove_thing(t),
                 None => false,
             },
+            "actor_create_named"
+            | "unit_create_named"
+            | "organization_create_named"
+            | "building_create_named" => {
+                let template = crate::making::made_template(p.first());
+                let owner = self.kingdom(p.get(1));
+                let at = crate::making::location(p.get(2));
+                let name = name(p.get(3)).unwrap_or_default();
+                match (template, owner, at) {
+                    (Some(t), Some(k), Some(at)) => self.make_named(&t, k, at, name),
+                    _ => false,
+                }
+            }
             _ => false,
         }
     }
@@ -988,6 +1009,13 @@ impl World {
     fn transfer(&mut self, t: Thing, k: u32) -> bool {
         match t {
             Thing::Building(b) => self.change_hands(b, k),
+            Thing::Prop(p) => {
+                let template = &self.props[p].template;
+                if !self.rules.props.get(template).is_some_and(|t| t.ownable) {
+                    return false;
+                }
+                self.props[p].owner = Some(k);
+            }
             Thing::Organization(_) | Thing::Unit(_) => match self.regiment_of(t) {
                 Some(r) => self.change_side(r, k),
                 None => return false,
@@ -1022,6 +1050,7 @@ impl World {
                 self.buildings[b].struck = None;
                 self.fall(b, None);
             }
+            Thing::Prop(p) => return self.destroy_prop(p),
         }
         true
     }
@@ -1048,6 +1077,7 @@ impl World {
                 self.remove(b, State::Sold(ticks));
                 return true;
             }
+            Thing::Prop(p) => return self.remove_prop(p),
         };
         let mut removed = false;
         for u in units {
@@ -1123,7 +1153,7 @@ impl World {
     }
 
     /// The thing on the map with the map id `id`.
-    fn by_id(&self, id: u32) -> Option<Thing> {
+    pub(crate) fn by_id(&self, id: u32) -> Option<Thing> {
         let organization = (0..self.organizations.len())
             .find(|&r| self.organizations[r].id == id && self.organization_on_map(r));
         let unit =
@@ -1132,9 +1162,12 @@ impl World {
             (0..self.buildings.len())
                 .find(|&b| self.buildings[b].id == id && self.building_on_map(b))
         };
+        let prop =
+            || (0..self.props.len()).find(|&p| self.props[p].id == id && self.props[p].there());
         (organization.map(Thing::Organization))
             .or_else(|| unit().map(Thing::Unit))
             .or_else(|| building().map(Thing::Building))
+            .or_else(|| prop().map(Thing::Prop))
     }
 
     /// The number a parameter gives: stored, or a variable's.
@@ -1791,7 +1824,7 @@ mod tests {
             "actor_gains_experience",
             vec![named, fixed(12.0)],
         )]);
-        w.triggers.names = vec![("ivan".to_string(), 3)].into();
+        w.triggers.names = vec![("ivan".to_string(), 3)];
         let mut dead = w.clone();
         w.tick();
         assert!((w.organizations[1].experience - 12.0).abs() < 1e-4);
@@ -2396,6 +2429,137 @@ mod tests {
         w.units[1].position = [10.0, 21.0];
         w.tick();
         assert_eq!((count(&w, "named"), count(&w, "any")), (1.0, 2.0));
+    }
+
+    #[test]
+    fn regiments_are_made_for_a_side_by_name() {
+        let make = |template: &str, name: &str| {
+            let template = parameter(
+                "ma_actor_data",
+                "mi_actor_data_named",
+                Value::String(template.into()),
+            );
+            let at = parameter(
+                "ma_location",
+                "mi_location",
+                Value::Location([30.0, 30.0, 0.0]),
+            );
+            let name = parameter("ma_string", "mi_string", Value::String(name.into()));
+            element(
+                "organization_create_named",
+                vec![template, kingdom(1), at, name],
+            )
+        };
+        let named = parameter("ma_actor", "mi_actor_named", Value::String("help".into()));
+        let owned = element("actor_owned_by_kingdom", vec![named, kingdom(1)]);
+        let mut w = with(
+            battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war()),
+            vec![
+                trigger(
+                    1,
+                    true,
+                    false,
+                    vec![],
+                    vec![make("company", "Help"), make("", "Nothing")],
+                ),
+                trigger(2, true, true, vec![owned], vec![incr("found")]),
+            ],
+            &[("found", 0.0)],
+        );
+        let company = crate::testing::raised_company(&mut w, 1);
+        w.rules.raisable.insert("company".into(), company);
+        let before = (w.organizations.len(), w.units.len());
+        w.tick();
+        w.tick();
+        assert_eq!(
+            (w.organizations.len(), w.units.len()),
+            (before.0 + 1, before.1 + 3)
+        );
+        let made = w.organizations.last().unwrap();
+        assert_eq!((made.owner, made.template.as_str()), (1, "company"));
+        assert!(made.position[0] > 25.0 && made.position[1] > 25.0);
+        assert!(count(&w, "found") >= 1.0);
+    }
+
+    #[test]
+    fn props_are_made_clear_of_units_and_named_until_taken_away() {
+        let make = |template: &str, at: [f32; 2], name: &str| {
+            let template = parameter(
+                "ma_unit_data",
+                "mi_unit_data",
+                Value::String(template.into()),
+            );
+            let at = parameter(
+                "ma_location",
+                "mi_location",
+                Value::Location([at[0], at[1], 0.0]),
+            );
+            let name = parameter("ma_string", "mi_string", Value::String(name.into()));
+            element("unit_create_named", vec![template, kingdom(1), at, name])
+        };
+        let named = |n: &str| parameter("ma_actor", "mi_actor_named", Value::String(n.into()));
+        let mut w = with(
+            battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war()),
+            vec![
+                trigger(
+                    1,
+                    true,
+                    false,
+                    vec![],
+                    vec![
+                        // On regiment 1's unit, so it goes to the first clear point round it.
+                        make("eye", [10.0, 10.0], "Eye"),
+                        make("marker", [40.0, 40.0], "Marker"),
+                        // The name's taken.
+                        make("eye", [40.0, 40.0], "eye"),
+                    ],
+                ),
+                trigger(
+                    2,
+                    false,
+                    false,
+                    vec![],
+                    vec![element("object_removed", vec![named("Eye")])],
+                ),
+                trigger(
+                    3,
+                    false,
+                    false,
+                    vec![],
+                    vec![element("object_destroyed", vec![named("Marker")])],
+                ),
+            ],
+            &[],
+        );
+        let prop = |ownable, health| tgmap::PropTemplate {
+            ownable,
+            health,
+            shape: tgmap::Shape::Circle { radius: 0.2 },
+        };
+        w.rules.props.insert("eye".into(), prop(true, None));
+        w.rules
+            .props
+            .insert("marker".into(), prop(false, Some(500.0)));
+        w.units[0].shape = Some(tgmap::Shape::Circle { radius: 0.5 });
+        w.tick();
+        assert_eq!(w.props.len(), 2);
+        let (eye, marker) = (&w.props[0], &w.props[1]);
+        assert_eq!((eye.owner, marker.owner), (Some(1), None));
+        assert_ne!(eye.position, [10.0, 10.0]);
+        let away = [eye.position[0] - 10.0, eye.position[1] - 10.0];
+        let length = libm::hypotf(away[0], away[1]);
+        assert!((eye.facing[0] - away[0] / length).abs() < 1e-5);
+        assert_eq!(
+            (marker.position, marker.facing),
+            ([40.0, 40.0], [0.0, -1.0])
+        );
+        // Removed, the sight-giver frees its name; destroyed, the marker
+        // with health lies as remains, still bearing its.
+        w.triggers.switches[1].active = true;
+        w.triggers.switches[2].active = true;
+        w.tick();
+        assert!(w.props[0].gone && !w.props[1].gone && w.props[1].died.is_some());
+        assert!(!w.name_taken("eye") && w.name_taken("MARKER"));
     }
 
     #[test]

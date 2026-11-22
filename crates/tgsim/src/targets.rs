@@ -65,13 +65,14 @@ impl TypeSlots {
     }
 }
 
-/// Something a filter can be tested on: a regiment as well as the units
-/// and buildings that fight.
+/// Something a filter or a trigger can be tested on: a regiment as well as
+/// the units and buildings that fight, and the props triggers name.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Thing {
     Organization(usize),
     Unit(usize),
     Building(usize),
+    Prop(usize),
 }
 
 impl From<Target> for Thing {
@@ -125,8 +126,9 @@ impl World {
     fn is_type(&self, user: User, t: Thing, name: &Id) -> Option<bool> {
         let standing = || {
             let owner = self.thing_owner(t);
-            let side = self.sides.player(owner);
-            (side, side.map(|_| self.sides.relation(user.player, owner)))
+            let side = owner.and_then(|o| self.sides.player(o));
+            let relation = (side.and(owner)).map(|o| self.sides.relation(user.player, o));
+            (side, relation)
         };
         let regiment = |of: Thing| self.regiment_of(of);
         let is = |n: &str| name.as_str().eq_ignore_ascii_case(n);
@@ -192,6 +194,7 @@ impl World {
                     .chain(regiment(unit.organization, &unit.template))
                     .collect()
             }
+            Thing::Prop(_) => Vec::new(),
             Thing::Building(b) => {
                 let building = &self.buildings[b];
                 let (owner, held) = (building.owner, &building.properties);
@@ -217,15 +220,18 @@ impl World {
             Thing::Organization(r) => &self.organizations[r].template,
             Thing::Unit(u) => &self.units[u].template,
             Thing::Building(b) => &self.buildings[b].template,
+            Thing::Prop(p) => &self.props[p].template,
         };
         fighter.is_some_and(|f| f.builds.contains(template))
     }
 
-    pub(crate) fn thing_owner(&self, t: Thing) -> u32 {
+    /// The side `t` belongs to; `None` for a prop that can't be owned.
+    pub(crate) fn thing_owner(&self, t: Thing) -> Option<u32> {
         match t {
-            Thing::Organization(r) => self.organizations[r].owner,
-            Thing::Unit(u) => self.organizations[self.units[u].organization].owner,
-            Thing::Building(b) => self.buildings[b].owner,
+            Thing::Organization(r) => Some(self.organizations[r].owner),
+            Thing::Unit(u) => Some(self.organizations[self.units[u].organization].owner),
+            Thing::Building(b) => Some(self.buildings[b].owner),
+            Thing::Prop(p) => self.props[p].owner,
         }
     }
 
@@ -237,13 +243,14 @@ impl World {
             Thing::Unit(u) => Some(self.units[u].organization),
             Thing::Building(b) => (0..self.organizations.len())
                 .find(|&r| self.organizations[r].unpacked_into == Some(b)),
+            Thing::Prop(_) => None,
         }
     }
 
     /// Whether `t` has health: a living unit or a building with some left.
     fn has_body(&self, t: Thing) -> bool {
         match t {
-            Thing::Organization(_) => false,
+            Thing::Organization(_) | Thing::Prop(_) => false,
             Thing::Unit(u) => self.units[u].fighter.is_some() && self.units[u].alive(),
             Thing::Building(b) => self.buildings[b].health > 0.0,
         }
@@ -254,7 +261,7 @@ impl World {
     /// buildings.
     fn capturable_now(&self, t: Thing) -> bool {
         match t {
-            Thing::Organization(_) => false,
+            Thing::Organization(_) | Thing::Prop(_) => false,
             Thing::Unit(u) => {
                 let unit = &self.units[u];
                 unit.alive() && unit.fighter.as_ref().is_some_and(|f| f.capturable)
