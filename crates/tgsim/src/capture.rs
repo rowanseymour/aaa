@@ -1,6 +1,7 @@
 //! Buildings falling and changing hands, and cities going to whoever
 //! holds their zone.
 
+use crate::triggers::Happening;
 use crate::{CAPTURE_HEALTH, Notice, Piece, Relation, State, Target, World};
 
 impl World {
@@ -19,6 +20,10 @@ impl World {
         if let Some(by) = taker {
             building.health = CAPTURE_HEALTH * building.fighter.health * building.health_factor;
             self.change_hands(b, by);
+            self.happen(Happening::Captured {
+                building: b,
+                player: by,
+            });
         } else if building.fighter.destructible {
             let (owner, struck) = (building.owner, building.struck);
             if let Some(by) = self.killer(struck, owner) {
@@ -109,6 +114,10 @@ impl World {
                 && winner != self.buildings[c].owner
             {
                 self.change_hands(c, winner);
+                self.happen(Happening::Captured {
+                    building: c,
+                    player: winner,
+                });
             }
         }
     }

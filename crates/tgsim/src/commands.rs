@@ -118,6 +118,8 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.may_cancel_construction(player, building)
             }
+            Command::Heard { ref command } => self.may_hear(command),
+            Command::Select { ref pieces } => self.may_select(pieces),
         }
     }
 
@@ -255,6 +257,11 @@ impl World {
                 self.cancel_construction(player, building)?
             }
             Command::Group { orders } => self.order_group(player, orders)?,
+            Command::Heard { command } => self.hear(&command)?,
+            Command::Select { pieces } => {
+                self.may_select(&pieces)?;
+                self.triggers.selected.insert(player, pieces);
+            }
         }
         if let (Some(r), false) = (steering, grouped) {
             self.leave_group(r);

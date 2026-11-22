@@ -1,7 +1,7 @@
 //! A number that two copies of a match share only while they've played out
 //! the same way, for telling when they haven't.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use tgmap::{Id, Tile};
 
@@ -161,6 +161,13 @@ impl<T: Digest> Digest for VecDeque<T> {
 
 impl<T: Digest, const N: usize> Digest for [T; N] {
     fn digest(&self, h: &mut Hasher) {
+        self.iter().for_each(|x| x.digest(h));
+    }
+}
+
+impl<T: Digest> Digest for BTreeSet<T> {
+    fn digest(&self, h: &mut Hasher) {
+        self.len().digest(h);
         self.iter().for_each(|x| x.digest(h));
     }
 }
