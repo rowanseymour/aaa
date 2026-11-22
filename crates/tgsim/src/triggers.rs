@@ -35,6 +35,27 @@ pub struct Triggers {
     pub(crate) names: Arc<[(String, u32)]>,
     /// The changes of the sun's colours triggers have made, oldest first.
     pub suns: Vec<SunChange>,
+    /// The countdown a trigger has put on screen, for every side to see.
+    pub counter: Option<Counter>,
+}
+
+/// A countdown from `seconds` of game time, shown at `at`. Reaching 0
+/// does nothing but stop it there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Counter {
+    /// The tick it was shown.
+    pub at: u64,
+    pub seconds: f32,
+}
+
+crate::hash::digest!(Counter { at, seconds });
+
+impl Counter {
+    /// The seconds left at `ticks` into the match, which may fall between
+    /// two. Counted in ticks, so whole seconds don't round short.
+    pub fn left(&self, ticks: f32) -> f32 {
+        (self.seconds - (ticks - self.at as f32) * TICK).max(0.0)
+    }
 }
 
 /// A trigger turning the sun's colours to a sun definition's, moving from
@@ -71,6 +92,7 @@ impl Triggers {
             variables: t.variables.iter().cloned().collect(),
             names: Arc::default(),
             suns: Vec::new(),
+            counter: None,
         }
     }
 }
@@ -81,6 +103,7 @@ impl crate::hash::Digest for Triggers {
         self.switches.digest(h);
         self.variables.digest(h);
         self.suns.digest(h);
+        self.counter.digest(h);
     }
 }
 
@@ -101,6 +124,8 @@ const HANDLED: &[&str] = &[
     "actor_modify_morale",
     "actor_gains_experience",
     "global_set_sun_colors",
+    "game_counter_show",
+    "game_counter_hide",
 ];
 
 /// How two numbers are compared, by the game's numbering.
@@ -298,6 +323,18 @@ impl World {
                 }
                 _ => false,
             },
+            "game_counter_show" => match self.number(p.first()) {
+                Some(seconds) if seconds > 0.0 => {
+                    let at = self.ticks;
+                    self.triggers.counter = Some(Counter { at, seconds });
+                    true
+                }
+                _ => false,
+            },
+            "game_counter_hide" => {
+                self.triggers.counter = None;
+                true
+            }
             _ => false,
         }
     }
@@ -708,6 +745,32 @@ mod tests {
         assert_eq!(change.sun, "sun_night".into());
         assert_eq!(change.seconds, 3600.0);
         assert!(change.at > 0 && change.at <= w.ticks);
+    }
+
+    #[test]
+    fn a_trigger_shows_a_countdown_that_stops_at_zero_until_hidden() {
+        let show = |seconds| element("game_counter_show", vec![int(seconds)]);
+        let hide = element("game_counter_hide", vec![]);
+        let mut w = with(
+            pool(),
+            vec![
+                trigger(1, true, false, vec![], vec![show(0)]),
+                trigger(2, true, false, vec![after(1)], vec![show(30)]),
+                trigger(3, true, false, vec![after(60)], vec![hide]),
+            ],
+            &[],
+        );
+        run(&mut w, 0.5);
+        assert_eq!(w.triggers.counter, None, "0 seconds fails");
+        run(&mut w, 1.0);
+        let counter = w.triggers.counter.expect("shown after a second");
+        assert_eq!(counter.seconds, 30.0);
+        let shown = counter.at as f32;
+        assert_eq!(counter.left(shown), 30.0);
+        assert_eq!(counter.left(shown + 100.0), 20.0);
+        assert_eq!(counter.left(shown + 1000.0), 0.0);
+        run(&mut w, 60.0);
+        assert_eq!(w.triggers.counter, None);
     }
 
     #[test]

@@ -21,6 +21,7 @@ use crate::options::{
 };
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
+use crate::times::Elapsed;
 use crate::ui_scale::{UI_SCALES, UiScaleSetting};
 
 /// The options file's name, in the program's own folder for its
@@ -40,6 +41,7 @@ pub struct Chosen {
     pub nickname: Option<String>,
     pub hotkeys: Option<String>,
     pub supply_border: Option<bool>,
+    pub elapsed_game_time: Option<bool>,
     pub display: Option<Display>,
     /// The window's size while windowed.
     pub resolution: Option<[u32; 2]>,
@@ -166,6 +168,9 @@ impl Saved {
         }
         if let Some(on) = chosen.supply_border {
             world.insert_resource(Border(on));
+        }
+        if let Some(on) = chosen.elapsed_game_time {
+            world.insert_resource(Elapsed(on));
         }
         if let Some(aa) = chosen.anti_aliasing {
             world.insert_resource(aa);
@@ -349,6 +354,7 @@ struct Now<'w, 's> {
     nickname: Res<'w, Nickname>,
     options: Res<'w, Options>,
     border: Res<'w, Border>,
+    elapsed: Res<'w, Elapsed>,
     anti_aliasing: Res<'w, AntiAliasing>,
     ui_scale: Res<'w, UiScaleSetting>,
     hud: Res<'w, Hud>,
@@ -373,6 +379,7 @@ impl Now<'_, '_> {
             || self.nickname.is_changed()
             || self.options.is_changed()
             || self.border.is_changed()
+            || self.elapsed.is_changed()
             || self.anti_aliasing.is_changed()
             || self.ui_scale.is_changed()
             || self.hud.is_changed()
@@ -402,6 +409,7 @@ impl Now<'_, '_> {
             nickname: Some(self.nickname.0.clone()),
             hotkeys: self.options.hotkeys().map(|c| c.id.as_str().to_string()),
             supply_border: Some(self.border.0),
+            elapsed_game_time: Some(self.elapsed.0),
             display,
             resolution,
             position,
