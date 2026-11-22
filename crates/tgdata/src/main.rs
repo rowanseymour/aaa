@@ -14,6 +14,7 @@ usage:
   tgdata effects  <game dir> [filter] the visual effects object templates show, by what sets them off
   tgdata messages <game dir>          the kinds of message, then the game events and the lines they post
   tgdata resources <game dir>         the resources, with what each is for and what a shortfall of it costs, and the resource bar's cells
+  tgdata campaigns <game dir>         the campaigns and their missions, in the order they're played
   tgdata factions <game dir>          each nation's factions, their computer players and their special operations as tooltips show them
   tgdata widgets  <game dir> [name]   the in-match interface's widgets, or one by name, as trees with their bounds on the screen";
 
@@ -58,6 +59,7 @@ fn main() -> ExitCode {
         ["effects", dir] => effects(dir, ""),
         ["effects", dir, filter] => effects(dir, filter),
         ["messages", dir] => messages(dir),
+        ["campaigns", dir] => campaigns(dir),
         ["factions", dir] => factions(dir),
         ["resources", dir] => resources(dir),
         ["widgets", dir] => widgets(dir, None),
@@ -306,6 +308,36 @@ fn cues(dir: &str, filter: &str) -> Res {
 
 /// The effects of each object template whose id contains `filter`, ignoring
 /// case, with a `?` on effects that aren't defined and each effect's kind.
+fn campaigns(dir: &str) -> Res {
+    let game = GameData::open(dir.as_ref())?;
+    for c in game.campaigns() {
+        let after = c
+            .depends_on
+            .map_or(String::new(), |d| format!(", after {d}"));
+        outln!("{} {:?}{after}", c.id, c.name);
+        for m in &c.missions {
+            let (kind, path) = match &m.kind {
+                tgdata::MissionKind::Playable(p) => ("map", p),
+                tgdata::MissionKind::Cutscene(p) => ("cutscene", p),
+                tgdata::MissionKind::Cinematic(p) => ("video", p),
+            };
+            let found = match &m.kind {
+                tgdata::MissionKind::Cinematic(_) => game.exists(path),
+                _ => game.find_map(path).is_some(),
+            };
+            let missing = if found { "" } else { " (missing)" };
+            let pictures = if m.loading_pictures.is_some() {
+                ""
+            } else {
+                ", no loading pictures"
+            };
+            let last = if m.last { ", last" } else { "" };
+            outln!("  {:?}: {kind} {path}{missing}{pictures}{last}", m.name);
+        }
+    }
+    Ok(())
+}
+
 fn factions(dir: &str) -> Res {
     let game = GameData::open(dir.as_ref())?;
     let rules = game.experience_rules();

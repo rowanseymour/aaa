@@ -185,7 +185,13 @@ fn main_menu(
 
 fn new_game(mut commands: Commands) {
     let column = column(&mut commands, MenuPage::NewGame);
-    commands.spawn((disabled("Campaign", Font::Large), ChildOf(column)));
+    commands
+        .spawn((
+            button("Campaign", Font::Large),
+            called("menu.campaign"),
+            ChildOf(column),
+        ))
+        .observe(go(Screen::Campaign));
     commands
         .spawn((
             button("Custom", Font::Large),

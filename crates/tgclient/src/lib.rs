@@ -25,6 +25,7 @@
 mod actions;
 mod backdrop;
 mod banners;
+mod campaigns;
 mod chat;
 mod cli;
 mod clock;
@@ -164,6 +165,7 @@ enum Screen {
     Loading,
     Match,
     Debriefing,
+    Campaign,
 }
 
 /// The game's data, which a match shares as it's loaded and played.
@@ -549,6 +551,7 @@ pub fn run(program: Program) -> ExitCode {
             staging::StagingPlugin,
             leaving::LeavingPlugin,
             times::TimesPlugin,
+            campaigns::CampaignsPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(
@@ -760,6 +763,7 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
         .insert_resource(music::Music::new(&game))
         .insert_resource(volumes)
+        .insert_resource(campaigns::Campaigns::of(&game))
         .insert_resource(Data(Arc::new(game)))
         .insert_resource(faces)
         .init_resource::<ui::Gem>()
@@ -769,7 +773,9 @@ pub fn run(program: Program) -> ExitCode {
         )
         .add_systems(OnExit(Screen::Match), ui::ImageCache::forget);
     saved.apply(app.world_mut());
-    app.insert_resource(saved).add_plugins(saved::SavedPlugin);
+    app.insert_resource(campaigns::Progress::beside(saved.path()))
+        .insert_resource(saved)
+        .add_plugins(saved::SavedPlugin);
     let setup = match &joined {
         Some((_, welcome, _)) => Some(welcome.setup.clone()),
         None => map.map(|name| tgserver::Setup {

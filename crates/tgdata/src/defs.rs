@@ -1732,6 +1732,43 @@ pub struct WorldRule {
     pub never_editable: Option<bool>,
 }
 
+/// A campaign: missions played one after another from the campaign screen.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Campaign {
+    pub ids: Option<Id>,
+    pub name: Option<String>,
+    /// The campaign the screen suggests finishing first.
+    pub dependent_campaign_ids: Option<String>,
+    /// Its button's picture once every mission is complete, and until then.
+    pub complete_texture: Option<String>,
+    pub incomplete_texture: Option<String>,
+    /// What a complete mission's name is drawn in, and any other's.
+    pub complete_color: Option<[f32; 3]>,
+    pub incomplete_color: Option<[f32; 3]>,
+    /// In the order they're played.
+    #[serde(default)]
+    pub mission: Vec<CampaignMission>,
+}
+
+/// One of a [`Campaign`]'s missions.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CampaignMission {
+    pub map: Option<String>,
+    /// The video a `CINEMATIC` one plays.
+    pub cinematic: Option<String>,
+    pub name: Option<String>,
+    /// `PLAYABLE`, `CUTSCENE` or `CINEMATIC`.
+    pub mission_type: Option<String>,
+    /// The pictures either side of its loading screen, a `%s` in the path
+    /// standing for a folder named after the screen's width.
+    pub loading_texture_left: Option<String>,
+    pub loading_texture_right: Option<String>,
+    pub debriefing_success: Option<String>,
+    pub debriefing_failure: Option<String>,
+    /// Whether winning it goes to the credits rather than the debriefing.
+    pub is_final_mission: Option<bool>,
+}
+
 /// One of the choices a [`WorldRule`] offers.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorldRuleChoice {
