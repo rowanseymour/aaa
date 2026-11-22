@@ -1078,6 +1078,12 @@ pub enum Command {
         at: [f32; 2],
         on: Option<Piece>,
     },
+    /// Tells the map's triggers the player ran this interface command,
+    /// such as `ActorCommand move`, which they're listening for.
+    Heard { command: String },
+    /// Tells the map's triggers what the player has selected: organizations,
+    /// or a building.
+    Select { pieces: Vec<Piece> },
 }
 
 impl Building {

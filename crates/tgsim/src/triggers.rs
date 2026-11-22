@@ -3,14 +3,14 @@
 //!
 //! An event, condition or effect not handled here never holds, or fails.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use tgmap::Id;
 use tgmap::triggers::{Element, Parameter, Trigger, Value};
 
 use crate::targets::Thing;
-use crate::{Notice, SECOND, Standing, State, TICK, World};
+use crate::{Notice, Piece, Refused, SECOND, Standing, State, TICK, World};
 
 /// Where a trigger stands in the match.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,6 +45,13 @@ pub struct Triggers {
     pub condition_kingdom: Option<u32>,
     /// What's happened since the last pass that the world doesn't keep.
     pub(crate) happened: Vec<Happening>,
+    /// The interface commands the map listens for, in lower case.
+    pub listening: BTreeSet<String>,
+    /// What each side's player has selected, as their orders last said.
+    pub selected: BTreeMap<u32, Vec<Piece>>,
+    /// Whether any trigger tests what's selected, which players need only
+    /// say then.
+    pub watches_selection: bool,
     /// The thing the trigger being run is run for, and the one a condition
     /// last picked, while it's tested.
     event_thing: Option<Thing>,
@@ -61,6 +68,12 @@ pub(crate) enum Happening {
     Finished { player: u32, template: Id },
     /// A side recruited something of the template.
     Recruited { player: u32, template: Id },
+    /// A side took a building, by index into [`World::buildings`]: by
+    /// damage, or a city by holding its zone.
+    Captured { building: usize, player: u32 },
+    /// A player ran an interface command the map listens for, in lower
+    /// case.
+    Heard { command: String },
 }
 
 /// A thing that died since the last pass, with what last damaged it.
@@ -129,6 +142,11 @@ impl Triggers {
             event_kingdom: None,
             condition_kingdom: None,
             happened: Vec::new(),
+            listening: BTreeSet::new(),
+            selected: BTreeMap::new(),
+            watches_selection: (t.triggers.iter())
+                .flat_map(|t| &t.conditions)
+                .any(|c| SELECTION.contains(&c.name.as_str())),
             event_thing: None,
             condition_thing: None,
         }
@@ -144,11 +162,23 @@ impl crate::hash::Digest for Triggers {
         self.counter.digest(h);
         self.event_kingdom.digest(h);
         self.condition_kingdom.digest(h);
+        self.listening.digest(h);
+        self.selected.digest(h);
     }
 }
 
+/// The conditions that test what a player has selected.
+const SELECTION: &[&str] = &[
+    "actor_selected_by_kingdom",
+    "actor_data_selected_by_kingdom",
+];
+
 /// The events, conditions and effects carried out.
 const HANDLED: &[&str] = &[
+    "event_script_heard",
+    "effect_ui_script_listen",
+    "actor_selected_by_kingdom",
+    "actor_data_selected_by_kingdom",
     "actor_captured_by_kingdom",
     "actor_destroys_actor",
     "kingdom_begins_construction_on_actor",
@@ -176,6 +206,7 @@ const HANDLED: &[&str] = &[
     "objective_incomplete_for_kingdom",
     "object_destroyed",
     "object_removed",
+    "actor_transfer_control_to_kingdom",
     "true",
     "activation_time",
     "value_compare_value",
@@ -213,6 +244,36 @@ fn compare(how: u32, a: f32, b: f32) -> bool {
 }
 
 impl World {
+    /// Refused for an interface command the map doesn't listen for, so
+    /// nothing else is kept.
+    pub(crate) fn may_hear(&self, command: &str) -> Result<(), Refused> {
+        match self.triggers.listening.contains(&command.to_lowercase()) {
+            true => Ok(()),
+            false => Err(Refused::Unable),
+        }
+    }
+
+    /// Has the triggers hear a player ran an interface command the map
+    /// listens for.
+    pub(crate) fn hear(&mut self, command: &str) -> Result<(), Refused> {
+        self.may_hear(command)?;
+        let command = command.to_lowercase();
+        self.happen(Happening::Heard { command });
+        Ok(())
+    }
+
+    /// Refused for a selection naming what the match doesn't have.
+    pub(crate) fn may_select(&self, pieces: &[Piece]) -> Result<(), Refused> {
+        let there = |p: &Piece| match *p {
+            Piece::Organization(r) => r < self.organizations.len(),
+            Piece::Building(b) => b < self.buildings.len(),
+        };
+        match pieces.iter().all(there) {
+            true => Ok(()),
+            false => Err(Refused::Unable),
+        }
+    }
+
     /// Keeps something that's happened for the triggers' next pass.
     pub(crate) fn happen(&mut self, happening: Happening) {
         self.triggers.happened.push(happening);
@@ -270,6 +331,7 @@ impl World {
             for effect in &trigger.effects {
                 self.carry_out(effect);
             }
+            log::debug!("trigger {} ran", trigger.name);
             ran = true;
             if !trigger.repeats {
                 break;
@@ -324,7 +386,6 @@ impl World {
     /// things it was run for.
     fn heard(&mut self, e: &Element, deaths: &[Death]) -> Option<Vec<Thing>> {
         let p = &e.parameters;
-        let at = self.ticks.checked_sub(1)?;
         let made = |made: fn(&Happening) -> Option<(u32, &Id)>| {
             move |w: &mut World| {
                 let k = w.pick_kingdom(p.first(), Role::Event)?;
@@ -344,11 +405,20 @@ impl World {
                 let Some(Thing::Building(b)) = thing else {
                     return None;
                 };
-                let building = &self.buildings[b];
-                (building.captured == Some(at) && building.owner == k)
-                    .then(|| vec![Thing::Building(b)])
+                // Only its latest capture counts.
+                let latest = (self.triggers.happened.iter().rev()).find_map(|h| match *h {
+                    Happening::Captured { building, player } if building == b => Some(player),
+                    _ => None,
+                });
+                (latest == Some(k)).then(|| vec![Thing::Building(b)])
             }
             "actor_destroys_actor" => self.destroys(p, deaths),
+            "event_script_heard" => {
+                let command = name(p.first())?.to_lowercase();
+                let heard =
+                    |h: &Happening| matches!(h, Happening::Heard { command: c } if *c == command);
+                self.triggers.happened.iter().any(heard).then(Vec::new)
+            }
             "kingdom_begins_construction_on_actor" => made(|h| match h {
                 Happening::Begun { player, template } => Some((*player, template)),
                 _ => None,
@@ -482,12 +552,38 @@ impl World {
                     _ => false,
                 }
             }
+            "actor_selected_by_kingdom" => match (thing(self), kingdom(self, 1)) {
+                (Some(t), Some(k)) => {
+                    let piece = match t {
+                        Thing::Organization(r) => Piece::Organization(r),
+                        Thing::Building(b) => Piece::Building(b),
+                        Thing::Unit(_) => return false,
+                    };
+                    self.selection(k).contains(&piece)
+                }
+                _ => false,
+            },
+            "actor_data_selected_by_kingdom" => match (template(p.first()), kingdom(self, 1)) {
+                (Some(Some(template)), Some(k)) => self.selection(k).iter().any(|&p| {
+                    let of = match p {
+                        Piece::Organization(r) => &self.organizations[r].template,
+                        Piece::Building(b) => &self.buildings[b].template,
+                    };
+                    *of == template
+                }),
+                _ => false,
+            },
             "kingdom_default_lose" => kingdom(self, 0).is_some_and(|k| self.has_nothing_left(k)),
             "kingdom_has_no_settlements" => {
                 kingdom(self, 0).is_some_and(|k| !self.settlements.iter().any(|s| s.owner == k))
             }
             _ => false,
         }
+    }
+
+    /// What the player of side `k` has selected.
+    fn selection(&self, k: u32) -> &[Piece] {
+        self.triggers.selected.get(&k).map_or(&[], Vec::as_slice)
     }
 
     /// Whether `t` is dying or has died.
@@ -757,6 +853,23 @@ impl World {
                     _ => false,
                 }
             }
+            "effect_ui_script_listen" => match (name(p.first()), p.get(1).map(|p| &p.value)) {
+                (Some(command), Some(Value::Int(on))) if !command.is_empty() => {
+                    let command = command.to_lowercase();
+                    match *on != 0 {
+                        true => self.triggers.listening.insert(command),
+                        false => self.triggers.listening.remove(&command),
+                    };
+                    true
+                }
+                _ => false,
+            },
+            "actor_transfer_control_to_kingdom" => {
+                match (self.thing(p.first()), self.kingdom(p.get(1))) {
+                    (Some(t), Some(k)) => self.transfer(t, k),
+                    _ => false,
+                }
+            }
             "object_destroyed" => match self.thing(p.first()) {
                 Some(t) => self.destroy_thing(t),
                 None => false,
@@ -814,6 +927,19 @@ impl World {
             primary: objective.primary,
             standing: Some(standing),
         });
+        true
+    }
+
+    /// Hands `t` to side `k` as a capture would, though it isn't heard as
+    /// one: a unit with its regiment.
+    fn transfer(&mut self, t: Thing, k: u32) -> bool {
+        match t {
+            Thing::Building(b) => self.change_hands(b, k),
+            Thing::Organization(_) | Thing::Unit(_) => match self.regiment_of(t) {
+                Some(r) => self.change_side(r, k),
+                None => return false,
+            },
+        }
         true
     }
 
@@ -1713,7 +1839,8 @@ mod tests {
 
     #[test]
     fn a_capture_is_heard_by_the_side_that_took_it() {
-        let house = crate::testing::building(50, 2, [30.0, 30.0]);
+        let mut house = crate::testing::building(50, 2, [30.0, 30.0]);
+        house.fighter.capturable = true;
         let w = crate::testing::with_buildings(veterans(), &[house]);
         let taken = |k| element("actor_captured_by_kingdom", vec![actor_id(50), kingdom(k)]);
         let mut w = with(
@@ -1724,10 +1851,31 @@ mod tests {
             ],
             &[("ours", 0.0), ("theirs", 0.0)],
         );
-        w.change_hands(0, 1);
+        w.fall(0, Some(1));
         w.tick();
         w.tick();
         assert_eq!((count(&w, "ours"), count(&w, "theirs")), (1.0, 0.0));
+        // Handed over by a trigger, it isn't heard as captured.
+        let back = element(
+            "actor_transfer_control_to_kingdom",
+            vec![actor_id(50), kingdom(2)],
+        );
+        w.triggers.list = vec![
+            heard(1, true, vec![taken(2)], vec![incr("theirs")]),
+            trigger(2, true, false, Vec::new(), vec![back]),
+        ]
+        .into();
+        w.triggers.switches = vec![
+            super::Switch {
+                active: true,
+                activated: 0
+            };
+            2
+        ];
+        w.tick();
+        w.tick();
+        assert_eq!(w.buildings[0].owner, 2);
+        assert_eq!(count(&w, "theirs"), 0.0);
     }
 
     #[test]
@@ -2025,5 +2173,112 @@ mod tests {
         let had = w.stockpile(1);
         w.tick();
         assert!((w.stockpile(1) - had - 1000.0).abs() < 1e-3);
+    }
+
+    fn command(text: &str) -> Parameter {
+        parameter(
+            "ma_script_command",
+            "mi_script_command",
+            Value::String(text.into()),
+        )
+    }
+
+    #[test]
+    fn a_command_is_heard_only_while_the_map_listens_for_it() {
+        let on = |n| parameter("ma_boolean", "mi_boolean", Value::Int(n));
+        let listen = element(
+            "effect_ui_script_listen",
+            vec![command("ActorCommand move"), on(1)],
+        );
+        let stop = element(
+            "effect_ui_script_listen",
+            vec![command("ActorCommand move"), on(0)],
+        );
+        let heard_move = element("event_script_heard", vec![command("ActorCommand move")]);
+        let mut w = with(
+            veterans(),
+            vec![
+                trigger(1, true, false, Vec::new(), vec![listen]),
+                heard(2, true, vec![heard_move], vec![incr("moves")]),
+                trigger(3, false, false, Vec::new(), vec![stop]),
+            ],
+            &[("moves", 0.0)],
+        );
+        // Not yet listened for when it ran.
+        let early = w.apply(
+            1,
+            crate::Command::Heard {
+                command: "ActorCommand move".into(),
+            },
+        );
+        assert!(early.is_err());
+        w.tick();
+        assert_eq!(count(&w, "moves"), 0.0);
+        assert!(w.triggers.listening.contains("actorcommand move"));
+        w.apply(
+            1,
+            crate::Command::Heard {
+                command: "actorcommand MOVE".into(),
+            },
+        )
+        .unwrap();
+        w.tick();
+        assert_eq!(count(&w, "moves"), 1.0);
+        w.tick();
+        assert_eq!(count(&w, "moves"), 1.0);
+        w.triggers.switches[2].active = true;
+        w.tick();
+        let late = w.apply(
+            1,
+            crate::Command::Heard {
+                command: "ActorCommand move".into(),
+            },
+        );
+        assert!(late.is_err());
+        w.tick();
+        assert_eq!(count(&w, "moves"), 1.0);
+    }
+
+    #[test]
+    fn a_selection_is_tested_by_thing_and_by_template() {
+        let by_thing = element("actor_selected_by_kingdom", vec![actor_id(1), kingdom(1)]);
+        let unit = element("actor_selected_by_kingdom", vec![actor_id(2), kingdom(1)]);
+        let theirs = element("actor_selected_by_kingdom", vec![actor_id(1), kingdom(2)]);
+        let by_template = |k| {
+            element(
+                "actor_data_selected_by_kingdom",
+                vec![template("squad"), kingdom(k)],
+            )
+        };
+        let w = with(
+            veterans(),
+            vec![
+                heard(1, true, Vec::new(), Vec::new()),
+                trigger(2, true, true, vec![by_thing], vec![incr("regiment")]),
+                trigger(3, true, true, vec![unit], vec![incr("unit")]),
+                trigger(4, true, true, vec![theirs], vec![incr("theirs")]),
+                trigger(5, true, true, vec![by_template(1)], vec![incr("template")]),
+            ],
+            &[
+                ("regiment", 0.0),
+                ("unit", 0.0),
+                ("theirs", 0.0),
+                ("template", 0.0),
+            ],
+        );
+        let mut w = w;
+        assert!(w.triggers.watches_selection);
+        w.organizations[0].template = Id::from("squad");
+        let select = crate::Command::Select {
+            pieces: vec![crate::Piece::Organization(0)],
+        };
+        w.apply(1, select).unwrap();
+        w.tick();
+        let counts = ["regiment", "unit", "theirs", "template"].map(|n| count(&w, n));
+        assert_eq!(counts, [1.0, 0.0, 0.0, 1.0]);
+        let nowhere = crate::Command::Select {
+            pieces: vec![crate::Piece::Building(9)],
+        };
+        assert!(w.apply(1, nowhere).is_err());
     }
 }

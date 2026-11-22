@@ -43,6 +43,7 @@ mod fields;
 mod fog;
 mod formations;
 mod ghost;
+mod heard;
 mod hud;
 mod intent;
 mod keys;
@@ -554,6 +555,7 @@ pub fn run(program: Program) -> ExitCode {
             times::TimesPlugin,
             politics::PoliticsPlugin,
             campaigns::CampaignsPlugin,
+            heard::HeardPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(
