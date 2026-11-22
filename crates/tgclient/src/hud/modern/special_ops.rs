@@ -27,21 +27,25 @@ const ROW: f32 = 22.0;
 const TRAY: f32 = BUTTON + 2.0 * PAD;
 const MEDAL: f32 = 16.0;
 
-/// How far right of the left edge, and down from the top, the panel
-/// leaves clear for what shares the corner with it.
-const CLEAR: Vec2 = Vec2::new(
-    crate::ui_scale::MARGIN + TRAY + 2.0 * GAP,
-    crate::ui_scale::MARGIN + ROW + 2.0 * GAP,
-);
+/// How far right of the left edge the panel leaves clear for what's
+/// beside it.
+pub const CLEAR: f32 = crate::ui_scale::MARGIN + TRAY + 2.0 * GAP;
 
-/// Where what shares the top left corner starts: clear of the panel,
-/// which only a side with a faction has.
-pub fn corner(local: &Local, leaders: &Leaders) -> Vec2 {
+/// How far from the left edge what's beside the panel starts, such as the
+/// group strip: clear of the panel, which only a side with a faction has.
+pub fn beside(local: &Local, leaders: &Leaders) -> f32 {
     let led = local.0.is_some_and(|p| leaders.0.contains_key(&p));
     match led {
         true => CLEAR,
-        false => Vec2::splat(crate::ui_scale::MARGIN),
+        false => crate::ui_scale::MARGIN,
     }
+}
+
+/// Where what shares the top left corner starts: beside the panel, under
+/// the group strip.
+pub fn corner(local: &Local, leaders: &Leaders) -> Vec2 {
+    let top = crate::ui_scale::MARGIN + super::groups::HEIGHT + 2.0 * GAP;
+    Vec2::new(beside(local, leaders), top)
 }
 
 /// The experience's figure, with what it was last shown as, to redo only

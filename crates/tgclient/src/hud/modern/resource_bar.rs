@@ -46,6 +46,20 @@ pub fn spawn(
     let glyphs = crate::ui::glyphs(game, &mut images, &mut cache);
     let stockpile = stockpile(game);
     let cells = game.economy_bar();
+    // The row's pills, shortage icon and bar at their widest, then the
+    // group strip beside the special operations.
+    let widths = cells
+        .iter()
+        .map(|kind| match stockpile.as_ref() == Some(kind) {
+            true => STOCKPILE_CELL,
+            false => CELL,
+        });
+    let bar_width = widths.sum::<f32>() + GAP * cells.len().saturating_sub(1) as f32 + GAP * 4.0;
+    let right = 2.0 * super::times::PILL + HEIGHT + bar_width + 3.0 * GAP;
+    let left = super::special_ops::CLEAR + super::groups::WIDTH;
+    commands.insert_resource(crate::ui_scale::TopRow(
+        left + 2.0 * GAP + right + crate::ui_scale::MARGIN,
+    ));
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
         root.spawn((
             Bar(preview),

@@ -143,6 +143,7 @@ mod tests {
             default: 0,
             combat: None,
             primary,
+            locked: Vec::new(),
             kinds: Vec::new(),
             broken: Default::default(),
             broken_types: Vec::new(),

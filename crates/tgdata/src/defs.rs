@@ -1059,6 +1059,10 @@ pub struct LayoutSlot {
     pub property_ids: Option<String>,
     #[serde(default)]
     pub primary: bool,
+    /// Whether its members stand for the organization, as in the picture
+    /// of a control group holding it.
+    #[serde(default)]
+    pub locked: bool,
     /// How many times the slot repeats.
     pub number: Option<usize>,
 }
@@ -1590,6 +1594,9 @@ pub struct UVars {
     /// Whether the options' Elapsed Game Time starts on.
     #[serde(rename = "ViewShowElapsedGameTime")]
     pub view_show_elapsed_game_time: Option<bool>,
+    /// Whether the strip of control groups starts open.
+    #[serde(rename = "UIGroupFloaterIsOpen")]
+    pub ui_group_floater_is_open: Option<bool>,
 }
 
 /// A set of hotkeys players can choose.
@@ -1616,6 +1623,8 @@ pub struct AVars {
     pub ui_use_pause_button: Option<bool>,
     #[serde(rename = "UIShowFactionExperience")]
     pub ui_show_faction_experience: Option<bool>,
+    #[serde(rename = "UIFloatersDisplayEndCap")]
+    pub ui_floaters_display_end_cap: Option<bool>,
     /// The supply border's width in world units, its colour, and the image
     /// drawn along it, by its archive path.
     #[serde(rename = "ViewZoneFriendlySupplyWidth")]

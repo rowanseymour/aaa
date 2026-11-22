@@ -326,6 +326,9 @@ pub struct Looks {
     /// The template in each organization's primary slot, by the
     /// organization's; none for one with no such slot.
     pub(crate) primaries: HashMap<Id, Option<Id>>,
+    /// The unit template that stands for each organization's, as a control
+    /// group's picture: see [`standing_for`].
+    pub(crate) standing_for: HashMap<Id, Id>,
     /// Each member's slot property, e.g. `front`, in member order, for
     /// an organization of each template that's whole.
     pub(crate) kinds: HashMap<Id, Vec<Id>>,
@@ -404,6 +407,10 @@ pub fn setup(
         let slot = layouts.get(&o.layout).and_then(|l| l.primary);
         (id.clone(), slot.and_then(|s| o.slots.get(s)?.clone()))
     });
+    let standing_for = components.iter().filter_map(|(id, o)| {
+        let layout = layouts.get(&o.layout)?;
+        Some((id.clone(), standing_for(layout, o)?))
+    });
     let kinds = components.iter().filter_map(|(id, o)| {
         let layout = layouts.get(&o.layout)?;
         let start = layout.formations.get(layout.default)?;
@@ -436,6 +443,7 @@ pub fn setup(
     }
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
+        standing_for: standing_for.collect(),
         kinds: kinds.collect(),
         primary_members: primary_members.collect(),
         positions: positions.collect(),
@@ -1905,6 +1913,17 @@ pub(crate) fn card_places(
     places
 }
 
+/// The unit template that stands for an organization made as `component`
+/// says: that of its first locked slot with one, else its primary slot's,
+/// else its first slot's with one.
+fn standing_for(layout: &tgdata::Layout, component: &tgdata::OrganizationComponent) -> Option<Id> {
+    let filled = |i: usize| component.slots.get(i).cloned().flatten();
+    let locked = (0..component.slots.len()).filter(|&i| layout.locked.get(i) == Some(&true));
+    (locked.filter_map(filled).next())
+        .or_else(|| layout.primary.and_then(filled))
+        .or_else(|| component.slots.iter().flatten().next().cloned())
+}
+
 /// Which member, in member order, of a whole organization made as
 /// `component` says holds `layout`'s primary position: the last of its
 /// primary slot's, after those of the filled slots before it.
@@ -2359,6 +2378,7 @@ mod tests {
             default: 0,
             combat: None,
             primary: Some(2),
+            locked: Vec::new(),
             kinds: Vec::new(),
             broken: Default::default(),
             broken_types: Vec::new(),
@@ -2374,6 +2394,38 @@ mod tests {
         assert_eq!(primary_member_of(&layout, &short), Some(4));
         let leaderless = component([Some("rifle"), Some("rifle"), None]);
         assert_eq!(primary_member_of(&layout, &leaderless), None);
+    }
+
+    #[test]
+    fn a_regiment_is_stood_for_by_its_first_locked_slot_else_its_leader() {
+        let layout = |locked: Vec<bool>| tgdata::Layout {
+            formations: Vec::new(),
+            default: 0,
+            combat: None,
+            primary: Some(2),
+            locked,
+            kinds: Vec::new(),
+            broken: Default::default(),
+            broken_types: Vec::new(),
+        };
+        let component = |slots: [Option<&str>; 3]| tgdata::OrganizationComponent {
+            layout: Id::from("squad"),
+            slots: slots.map(|s| s.map(Id::from)).to_vec(),
+        };
+        let whole = component([Some("rifle"), Some("mortar"), Some("captain")]);
+        let locked = layout(vec![false, true, true]);
+        assert_eq!(standing_for(&locked, &whole), Some(Id::from("mortar")));
+        // A locked slot with no unit type is passed over.
+        let gapped = component([Some("rifle"), None, Some("captain")]);
+        assert_eq!(standing_for(&locked, &gapped), Some(Id::from("captain")));
+        let unlocked = layout(vec![false; 3]);
+        assert_eq!(standing_for(&unlocked, &whole), Some(Id::from("captain")));
+        // Without a leader either, the first slot with a unit type.
+        let leaderless = component([None, Some("mortar"), None]);
+        assert_eq!(
+            standing_for(&unlocked, &leaderless),
+            Some(Id::from("mortar"))
+        );
     }
 
     #[test]

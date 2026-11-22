@@ -124,6 +124,13 @@ impl GameData {
             .unwrap_or(false)
     }
 
+    /// Whether the strip of control groups is open as the first match
+    /// starts.
+    pub fn group_strip_open(&self) -> bool {
+        self.interface_setting(|v| v.ui_group_floater_is_open)
+            .unwrap_or(false)
+    }
+
     /// What colours a figure or option that's no good, such as a shortfall.
     pub fn invalid_colour(&self) -> Option<[f32; 3]> {
         self.interface_setting(|v| v.ui_color_option_invalid)

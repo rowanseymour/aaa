@@ -1374,8 +1374,9 @@ pub(crate) fn glyphs(
 }
 
 /// Part of the interface that takes clicks, so they don't go to the map
-/// under it.
+/// under it, which it can only tell while it knows where the cursor is.
 #[derive(Component)]
+#[require(RelativeCursorPosition)]
 pub struct Blocks;
 
 /// Part of the interface whose clicks are the map's, even drawn over a
@@ -1433,6 +1434,13 @@ mod tests {
         assert!((grey(Surface::Panel).red - 0.07).abs() < 1e-5);
         assert!((grey(Surface::Hovered).green - 0.3).abs() < 1e-5);
         assert_eq!(grey(Surface::Hud).alpha, 0.92);
+    }
+
+    #[test]
+    fn a_panel_blocking_the_map_knows_where_the_cursor_is() {
+        let mut world = World::new();
+        let panel = world.spawn(Blocks).id();
+        assert!(world.get::<RelativeCursorPosition>(panel).is_some());
     }
 
     #[test]
