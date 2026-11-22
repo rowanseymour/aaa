@@ -595,8 +595,9 @@ struct ByPointer;
 #[derive(Component)]
 struct HintSpan(usize);
 
-/// A box, laid out as `node`, that shows while a [`Hint`] is said in it.
-pub fn hint_box(node: Node) -> impl Bundle {
+/// A box, laid out as `node`, that shows while a [`Hint`] is said in it,
+/// its words wrapping at `wrap_at`.
+pub fn hint_box(node: Node, wrap_at: Val) -> impl Bundle {
     let node = Node {
         display: Display::None,
         ..node
@@ -607,6 +608,12 @@ pub fn hint_box(node: Node) -> impl Bundle {
         tooltip(node),
         children![(
             label("", Font::Small, Ink::Body),
+            // On the text rather than the box, which would otherwise be
+            // sized for the words wrapped wider than its padding leaves them.
+            Node {
+                max_width: wrap_at,
+                ..default()
+            },
             children![span(0, Ink::Key), span(1, Ink::Body)],
         )],
     )
@@ -615,10 +622,14 @@ pub fn hint_box(node: Node) -> impl Bundle {
 fn spawn_hint(mut commands: Commands) {
     let node = Node {
         position_type: PositionType::Absolute,
-        max_width: px(HINT_WIDTH),
         ..default()
     };
-    commands.spawn((ByPointer, hint_box(node), GlobalZIndex(layer::HINT)));
+    let wrap_at = px(HINT_WIDTH - 2.0 * CORNER);
+    commands.spawn((
+        ByPointer,
+        hint_box(node, wrap_at),
+        GlobalZIndex(layer::HINT),
+    ));
 }
 
 /// Shows the hint under the pointer: in its pane's box, or beside the
@@ -1432,8 +1443,8 @@ mod tests {
             .add_systems(Startup, spawn_hint)
             .add_systems(Update, hint);
         let world = app.world_mut();
-        let docked = world.spawn(hint_box(Node::default())).id();
-        let other = world.spawn(hint_box(Node::default())).id();
+        let docked = world.spawn(hint_box(Node::default(), Val::Auto)).id();
+        let other = world.spawn(hint_box(Node::default(), Val::Auto)).id();
         let pane = world.spawn(Docks(docked)).id();
         world.spawn(Docks(other));
         let on = (Hint("Entrenched".into()), Hovered(true));

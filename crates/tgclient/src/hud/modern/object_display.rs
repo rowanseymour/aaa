@@ -116,10 +116,13 @@ pub fn spawn(mut commands: Commands) {
     // Above the display and as wide, growing upwards as its words wrap.
     let said = commands
         .spawn((
-            ui::hint_box(Node {
-                width: px(SIZE.x),
-                ..default()
-            }),
+            ui::hint_box(
+                Node {
+                    width: px(SIZE.x),
+                    ..default()
+                },
+                Val::Percent(100.0),
+            ),
             GlobalZIndex(crate::ui::layer::HUD),
         ))
         .id();
