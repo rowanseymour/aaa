@@ -1440,6 +1440,10 @@ pub struct SVars {
     /// with its place goes at most.
     #[serde(rename = "MoverCatchupSpeed")]
     pub mover_catchup_speed: Option<f32>,
+    /// How far from where a lone recruit is looked for room the search's
+    /// later rings are centred.
+    #[serde(rename = "RecruitSearchRadiusSmall")]
+    pub recruit_search_radius_small: Option<f32>,
     /// The least a multiplier that modifiers add up to comes to.
     #[serde(rename = "ModifierAttributeClampMultiply")]
     pub modifier_attribute_clamp_multiply: Option<f32>,

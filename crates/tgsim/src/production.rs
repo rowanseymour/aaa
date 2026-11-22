@@ -1,6 +1,13 @@
 //! Buildings' queues: putting out what they commission and sending it on.
 
-use crate::{Commission, Notice, Work, World, deploy_point, normalised};
+use crate::delivery::spot;
+use crate::summons::rings_round;
+use crate::{Commission, Notice, Work, World, bounding_radius, deploy_point, distance, normalised};
+
+/// How far apart the rings round where a regiment or company comes out
+/// are, in world units: the game's search goes out roughly a unit at a
+/// time.
+const RING_STEP: f32 = 1.0;
 
 impl World {
     pub(crate) fn enqueue(&mut self, building: usize, mut commission: Commission) {
@@ -59,30 +66,52 @@ impl World {
                 continue;
             }
             let building = &self.buildings[b];
-            let Some(deploy) = building.deploy else {
-                continue;
-            };
             let (position, facing, owner) = (building.position, building.facing, building.owner);
             let rally = building.rally;
+            organization.owner = owner;
+            // Without points to come out by, a lone unit is made only
+            // where there's no room round the building, the game using its
+            // search the wrong way round, and refunded otherwise.
+            let lone =
+                matches!(&organization.members[..], [m] if m.template == organization.template);
+            if building.deploy.is_none() && lone {
+                let shape = organization.members[0].shape;
+                // Only things stand in the way, not the ground.
+                let blocking = self.blocking();
+                let clear = |&(p, f): &([f32; 2], [f32; 2])| {
+                    let there = spot(p, f, shape);
+                    blocking.iter().all(|o| !o.overlaps(&there))
+                };
+                if self.lone_spots(b, shape).iter().any(clear) {
+                    self.refund(owner, done.paid);
+                    continue;
+                }
+                organization.place(position, facing);
+                let r = self.add_new_organization(organization);
+                self.put_out(b, r, rally);
+                continue;
+            }
+            // A regiment's put round the building.
+            let Some(deploy) = building.deploy else {
+                let template = organization.template.clone();
+                match self.come_out(b, organization) {
+                    Some(r) => self.put_out(b, r, rally),
+                    None => {
+                        self.refund(owner, done.paid);
+                        let told = Notice::NotCreated {
+                            player: owner,
+                            template,
+                        };
+                        self.notices.push(told);
+                    }
+                }
+                continue;
+            };
             let from = deploy_point(position, facing, deploy.creation);
             let to = deploy_point(position, facing, deploy.deployment);
             let heading = normalised([to[0] - from[0], to[1] - from[1]]).unwrap_or(facing);
-            organization.owner = owner;
             organization.place(from, heading);
             let r = self.add_new_organization(organization);
-            log::debug!(
-                "{} {} put out by {} {}",
-                self.organizations[r].template,
-                self.organizations[r].id,
-                self.buildings[b].template,
-                self.buildings[b].id
-            );
-            self.organizations[r].hq = self.hq_of(b);
-            self.notices.push(Notice::PutOut {
-                player: owner,
-                building: b,
-                organization: r,
-            });
             // Those that resupply come out as their leader alone, the
             // rest to follow, unless they're recruited whole.
             let used = self.logistics_of(&self.organizations[r].template);
@@ -96,8 +125,112 @@ impl World {
                 }
             }
             self.roll_out(r, to, heading);
-            self.organizations[r].rally = rally;
+            self.put_out(b, r, rally);
         }
+    }
+
+    /// The 33 spots looked at for room for a lone unit of `shape` by the
+    /// building at `b`: its position, then four rings of eight round it
+    /// and round a step from it along its facing and that turned 120° and
+    /// 240° clockwise, each ring as far out as the building's radius and
+    /// the unit's together. Each comes with the way the unit would face
+    /// there: the building's at its position, away from it on the rings.
+    fn lone_spots(&self, b: usize, shape: Option<tgmap::Shape>) -> Vec<([f32; 2], [f32; 2])> {
+        let building = &self.buildings[b];
+        let (at, facing) = (building.position, building.facing);
+        let own = (building.obstacle.as_ref()).map_or(0.0, |o| bounding_radius(o.shape));
+        let reach = own + shape.map_or(0.0, bounding_radius);
+        let step = self.rules.recruit_search_step;
+        let along = libm::atan2f(facing[1], facing[0]);
+        let off = |turn: f32| {
+            let angle = along - turn.to_radians();
+            [
+                at[0] + step * libm::cosf(angle),
+                at[1] + step * libm::sinf(angle),
+            ]
+        };
+        let centres = [at, off(0.0), off(120.0), off(240.0)];
+        let rings = centres
+            .into_iter()
+            .flat_map(|c| rings_round(c, facing, reach, 1));
+        let away = |p: [f32; 2]| {
+            (
+                p,
+                normalised([p[0] - at[0], p[1] - at[1]]).unwrap_or(facing),
+            )
+        };
+        std::iter::once((at, facing))
+            .chain(rings.map(away))
+            .collect()
+    }
+
+    /// Tells the side the organization at `r` is out of the building at
+    /// `b`, under the building's HQ, and sends it on to `rally`.
+    fn put_out(&mut self, b: usize, r: usize, rally: Option<[f32; 2]>) {
+        log::debug!(
+            "{} {} put out by {} {}",
+            self.organizations[r].template,
+            self.organizations[r].id,
+            self.buildings[b].template,
+            self.buildings[b].id
+        );
+        self.organizations[r].hq = self.hq_of(b);
+        self.notices.push(Notice::PutOut {
+            player: self.buildings[b].owner,
+            building: b,
+            organization: r,
+        });
+        self.organizations[r].rally = rally;
+    }
+
+    /// Puts `organization` on the map by the building at `centre`, which
+    /// has no points its recruits come out by, facing the way it does,
+    /// with only its leader there and the rest awaited, returning its
+    /// index; none if its leader has nowhere to stand.
+    pub(crate) fn come_out(
+        &mut self,
+        centre: usize,
+        mut organization: tgmap::Organization,
+    ) -> Option<usize> {
+        let b = &self.buildings[centre];
+        let (at, facing) = (b.position, b.facing);
+        let leader = organization.primary.unwrap_or(0);
+        let shape = organization.members.get(leader)?.shape;
+        // The centre is what it comes out of, so doesn't stand in its
+        // leader's way at the start point.
+        let start = std::iter::once(at);
+        self.first_clear(start, facing, shape, &self.blocking_but(Some(centre)))?;
+        let reach = b
+            .obstacle
+            .as_ref()
+            .map_or(0.0, |o| bounding_radius(o.shape))
+            + spread_of(&organization);
+        let count = (reach / RING_STEP).ceil().max(1.0) as u32;
+        let around = rings_round(at, facing, RING_STEP, count);
+        // With nowhere clear round it, it's still made at the start point.
+        let stand = (self.first_clear(around, facing, shape, &self.blocking())).unwrap_or(at);
+        // The leader stands there, the company's position wherever that
+        // puts it.
+        let offset = (organization.formations.get(organization.formation))
+            .and_then(|f| f.offsets.get(leader).copied())
+            .unwrap_or([0.0, 0.0]);
+        let shift = tgmap::from_local([0.0, 0.0], facing, offset);
+        organization.place([stand[0] - shift[0], stand[1] - shift[1]], facing);
+        let r = self.add_new_organization(organization);
+        // Those that resupply come out as their leader alone, the rest to
+        // follow, as from a building's queue.
+        let template = &self.organizations[r].template;
+        if self
+            .logistics_of(template)
+            .is_some_and(|l| l.supply_used && !l.recruit_full)
+        {
+            let leader = self.organizations[r].leader.unwrap_or(0);
+            for (p, u) in self.organizations[r].units.clone().into_iter().enumerate() {
+                let rate = self.rules.resupply_rates.get(&self.units[u].template);
+                self.units[u].awaited = p != leader && rate.is_some_and(|&r| r > 0.0);
+            }
+        }
+        Some(r)
     }
 
     /// Moves organizations that have rolled out of what put them out on to its
@@ -132,6 +265,16 @@ impl World {
             unit.end_facing = facing;
         }
     }
+}
+
+/// How far an organization's members stand from its position, at most,
+/// in its starting formation.
+fn spread_of(organization: &tgmap::Organization) -> f32 {
+    let offsets = (organization.formations.get(organization.formation))
+        .map_or(&[][..], |f| f.offsets.as_slice());
+    (offsets.iter())
+        .map(|&o| distance(o, [0.0, 0.0]))
+        .fold(0.0, f32::max)
 }
 
 #[cfg(test)]
@@ -181,6 +324,100 @@ mod tests {
         w.apply(1, cancel(1)).unwrap();
         run(&mut w, 10.0);
         assert_eq!(w.organizations.len(), 1);
+    }
+
+    /// The economy's HQ with no points its recruits come out by, earning
+    /// nothing, and recruiting a free-standing truck for 250 and a squad
+    /// of two of them.
+    fn no_way_out() -> World {
+        let mut w = economy();
+        w.buildings[0].deploy = None;
+        w.rules.economies.remove(&Id::from("house"));
+        let truck = w.rules.economies.get_mut(&Id::from("truck")).unwrap();
+        truck.upkeep = Default::default();
+        let mut squad = crate::testing::truck();
+        squad.template = "squad".into();
+        squad.members.push(squad.members[0].clone());
+        squad.formations[0].offsets = vec![[0.0, 0.0], [2.0, 0.0]];
+        squad.unpacks = None;
+        recruits(&mut w, "house", squad, 1.0);
+        w
+    }
+
+    /// Hems the HQ in with a rock wider than any search round it.
+    fn hem_in(w: &mut World) {
+        w.scenery.push(tgmap::Obstacle {
+            position: [20.0, 20.0],
+            facing: [0.0, -1.0],
+            shape: tgmap::Shape::Circle { radius: 12.0 },
+            soft: tgmap::Shape::Circle { radius: 12.0 },
+        });
+    }
+
+    #[test]
+    fn a_regiment_with_no_way_out_is_put_round_its_building() {
+        let mut w = no_way_out();
+        w.apply(1, commission(0, "squad")).unwrap();
+        run(&mut w, 1.0);
+        assert_eq!(w.organizations.len(), 1);
+        let put_out = Notice::PutOut {
+            player: 1,
+            building: 0,
+            organization: 0,
+        };
+        assert!(w.notices.contains(&put_out));
+        // Clear of the HQ's 6 by 6, facing the way it does.
+        let leader = &w.units[w.organizations[0].units[0]];
+        assert!(crate::distance(leader.position, [20.0, 20.0]) >= 3.0);
+        assert_eq!(w.organizations[0].facing, w.buildings[0].facing);
+        // Paid for, less the little it's earned since.
+        assert!(w.stockpile(1) < 1.0);
+    }
+
+    #[test]
+    fn a_regiment_with_nowhere_to_stand_is_refunded() {
+        let mut w = no_way_out();
+        hem_in(&mut w);
+        w.apply(1, commission(0, "squad")).unwrap();
+        run(&mut w, 1.0);
+        assert!(w.organizations.is_empty() && w.buildings[0].queue.is_empty());
+        assert_eq!(w.stockpile(1), 500.0);
+        assert!(w.notices.contains(&Notice::NotCreated {
+            player: 1,
+            template: Id::from("squad"),
+        }));
+    }
+
+    #[test]
+    fn a_lone_unit_isnt_kept_off_the_water_round_its_building() {
+        let mut w = no_way_out();
+        w.pathing = tgmap::Pathing::uniform(40, tgmap::Domain::Naval);
+        w.apply(1, commission(0, "truck")).unwrap();
+        run(&mut w, 1.0);
+        assert!(w.organizations.is_empty());
+        assert_eq!(w.stockpile(1), 500.0);
+    }
+
+    #[test]
+    fn a_lone_unit_with_no_way_out_is_made_only_where_theres_no_room() {
+        let mut w = no_way_out();
+        w.apply(1, commission(0, "truck")).unwrap();
+        run(&mut w, 1.0);
+        // Room round the HQ: nothing's made, and nothing said.
+        assert!(w.organizations.is_empty() && w.buildings[0].queue.is_empty());
+        assert_eq!(w.stockpile(1), 500.0);
+        assert!(
+            !w.notices
+                .iter()
+                .any(|n| matches!(n, Notice::NotCreated { .. }))
+        );
+        // Hemmed in, it's made on the HQ, facing the way it does.
+        hem_in(&mut w);
+        w.apply(1, commission(0, "truck")).unwrap();
+        run(&mut w, 1.0);
+        assert_eq!(w.organizations.len(), 1);
+        assert!(near(w.units[0].position, [20.0, 20.0]));
+        assert_eq!(w.organizations[0].facing, w.buildings[0].facing);
     }
 
     #[test]

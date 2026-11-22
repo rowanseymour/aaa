@@ -5,12 +5,7 @@ use std::borrow::Cow;
 
 use tgmap::Id;
 
-use crate::summons::rings_round;
-use crate::{NotYours, Notice, Refused, World, bounding_radius, distance};
-
-/// How far apart the rings round where a company comes out are, in world
-/// units: the game's search goes out roughly a unit at a time.
-const RING_STEP: f32 = 1.0;
+use crate::{NotYours, Notice, Refused, World};
 
 impl World {
     /// The index into [`World::settlements`] of the settlement whose
@@ -142,61 +137,6 @@ impl World {
         });
         Ok(())
     }
-
-    /// Puts `organization` on the map at the centre at `centre`, facing
-    /// the way it does, with only its leader there and the rest awaited,
-    /// returning its index; none if its leader has nowhere to stand.
-    fn come_out(&mut self, centre: usize, mut organization: tgmap::Organization) -> Option<usize> {
-        let b = &self.buildings[centre];
-        let (at, facing) = (b.position, b.facing);
-        let leader = organization.primary.unwrap_or(0);
-        let shape = organization.members.get(leader)?.shape;
-        // The centre is what it comes out of, so doesn't stand in its
-        // leader's way at the start point.
-        let start = std::iter::once(at);
-        self.first_clear(start, facing, shape, &self.blocking_but(Some(centre)))?;
-        let reach = b
-            .obstacle
-            .as_ref()
-            .map_or(0.0, |o| bounding_radius(o.shape))
-            + company_radius(&organization);
-        let count = (reach / RING_STEP).ceil().max(1.0) as u32;
-        let around = rings_round(at, facing, RING_STEP, count);
-        // With nowhere clear round it, it's still made at the start point.
-        let stand = (self.first_clear(around, facing, shape, &self.blocking())).unwrap_or(at);
-        // The leader stands there, the company's position wherever that
-        // puts it.
-        let offset = (organization.formations.get(organization.formation))
-            .and_then(|f| f.offsets.get(leader).copied())
-            .unwrap_or([0.0, 0.0]);
-        let shift = tgmap::from_local([0.0, 0.0], facing, offset);
-        organization.place([stand[0] - shift[0], stand[1] - shift[1]], facing);
-        let r = self.add_new_organization(organization);
-        // Those that resupply come out as their leader alone, the rest to
-        // follow, as from a building's queue.
-        let template = &self.organizations[r].template;
-        if self
-            .logistics_of(template)
-            .is_some_and(|l| l.supply_used && !l.recruit_full)
-        {
-            let leader = self.organizations[r].leader.unwrap_or(0);
-            for (p, u) in self.organizations[r].units.clone().into_iter().enumerate() {
-                let rate = self.rules.resupply_rates.get(&self.units[u].template);
-                self.units[u].awaited = p != leader && rate.is_some_and(|&r| r > 0.0);
-            }
-        }
-        Some(r)
-    }
-}
-
-/// How far a company's members stand from its position, at most, in its
-/// starting formation.
-fn company_radius(organization: &tgmap::Organization) -> f32 {
-    let offsets = (organization.formations.get(organization.formation))
-        .map_or(&[][..], |f| f.offsets.as_slice());
-    (offsets.iter())
-        .map(|&o| distance(o, [0.0, 0.0]))
-        .fold(0.0, f32::max)
 }
 
 #[cfg(test)]
