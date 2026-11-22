@@ -279,7 +279,7 @@ fn tip(panel: &Panel, op: &Operation, left: f32) -> String {
     parts.join("\n\n")
 }
 
-/// Shows each button's frame for the states the mouse puts it in, none
+/// Shows each button's frame for the states the mouse puts it in, unfocused
 /// while it can't be used, and its icon greyed then.
 #[allow(clippy::type_complexity)]
 pub fn show(
@@ -288,7 +288,10 @@ pub fn show(
     mut icons: Query<(&AbilityIcon, &mut ImageNode)>,
 ) {
     for (button, hovered, pressed, children) in &buttons {
-        let holding = holding(false, hovered.get(), pressed, !button.usable);
+        // The game keeps the frame of an operation that's recharging or
+        // can't be afforded, though the button's disabled.
+        let usable = button.usable;
+        let holding = holding(false, hovered.get() && usable, pressed && usable, false);
         for &child in children {
             if let Ok((frame, mut shown)) = frames.get_mut(child) {
                 let all = frame.0.iter().all(|e| e.shown(&holding));
@@ -337,6 +340,43 @@ pub fn fill(
 mod tests {
     use super::*;
     use crate::special_ops::tests::{operating, panel};
+
+    fn when(states: &[&str]) -> tgdata::widgets::ViewElement {
+        tgdata::widgets::ViewElement {
+            name: String::new(),
+            kind: None,
+            bounds: Default::default(),
+            when: states.iter().map(|s| s.to_string()).collect(),
+            texture: None,
+            colour: [1.0; 3],
+            text: None,
+            font: None,
+            justify: None,
+            tiles: None,
+            children: Vec::new(),
+            fields: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_unusable_button_keeps_its_unfocused_frame_when_hovered() {
+        let mut app = App::new();
+        app.add_systems(Update, show);
+        let frame = |states: &[&str]| (AbilityFrame(vec![when(states)]), Visibility::Hidden);
+        let unfocused = app.world_mut().spawn(frame(&["ENABLED", "UNFOCUSED"])).id();
+        let focused = app.world_mut().spawn(frame(&["ENABLED", "FOCUSED"])).id();
+        let button = Ability {
+            index: 0,
+            usable: false,
+        };
+        app.world_mut()
+            .spawn((button, Hovered(true)))
+            .add_children(&[unfocused, focused]);
+        app.update();
+        let shown = |e| *app.world().get::<Visibility>(e).unwrap() == Visibility::Inherited;
+        assert!(shown(unfocused));
+        assert!(!shown(focused));
+    }
 
     #[test]
     fn a_button_greys_once_used_and_its_bar_refills_as_it_recharges() {
