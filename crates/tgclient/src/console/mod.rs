@@ -243,7 +243,8 @@ pub(crate) fn run(world: &mut World) {
         .get_resource::<State<Screen>>()
         .is_some_and(|s| *s.get() == Screen::Loading)
         // A match its host has yet to begin is as good as still loading.
-        || world.get_resource::<Orders>().is_some_and(Orders::waiting);
+        || world.get_resource::<Orders>().is_some_and(Orders::waiting)
+        || awaiting_play(world);
     let mut console = world.resource_mut::<Console>();
     if console.until.is_some_and(|until| now >= until) {
         console.until = None;
@@ -284,6 +285,13 @@ pub(crate) fn run(world: &mut World) {
             }
         }
     }
+}
+
+/// Whether a loading screen is still up over a match that's yet to play
+/// its first tick.
+fn awaiting_play(world: &mut World) -> bool {
+    let mut awaiting = world.query_filtered::<(), With<crate::loading::AwaitingPlay>>();
+    awaiting.iter(world).next().is_some()
 }
 
 #[derive(Component)]

@@ -25,7 +25,7 @@ pub(crate) fn carry_out(mut sim: ResMut<Sim>, mut orders: ResMut<Orders>) {
 }
 
 /// The match has been drawn once, so the sim may step: its first tick
-/// comes a tick after that frame, however long the frame took.
+/// comes a tick of game time after that frame, however long the frame took.
 #[derive(Resource)]
 pub(crate) struct Shown;
 
