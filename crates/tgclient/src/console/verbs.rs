@@ -28,7 +28,10 @@ pub(crate) struct Verb {
     /// It's for developing the game, so runs only where [`developing`] lets it.
     pub(crate) dev: bool,
     /// It runs only during a match.
-    in_match: bool,
+    pub(crate) in_match: bool,
+    /// The original games have a command of this name, in their console.txt
+    /// or their data files, though not always taking the same words.
+    pub(crate) original: bool,
 }
 
 pub(super) const fn verb(
@@ -44,12 +47,20 @@ pub(super) const fn verb(
         run,
         dev: false,
         in_match: false,
+        original: false,
     }
 }
 
 impl Verb {
     const fn dev(self) -> Verb {
         Verb { dev: true, ..self }
+    }
+
+    const fn original(self) -> Verb {
+        Verb {
+            original: true,
+            ..self
+        }
     }
 
     const fn in_match(self) -> Verb {
@@ -66,19 +77,22 @@ pub(crate) const VERBS: &[Verb] = &[
         "[verb]",
         "lists the verbs, or says how to use one; also ?",
         |_, args, _| help(args),
-    ),
+    )
+    .original(),
     verb(
         "echo",
         "text",
         "prints the text",
         |_, args, _| Ok(args.join(" ")),
-    ),
+    )
+    .original(),
     verb(
         "exec",
         "file",
         "runs the commands in a file, a line at a time",
         exec,
-    ),
+    )
+    .original(),
     verb(
         "quit",
         "",
@@ -87,13 +101,15 @@ pub(crate) const VERBS: &[Verb] = &[
             world.write_message(AppExit::Success);
             Ok(String::new())
         },
-    ),
+    )
+    .original(),
     verb(
         "screenshot",
         "file.png",
         "saves what the window shows to a file, answering once it's written",
         |world, args, _| screenshot(world, args),
-    ),
+    )
+    .original(),
     verb(
         "ui",
         "",
@@ -123,13 +139,15 @@ pub(crate) const VERBS: &[Verb] = &[
         "seconds",
         "lets that long go by before the next command",
         |world, args, _| wait(world, args),
-    ),
+    )
+    .original(),
     verb(
         "lookat",
         "[x y]",
         "points the camera at a place on the map, in metres; without one, says where it points",
         |world, args, _| look_at(world, args),
     )
+    .original()
     .in_match(),
     verb(
         "camera",
@@ -137,6 +155,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "points the camera at x y from a height above the ground in metres, looking a pitch in degrees down",
         |world, args, _| camera(world, args),
     )
+    .original()
     .in_match(),
     verb(
         "zoom",
@@ -144,6 +163,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "zooms from 0, all the way out, to 1, all the way in; without a level, says it",
         |world, args, _| zoom(world, args),
     )
+    .original()
     .in_match(),
     verb(
         "yaw",
@@ -151,6 +171,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "turns the camera to look that far counter-clockwise from the map's x axis; without, back to the game's",
         |world, args, _| yaw(world, args),
     )
+    .original()
     .in_match(),
     verb(
         "pitch",
@@ -158,6 +179,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "tilts the camera that far down from level; without, back to the game's",
         |world, args, _| pitch(world, args),
     )
+    .original()
     .in_match(),
     verb(
         "defaultangles",
@@ -170,6 +192,7 @@ pub(crate) const VERBS: &[Verb] = &[
             })
         }),
     )
+    .original()
     .in_match(),
     verb(
         "create",
@@ -177,6 +200,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "raises an organization for the placement kingdom where the camera points, or at x y, and says its id",
         |world, args, _| create(world, args),
     )
+    .original()
     .dev()
     .in_match(),
     verb(
@@ -185,6 +209,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "sets, by name or id, who owns what create raises; without one, lists the kingdoms",
         |world, args, _| placement_kingdom(world, args),
     )
+    .original()
     .dev()
     .in_match(),
     verb(
@@ -193,6 +218,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "plays as a kingdom, by name or id; without one, lists them",
         |world, args, _| player_kingdom(world, args),
     )
+    .original()
     .dev()
     .in_match(),
     verb(
@@ -224,6 +250,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "sends an organization, by its id, to x y, or to keep near another organization, by its id",
         |world, args, _| order(world, args, Aim::Move),
     )
+    .original()
     .in_match(),
     verb(
         "attack",
@@ -231,6 +258,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "sends an organization, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy organization, by its id",
         |world, args, _| order(world, args, Aim::Attack),
     )
+    .original()
     .in_match(),
     verb(
         "guard",
@@ -238,6 +266,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight",
         |world, args, _| order(world, args, Aim::Guard),
     )
+    .original()
     .in_match(),
     verb(
         "heroes",
@@ -288,6 +317,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "uses the nth of the faction's special operations, from 0 as the panel lists them, on the ground at x y",
         |world, args, _| use_faction_ability(world, args),
     )
+    .original()
     .in_match(),
     verb(
         "pack",
@@ -378,6 +408,7 @@ pub(crate) const VERBS: &[Verb] = &[
         "destroys the selected organizations",
         |world, args, _| destroy_selected(world, args),
     )
+    .original()
     .dev()
     .in_match(),
     verb(
@@ -405,6 +436,7 @@ pub(crate) const VERBS: &[Verb] = &[
             String::new()
         }),
     )
+    .original()
     .dev()
     .in_match(),
     verb(
@@ -420,13 +452,15 @@ pub(crate) const VERBS: &[Verb] = &[
         "[speed]",
         "runs the game that many times as fast, 0.05 to 16; without, says how fast",
         |world, args, _| game_speed(world, args),
-    ),
+    )
+    .original(),
     verb(
         "gamepause",
         "[1/0]",
         "pauses or resumes the game; without, switches",
         |world, args, _| game_pause(world, args),
-    ),
+    )
+    .original(),
     verb(
         "toggleshowzonesupply",
         "",
@@ -436,7 +470,8 @@ pub(crate) const VERBS: &[Verb] = &[
             border.0 = !border.0;
             String::new()
         }),
-    ),
+    )
+    .original(),
     verb(
         "uiscale",
         "[scale]",
@@ -522,7 +557,11 @@ pub(crate) fn help(args: &[&str]) -> Reply {
         [name] => {
             let v = find(name).ok_or("no such command")?;
             let dev = if v.dev { DEV_ONLY } else { "" };
-            Ok(format!("{} {}\n  {}{dev}", v.name, v.args, v.does))
+            let original = if v.original { ORIGINAL } else { "" };
+            Ok(format!(
+                "{} {}\n  {}{dev}{original}",
+                v.name, v.args, v.does
+            ))
         }
         _ => Err(usage("help")),
     }
@@ -547,6 +586,9 @@ pub(crate) fn exec(world: &mut World, args: &[&str], depth: usize) -> Reply {
 }
 
 /// What `help` adds to what a verb for developing the game does.
+/// What `help` adds about a verb the original games also have.
+const ORIGINAL: &str = "; the original games have it too, though not always taking the same words";
+
 pub(crate) const DEV_ONLY: &str = "; only with --dev, in a match no other machine shares";
 
 /// Why a verb for developing the game can't run, if it can't: only with
