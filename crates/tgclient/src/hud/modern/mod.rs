@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use super::{Hud, InMatch};
 
 pub mod actions;
+pub mod chat;
 pub mod clock;
 pub mod displays;
 pub mod messages;
@@ -32,6 +33,7 @@ impl Plugin for ModernHudPlugin {
                     minimap::spawn,
                     displays::spawn_buttons,
                     clock::spawn,
+                    chat::spawn,
                     politics::spawn,
                 ),
                 minimap::lay_out_rim,
@@ -73,6 +75,7 @@ impl Plugin for ModernHudPlugin {
                     .chain(),
                 (
                     clock::light_button,
+                    chat::light_button,
                     displays::light_buttons,
                     actions::show,
                     // For the buttons on the cards it borrows from the original's.
