@@ -225,12 +225,9 @@ impl World {
         more: impl IntoIterator<Item = &'b Id>,
     ) -> CombatEffect {
         let table = &self.rules.combat_effects;
-        let kind = self.rules.kinds.get(template);
-        let own = kind.into_iter().flat_map(|k| &k.properties);
-        let bearing = self.bearing(table, |e| &e.requires, owner, template, held);
+        let bearing = self.bearing_with_own(table, |e| &e.requires, owner, template, held);
         let more = more.into_iter().filter_map(|p| table.get(p));
-        (own.filter_map(|p| table.get(p)).chain(bearing).chain(more))
-            .fold(CombatEffect::default(), CombatEffect::with)
+        (bearing.chain(more)).fold(CombatEffect::default(), CombatEffect::with)
     }
 
     /// What the properties the unit at `u` holds add to its fighting: its

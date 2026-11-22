@@ -52,7 +52,8 @@ impl Plugin for HudPlugin {
                         .after(crate::displays::Keys)
                         .after(crate::actions::tell)
                         .after(crate::object_display::portray)
-                        .after(crate::resource_bar::show),
+                        .after(crate::resource_bar::show)
+                        .after(crate::times::follow),
                 ),
             )
             .add_systems(

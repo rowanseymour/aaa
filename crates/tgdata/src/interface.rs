@@ -116,6 +116,12 @@ impl GameData {
         }
     }
 
+    /// Whether the elapsed game time is shown as the options start.
+    pub fn shows_elapsed_game_time(&self) -> bool {
+        self.interface_setting(|v| v.view_show_elapsed_game_time)
+            .unwrap_or(false)
+    }
+
     /// What colours a figure or option that's no good, such as a shortfall.
     pub fn invalid_colour(&self) -> Option<[f32; 3]> {
         self.interface_setting(|v| v.ui_color_option_invalid)

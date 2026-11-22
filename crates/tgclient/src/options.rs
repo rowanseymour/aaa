@@ -22,6 +22,7 @@ use crate::fields::{Entered, Field, Focused, field};
 use crate::hud::Hud;
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
+use crate::times::Elapsed;
 use crate::ui::{
     Card, Chosen, Dropdown, Font, Hint, Ink, Surface, button, called, card, label, layer, padded,
     slider, slug, switch, text, toggle,
@@ -32,6 +33,7 @@ use bevy::ecs::component::Mutable;
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
 const BORDER: &str = "options_dialog_Child_text_15";
+const ELAPSED: &str = "options_dialog_Child_text_16";
 const RESOLUTION: &str = "options_dialog_Child_text_18";
 const GAME_TAB: &str = "options_dialog_ShowGameplayButton_Tooltip";
 const VIDEO_TAB: &str = "options_dialog_ShowVideoButton_Tooltip";
@@ -63,8 +65,10 @@ pub struct Options {
     hotkeys_label: String,
     /// What the game calls what the player goes by.
     nickname_label: String,
-    /// What the game calls the choice to show the supply border.
+    /// What the game calls the choices to show the supply border and the
+    /// elapsed game time.
     border_label: String,
+    elapsed_label: String,
     /// What the game calls the choice of the window's size.
     resolution_label: String,
     /// What the choices of [`Display`], [`AntiAliasing`], the interface's
@@ -128,6 +132,7 @@ impl Options {
             hotkeys_label: said(HOTKEYS, "Hotkeys"),
             nickname_label: "Nickname".into(),
             border_label: said(BORDER, "Supply Border"),
+            elapsed_label: said(ELAPSED, "Elapsed Game Time"),
             resolution_label: said(RESOLUTION, "Resolution"),
             display_label: "Window".into(),
             anti_aliasing_label: "Anti-aliasing".into(),
@@ -440,6 +445,10 @@ impl Sound {
 #[derive(Component)]
 struct BorderToggle;
 
+/// The button that shows or hides the elapsed game time.
+#[derive(Component)]
+struct ElapsedToggle;
+
 /// The sizes offered for the window, of those the screen has room for
 /// with its frame.
 const RESOLUTIONS: [(u32, u32); 9] = [
@@ -499,6 +508,7 @@ impl Plugin for OptionsPlugin {
                     show_listed::<Hud, HudHolder>,
                     mark_chosen,
                     show_border,
+                    show_elapsed,
                     type_nickname,
                     show_volumes,
                     show_sound_switches,
@@ -675,6 +685,14 @@ fn show_body(
                     called("options.supply-border"),
                 ))
                 .observe(|_: On<Activate>, mut border: ResMut<Border>| border.0 = !border.0);
+            commands
+                .spawn((
+                    ElapsedToggle,
+                    ChildOf(extras),
+                    switched(),
+                    called("options.elapsed-game-time"),
+                ))
+                .observe(|_: On<Activate>, mut shown: ResMut<Elapsed>| shown.0 = !shown.0);
         }
         Tab::Video => {
             let basic = section(&mut commands, body, &options.basic_title);
@@ -1221,6 +1239,20 @@ fn show_border(
     }
 }
 
+/// Says whether the elapsed game time is showing.
+fn show_elapsed(
+    options: Res<Options>,
+    elapsed: Res<Elapsed>,
+    toggles: Query<(&Children, Ref<ElapsedToggle>)>,
+    mut texts: Query<&mut Text>,
+) {
+    for (children, added) in &toggles {
+        if elapsed.is_changed() || added.is_added() {
+            say_switched(children, &mut texts, &options.elapsed_label, elapsed.0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::state::app::StatesPlugin;
@@ -1267,6 +1299,7 @@ mod tests {
         }))
         .insert_resource(Sounds::of(Default::default(), &[]))
         .init_resource::<Border>()
+        .insert_resource(Elapsed(false))
         .insert_resource(UiScaleSetting(1.0))
         .init_resource::<Hud>()
         .add_message::<WindowResized>();
@@ -1544,5 +1577,12 @@ mod tests {
         activate::<BorderToggle>(&mut app, |_| true);
         assert_ne!(said(&mut app), before);
         assert!(said(&mut app).starts_with("Supply Border: "));
+    }
+
+    #[test]
+    fn the_elapsed_time_toggle_switches_it() {
+        let mut app = app();
+        activate::<ElapsedToggle>(&mut app, |_| true);
+        assert!(app.world().resource::<Elapsed>().0);
     }
 }

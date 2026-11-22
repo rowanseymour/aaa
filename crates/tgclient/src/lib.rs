@@ -78,6 +78,7 @@ mod staging;
 mod sunlight;
 mod supply;
 mod technologies;
+mod times;
 mod ui;
 mod waypoints;
 
@@ -547,6 +548,7 @@ pub fn run(program: Program) -> ExitCode {
             lan::LanPlugin,
             staging::StagingPlugin,
             leaving::LeavingPlugin,
+            times::TimesPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(
@@ -754,6 +756,7 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(staging::Words::of(&strings))
         .insert_resource(StageWords::of(&strings))
         .insert_resource(options::Options::new(&game))
+        .insert_resource(times::Elapsed(game.shows_elapsed_game_time()))
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
         .insert_resource(music::Music::new(&game))
         .insert_resource(volumes)
