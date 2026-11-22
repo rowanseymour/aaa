@@ -28,6 +28,8 @@ pub struct Rules {
     /// The settings supply runs by.
     pub supply_rules: tgmap::SupplyRules,
     pub guard_rules: tgmap::GuardRules,
+    /// How exploring regiments choose where to head.
+    pub explore_rules: tgmap::ExploreRules,
     /// How far around them things that send out units of their own keep
     /// their guard zone, by template.
     pub guard_zones: HashMap<Id, f32>,
@@ -226,6 +228,7 @@ impl Default for Rules {
             supplies: HashMap::new(),
             supply_rules: Default::default(),
             guard_rules: Default::default(),
+            explore_rules: Default::default(),
             guard_zones: HashMap::new(),
             remains: HashMap::new(),
             stances: HashMap::new(),

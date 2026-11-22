@@ -289,6 +289,14 @@ pub(crate) const VERBS: &[Verb] = &[
     .original()
     .in_match(),
     verb(
+        "explore",
+        "organization x y",
+        "has an organization, by its id, explore around x y",
+        |world, args, _| order(world, args, Aim::Explore),
+    )
+    .original()
+    .in_match(),
+    verb(
         "heroes",
         "[kingdom]",
         "lists the heroes a kingdom, by name or id, holds, and what each is doing; without one, the kingdom played",

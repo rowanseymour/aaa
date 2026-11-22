@@ -19,6 +19,7 @@ mod economy;
 mod effects;
 mod entrenchment;
 mod experience;
+mod explore;
 mod fog;
 mod guard;
 mod heroes;
@@ -66,6 +67,7 @@ pub use effects::{
 };
 pub use entrenchment::{ENTRENCHED, Entrenchment, EntrenchmentRate};
 pub use experience::{CombatEffect, Efficiency, ExperienceGains, Level, Levels, level_property};
+pub use explore::ExploreRules;
 pub use fog::{FogSetting, Sight};
 pub use guard::{GUARDING, GuardRules};
 pub use heroes::Hero;

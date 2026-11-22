@@ -324,6 +324,7 @@ pub(crate) fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
         return Err(usage(match aim {
             Aim::Attack => "attack",
             Aim::Guard => "guard",
+            Aim::Explore => "explore",
             _ => "move",
         }));
     };
@@ -337,6 +338,7 @@ pub(crate) fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
         Aim::Attack => tgsim::Command::Attack { organization, to },
         Aim::Run => tgsim::Command::Run { organization, to },
         Aim::Guard => tgsim::Command::Guard { organization, to },
+        Aim::Explore => tgsim::Command::Explore { organization, to },
         Aim::Unpack => tgsim::Command::Unpack {
             organization,
             at: to,

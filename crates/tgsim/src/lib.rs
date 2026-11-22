@@ -22,6 +22,7 @@ mod enchantments;
 mod engagement;
 mod entrenchment;
 mod experience;
+mod explore;
 mod fog;
 mod follow;
 mod groups;
@@ -70,6 +71,7 @@ pub use computer::{ComputerPlayer, Idle};
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, EconomyEffect, Ledger, Limit, Treasury};
 pub use experience::{Commander, Operated, SpecialOp};
+pub use explore::Explore;
 pub use fog::{Fog, Seen};
 pub use groups::Group;
 use hash::{Digest, Hasher, digest};
@@ -339,6 +341,8 @@ pub struct Organization {
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
     pub guard: Option<Guard>,
+    /// What it's exploring around, until it's given another order.
+    pub explore: Option<Explore>,
     /// Whether it's still being dropped: some of it yet to be let go, or
     /// to land.
     pub arriving: bool,
@@ -423,6 +427,7 @@ impl Organization {
         self.order = order;
         self.follow = None;
         self.guard = None;
+        self.explore = None;
         self.build = None;
         self.mending = None;
         self.resume = None;
@@ -972,6 +977,10 @@ pub enum Command {
     /// Has an organization rout at once, as if its morale had broken.
     /// Refused for one with no morale, that isn't fighting or can't move.
     Rout { organization: usize },
+    /// Has an organization explore around `to`, going on to ground its side
+    /// knows least about until it's given another order. Refused for an
+    /// organization that doesn't [explore](World::explores).
+    Explore { organization: usize, to: [f32; 2] },
     /// Halts an organization, its members forming up around where they stand on
     /// average, and drops where it was headed, so that once done with any
     /// engagement it stays put.
@@ -1274,6 +1283,7 @@ impl World {
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
+        self.keep_exploring();
         self.keep_idling();
         self.keep_stances();
         self.keep_entrenchment();
@@ -1399,7 +1409,7 @@ digest!(Organization {
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
     guard, arriving, terrain_properties, settled, travelling, route_end, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
-    chased, follow, build, mending,
+    chased, follow, build, mending, explore,
 } skip {
     // Its template's.
     formations, unpacks,

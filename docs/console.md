@@ -34,6 +34,7 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `move organization (x y \| other)` | sends an organization, by its id, to x y, or to keep near another organization, by its id | ✓ | ✓ |
 | `attack organization (x y \| enemy)` | sends an organization, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy organization, by its id | ✓ | ✓ |
 | `guard organization (x y \| other)` | posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight | ✓ | ✓ |
+| `explore organization x y` | has an organization, by its id, explore around x y | ✓ | ✓ |
 | `heroes [kingdom]` | lists the heroes a kingdom, by name or id, holds, and what each is doing; without one, the kingdom played |  | ✓ |
 | `settlements` | lists the settlements, with each one's side and the id of its centre |  | ✓ |
 | `select [id ...]` | selects organizations, or one building, of any side by their ids; without any, says what's selected |  | ✓ |

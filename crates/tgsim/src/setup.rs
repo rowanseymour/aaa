@@ -254,6 +254,7 @@ impl World {
             bombarded: Vec::new(),
             properties: Vec::new(),
             guard: None,
+            explore: None,
             arriving: false,
             terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),

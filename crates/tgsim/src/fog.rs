@@ -156,7 +156,7 @@ impl World {
     }
 
     /// How the tile under `at` stands for the sides `allies`, sharing sight.
-    fn seen_with(&self, allies: &[u32], at: [f32; 2]) -> Seen {
+    pub(crate) fn seen_with(&self, allies: &[u32], at: [f32; 2]) -> Seen {
         let index = Tile::at(at).index(self.fog.side);
         index.map_or(Seen::Unexplored, |i| self.fog.seen_by(allies, i))
     }

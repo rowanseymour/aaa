@@ -319,6 +319,7 @@ fn prompted(
         }
         (None, Page::Aiming(Aim::Guard)) => prompt("Left click what or where to guard"),
         (None, Page::Aiming(Aim::Repair)) => prompt("Left click what to repair"),
+        (None, Page::Aiming(Aim::Explore)) => prompt("Left click where to explore"),
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
         (None, Page::Delivering(_)) => prompt("Left click where to deploy"),

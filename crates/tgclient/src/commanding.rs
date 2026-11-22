@@ -442,6 +442,7 @@ pub(crate) fn send(
             actions::Aim::Attack => tgsim::Command::Attack { organization, to },
             actions::Aim::Run => tgsim::Command::Run { organization, to },
             actions::Aim::Guard => tgsim::Command::Guard { organization, to },
+            actions::Aim::Explore => tgsim::Command::Explore { organization, to },
             actions::Aim::Unpack => tgsim::Command::Unpack {
                 organization,
                 at: to,
