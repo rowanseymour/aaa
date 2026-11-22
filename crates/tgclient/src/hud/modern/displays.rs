@@ -136,7 +136,7 @@ pub fn spawn_buttons(
                 ],
             ),
             Panel::MessageLog => (
-                Quadrant::TopLeft.at(0),
+                Quadrant::TopLeft.at(1),
                 icon("message-log"),
                 [
                     "control_panel_ButtonMessageLog_ToolTip",
