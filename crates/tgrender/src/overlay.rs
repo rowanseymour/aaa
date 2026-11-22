@@ -138,6 +138,9 @@ pub struct BannerImages {
     /// The archive path of each banner's plate image, by banner id, once
     /// its model's been read.
     plates: HashMap<Id, Option<String>>,
+    /// Where each banner's plate shows in its model's portrait, by banner
+    /// id, once its model's been read.
+    framings: HashMap<Id, Option<Rect>>,
     /// Images loaded so far, by path.
     loaded: HashMap<String, Option<Handle<Image>>>,
     formats: CompressedImageFormats,
@@ -156,6 +159,7 @@ impl BannerImages {
             icon_paths: game.banner_icons(),
             banners: game.banners(),
             plates: HashMap::new(),
+            framings: HashMap::new(),
             loaded: HashMap::new(),
             formats,
         }
@@ -212,6 +216,26 @@ impl BannerImages {
             shortage: decal(BannerDecal::UpkeepShortage),
             entrenched: decal(BannerDecal::Entrenched),
         }
+    }
+
+    /// Where the plate of the banner an organization of `template` flies,
+    /// for a side whose faction flies `faction`, shows in a portrait of its
+    /// model: as shares of the portrait's width and height from its top
+    /// left, the portrait being what the model's own camera sees, stretched
+    /// to fill it. None where the model has no camera or plate to measure.
+    pub fn framing(
+        &mut self,
+        game: &GameData,
+        template: &str,
+        faction: Option<&Id>,
+    ) -> Option<Rect> {
+        let banner = self.banners.banner(&Id::from(template), faction)?;
+        let banners = &self.banners;
+        *(self.framings.entry(banner.clone())).or_insert_with(|| {
+            let (model, shape) = banners.plate(banner)?;
+            let nif = Nif::parse(&game.read(model)?).ok()?;
+            plate_framing(&nif, shape)
+        })
     }
 
     /// The rank the banner an organization of `template` flies, for a side
@@ -308,6 +332,51 @@ fn plate_image(game: &GameData, model: &str, shape: &str) -> Option<String> {
         warn!("banner model {model} has no image for its plate, {shape}");
     }
     path
+}
+
+/// Where the shape named `shape` in `nif` shows in what the model's
+/// portrait camera sees, as [`BannerImages::framing`] gives it. The shape
+/// faces the camera, as a banner faces whoever looks at it, so its own
+/// width and height are what's seen of it, at the distance of its centre.
+fn plate_framing(nif: &Nif, shape: &str) -> Option<Rect> {
+    let camera = nif.objects.iter().find_map(|o| match o {
+        Object::Camera(c) if c.av.name.eq_ignore_ascii_case("PortraitCamera") => Some(c),
+        _ => None,
+    })?;
+    let placed =
+        (nif.shapes().into_iter()).find(|p| p.shape.av.name.eq_ignore_ascii_case(shape))?;
+    let geometry = nif.get_as::<nif::Geometry>(placed.shape.data)?;
+    let (low, high) =
+        geometry
+            .positions
+            .iter()
+            .fold(([f32::MAX; 2], [f32::MIN; 2]), |(low, high), p| {
+                let low = [low[0].min(p[0]), low[1].min(p[1])];
+                (low, [high[0].max(p[0]), high[1].max(p[1])])
+            });
+    if low[0] > high[0] {
+        return None;
+    }
+    let eye = &camera.av.transform;
+    let axis = |c: usize| eye.rotation.map(|row| row[c]);
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    // The camera looks along its own x, with its y up and its z right.
+    let (ahead, up, right) = (axis(0), axis(1), axis(2));
+    let centre = placed
+        .transform
+        .apply([(low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0, 0.0]);
+    let to = std::array::from_fn(|i| centre[i] - eye.translation[i]);
+    let depth = dot(to, ahead);
+    if depth <= 0.0 {
+        return None;
+    }
+    let (x, y) = (dot(to, right) / depth, dot(to, up) / depth);
+    let scale = placed.transform.scale / depth;
+    let half = Vec2::new(high[0] - low[0], high[1] - low[1]) * scale / 2.0;
+    let across = Vec2::new(camera.right - camera.left, camera.top - camera.bottom);
+    let at = Vec2::new(x - camera.left, camera.top - y) / across;
+    let half = half / across.abs();
+    Some(Rect::from_corners(at - half, at + half))
 }
 
 /// A flip book's frames, in the order the model holds them.
@@ -570,6 +639,62 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plate_is_framed_where_the_portrait_camera_sees_it() {
+        let av = |name: &str, translation: [f32; 3], rotation| nif::SceneObject {
+            name: name.into(),
+            extra_data: Vec::new(),
+            controller: None,
+            flags: 0,
+            transform: nif::Transform {
+                translation,
+                rotation,
+                scale: 1.0,
+            },
+            properties: Vec::new(),
+        };
+        let level = nif::Transform::IDENTITY.rotation;
+        // Looking along +y, with +z up and +x right, from 10 back and 1 up.
+        let ahead_y = [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let nif = Nif {
+            objects: vec![
+                Object::Node(nif::Node {
+                    av: av("root", [0.0; 3], level),
+                    children: vec![Some(1)],
+                    billboard: None,
+                }),
+                Object::Shape(nif::Shape {
+                    av: av("Plate", [0.0; 3], level),
+                    data: Some(2),
+                    skin: None,
+                }),
+                Object::Geometry(nif::Geometry {
+                    positions: vec![[-1.0, -0.5, 0.0], [1.0, 0.5, 0.0]],
+                    ..default()
+                }),
+                Object::Camera(nif::Camera {
+                    av: av("PortraitCamera", [0.0, -10.0, 1.0], ahead_y),
+                    left: -0.2,
+                    right: 0.2,
+                    top: 0.2,
+                    bottom: -0.2,
+                    near: 1.0,
+                    far: 100.0,
+                    orthographic: false,
+                }),
+            ],
+            roots: vec![Some(0), Some(3)],
+            incomplete: None,
+        };
+        // The window is 4 across at the plate; the plate 2 across and 1 high,
+        // its middle 1 below the camera's.
+        let framing = plate_framing(&nif, "plate").unwrap();
+        let expect = Rect::new(0.25, 0.625, 0.75, 0.875);
+        assert!((framing.min - expect.min).length() < 1e-5, "{framing:?}");
+        assert!((framing.max - expect.max).length() < 1e-5, "{framing:?}");
+        assert_eq!(plate_framing(&nif, "Other"), None);
+    }
 
     #[test]
     fn draped_squares_follow_the_ground() {
