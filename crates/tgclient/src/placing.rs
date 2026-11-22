@@ -37,6 +37,7 @@ pub(crate) fn placed(
         (None, Some(at)) => (at, actions::UNPACK_FACING),
         (None, None) => return None,
     };
+    let facing = sim.build_facing(&template, facing);
     let fits = player.is_some_and(|p| sim.room_to_build(p, &template, at, facing));
     Some((template, at, facing, fits))
 }

@@ -132,6 +132,9 @@ pub struct Rules {
     pub drops: HashMap<Id, tgmap::Building>,
     /// What each template that can be built puts up, as its site starts.
     pub buildable: HashMap<Id, tgmap::Building>,
+    /// The templates whose buildings face the default way when they're
+    /// built, however they were aimed.
+    pub axis_locked: HashSet<Id>,
     /// How far beyond its footprint a building being built needs clear
     /// ground.
     pub building_padding: f32,
@@ -247,6 +250,7 @@ impl Default for Rules {
             operations: HashMap::new(),
             drops: HashMap::new(),
             buildable: HashMap::new(),
+            axis_locked: HashSet::new(),
             building_padding: tgmap::BUILDING_PADDING,
             decays: HashMap::new(),
             logistics: HashMap::new(),

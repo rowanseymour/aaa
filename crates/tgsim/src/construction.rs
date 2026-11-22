@@ -64,10 +64,11 @@ impl World {
     ) -> Result<(), Refused> {
         self.may_build(player, organization, &template)?;
         self.advance(player, organization, at, Order::Move, None)?;
+        let facing = self.build_facing(&template, facing);
         self.organizations[organization].build = Some(Build {
             template,
             at,
-            facing: unpack_facing(facing),
+            facing,
         });
         Ok(())
     }
@@ -176,6 +177,15 @@ impl World {
         self.refund(player, cost);
         self.remove(building, State::Sold(self.ticks));
         Ok(())
+    }
+
+    /// The way a building of `template` aimed to face `facing` is put up
+    /// facing: the default way for one that can't be turned.
+    pub fn build_facing(&self, template: &Id, facing: [f32; 2]) -> [f32; 2] {
+        match self.rules.axis_locked.contains(template) {
+            true => tgmap::UNPACKED_FACING,
+            false => unpack_facing(facing),
+        }
     }
 
     /// Whether `player` could put up a building of `template` at `at`
@@ -527,6 +537,24 @@ mod tests {
         };
         assert_eq!(w.check(1, &wall), Err(Refused::Unable));
         assert_eq!(w.check(2, &build([10.0, 20.0])), Err(Refused::NotYours));
+    }
+
+    #[test]
+    fn a_building_that_cant_be_turned_is_put_up_facing_the_default_way() {
+        let mut w = engineers();
+        let east = |w: &mut crate::World| {
+            let order = Command::Build {
+                organization: 0,
+                template: Id::from("bunker"),
+                at: [10.0, 20.0],
+                facing: [1.0, 0.0],
+            };
+            w.apply(1, order).unwrap();
+            w.organizations[0].build.as_ref().unwrap().facing
+        };
+        assert_eq!(east(&mut w), [1.0, 0.0]);
+        w.rules.axis_locked.insert(Id::from("bunker"));
+        assert_eq!(east(&mut w), tgmap::UNPACKED_FACING);
     }
 
     /// Whether player 1 could aim a bunker at `at`.
