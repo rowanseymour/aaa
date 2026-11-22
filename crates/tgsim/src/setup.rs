@@ -253,6 +253,7 @@ impl World {
                 .map(|m| m.lost.unwrap_or(0.0))
                 .collect(),
             bombarding: false,
+            bombard: None,
             bombarded: Vec::new(),
             properties: Vec::new(),
             guard: None,
@@ -389,6 +390,7 @@ impl World {
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
             closing: None,
+            shelling: None,
             busy: 0,
             decided: 0,
             met: None,

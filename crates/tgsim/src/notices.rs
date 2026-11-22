@@ -130,6 +130,9 @@ pub enum Notice {
         primary: bool,
         standing: Option<crate::Standing>,
     },
+    /// An organization of its, by index into [`World::organizations`],
+    /// gave up bombarding what it could no longer see.
+    BombardTargetLost { player: u32, organization: usize },
     /// An organization of its, by index into [`World::organizations`], has
     /// routed.
     Routed { player: u32, organization: usize },

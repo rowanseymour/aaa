@@ -6,6 +6,7 @@ use std::f32::consts::{FRAC_PI_4, PI};
 
 use tgmap::{AirJob, Id, Weapon};
 
+use crate::combat::Aimed;
 use crate::delivery::Plunge;
 use crate::targets::User;
 use crate::{Left, Notice, Piece, Projectile, Refused, State, TICK, Target, World, distance};
@@ -942,8 +943,11 @@ impl World {
                 self.units[u].id,
                 self.sorties[s].mana
             );
-            let t = target.unwrap_or(Target::Unit(u));
-            self.use_weapon(u, w, &weapon, t, place, hits, launched);
+            let aimed = match (target, place) {
+                (Some(t), _) => Aimed::Thing(t),
+                (None, at) => Aimed::Ground(at.unwrap_or(towards)),
+            };
+            self.fire(u, w, aimed, hits, launched);
         }
     }
 

@@ -96,6 +96,8 @@ pub struct Looks {
     /// What an order given only on things says given on the ground, with
     /// the order's name.
     pub(crate) no_target: String,
+    /// For a place none of the selection can bombard.
+    pub(crate) no_bombard: String,
     pub(crate) has: GameHas,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
@@ -307,6 +309,7 @@ pub fn setup(
     let research_requires = title("research_error_missing_requirements|ss", "%s required: %s");
     let research_refused = title("research_error_generic|s", "Could not research %s");
     let no_target = title("ui_error_command_target|s", "Invalid target for %s");
+    let no_bombard = title("bombard_error_location", "Invalid bombard target");
     let choose_hero = title(
         "ui_error_missing_single_recruit_item",
         "Must select a hero to attach",
@@ -488,6 +491,7 @@ pub fn setup(
         research_refused,
         choose_hero,
         no_target,
+        no_bombard,
         has,
         research_requires,
         menus,

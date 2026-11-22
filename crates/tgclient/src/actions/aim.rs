@@ -178,6 +178,7 @@ pub fn aim(
                 failed.write(Failed {
                     text,
                     about: Some(about),
+                    at: None,
                 });
                 *page = Page::Orders;
             }
@@ -238,7 +239,11 @@ pub fn aim(
         *page = Page::Orders;
         let Some(piece) = focus.piece() else {
             let text = fill(&menus.no_target, &[menus.order(aim)]);
-            failed.write(Failed { text, about: None });
+            failed.write(Failed {
+                text,
+                about: None,
+                at: None,
+            });
             return;
         };
         let (organizations, _) =
@@ -258,6 +263,44 @@ pub fn aim(
         crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
         sent.write(crate::waypoints::Sent {
             to: None,
+            aim,
+            organizations,
+        });
+        return;
+    }
+    if aim == Aim::Bombard {
+        *page = Page::Orders;
+        // It refuses only what's the player's own or an ally's; the rest
+        // is down to what each regiment can shell.
+        if let Struck::Friend(about) = attack_at(&sim.0, player, focus) {
+            refused.write(Refused {
+                about,
+                by: Some(aim.into()),
+            });
+            return;
+        }
+        let on = focus.piece();
+        let target = on.map_or(tgsim::Shelled::Place(point), tgsim::Shelled::Thing);
+        let (organizations, _) =
+            crate::commanding::give_each(&sim.0, &mut orders, player, &given, point, |r| {
+                tgsim::Command::Bombard {
+                    organization: r,
+                    target,
+                }
+            });
+        if organizations.is_empty() {
+            if on.is_none() {
+                failed.write(Failed {
+                    text: menus.no_bombard.clone(),
+                    about: None,
+                    at: Some(point),
+                });
+            }
+            return;
+        }
+        crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
+        sent.write(crate::waypoints::Sent {
+            to: on.is_none().then_some(point),
             aim,
             organizations,
         });
@@ -367,8 +410,8 @@ pub fn aim(
             crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
             vec![(r, at)]
         }
-        // Given on a thing, above.
-        Aim::Repair => return,
+        // Given above.
+        Aim::Repair | Aim::Bombard => return,
         Aim::Move | Aim::Attack | Aim::Run | Aim::Guard => {
             crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
             crate::commanding::send(

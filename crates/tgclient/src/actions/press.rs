@@ -169,7 +169,11 @@ impl Presser<'_, '_> {
                 Some(Give::AttachHero) => {
                     let about = self.selected.0.first().map(|&r| About::Organization(r));
                     let text = self.looks.choose_hero.clone();
-                    self.failed.write(Failed { text, about });
+                    self.failed.write(Failed {
+                        text,
+                        about,
+                        at: None,
+                    });
                 }
                 Some(Give::Disband) => {
                     if let &[organization] = &self.selected.0[..] {
@@ -332,6 +336,7 @@ impl Presser<'_, '_> {
         self.failed.write(Failed {
             text,
             about: Some(about),
+            at: None,
         });
     }
 }

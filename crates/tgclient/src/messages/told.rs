@@ -41,6 +41,8 @@ pub struct Failed {
     pub text: String,
     /// What it was given to, where the message points, if anything.
     pub about: Option<About>,
+    /// Otherwise, the spot it points at, if any.
+    pub at: Option<[f32; 2]>,
 }
 
 /// Tells the player of each order just [`Refused`] or [`Failed`].
@@ -80,8 +82,12 @@ pub fn refuse(
         let place = Some(Place::of(&sim.0, *about));
         log.say("GENERIC_ERROR", text, place, &time, &mut sounds);
     }
-    for Failed { text, about } in failed.read() {
-        let place = about.map(|a| Place::of(&sim.0, a));
+    for Failed { text, about, at } in failed.read() {
+        let place = match (about, at) {
+            (Some(a), _) => Some(Place::of(&sim.0, *a)),
+            (None, &Some(at)) => Some(Place { about: None, at }),
+            (None, None) => None,
+        };
         log.say("GENERIC_ERROR", text.clone(), place, &time, &mut sounds);
     }
 }
@@ -624,6 +630,14 @@ pub(crate) fn told(
             ..
         } if ours(player) => Told::Event(
             "company_experience_gained_level",
+            vec![look.organization(sim, organization).into()],
+            at(About::Organization(organization)),
+        ),
+        Notice::BombardTargetLost {
+            player,
+            organization,
+        } if ours(player) => Told::Event(
+            "bombard_target_lost_in_fog",
             vec![look.organization(sim, organization).into()],
             at(About::Organization(organization)),
         ),

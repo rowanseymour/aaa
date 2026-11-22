@@ -1,7 +1,8 @@
 //! The ability column: a button down the floater for each of the player's
 //! faction's special operations, in its list's order, with the
 //! operation's icon and a bar of how far it's recharged, greyed while it
-//! can't be used. What each shows and does is
+//! can't be used, with a toggle that opens and closes the column. What
+//! each shows and does is
 //! [`special_ops`](crate::special_ops)', shared with ours.
 
 use bevy::picking::hover::Hovered;
@@ -11,14 +12,17 @@ use bevy::ui_widgets::Button;
 use tgdata::widgets::{Rect, Widget};
 
 use super::object::Shaded;
-use super::{Drawer, Face, Step, holding, on_screen, reach};
+use super::{Drawer, Face, Press, Step, holding, on_screen, picture, reach};
 use crate::Sim;
 use crate::intent::Asks;
-use crate::special_ops::{Operation, Panel, action, probe};
+use crate::special_ops::{ColumnOpen, Operation, Panel, action, probe};
 use crate::ui::{Blocks, Hint, Marked};
 
 /// The floater the column is in.
 pub(super) const FLOATER: &str = "FactionAbilitiesFloater";
+/// Its toggle, and the cap drawn at its end while it's open.
+const TOGGLE: &str = "ShowButton";
+const END: &str = "EndDecal";
 /// The part of it the buttons are listed down.
 const LIST: &str = "Abilities";
 /// The widget repeated for each operation, and its parts.
@@ -27,6 +31,43 @@ const BUTTON: &str = "AbilityButton";
 const ICON: &str = "AbilityButtonDecal";
 const RECHARGE: &str = "Recharge";
 const BAR: &str = "StatusBar";
+
+/// The toggle that opens and closes the column.
+static TOGGLE_PRESS: Press = Press::toggle(
+    TOGGLE,
+    crate::special_ops::TOGGLE_COLUMN,
+    "special_ops.toggle",
+    super::Follows::AbilityColumn,
+);
+
+/// What's drawn only while the column's open.
+#[derive(Component)]
+pub struct WhileOpen;
+
+/// The column ready to spawn.
+pub(super) struct Column {
+    buttons: Vec<Built>,
+    /// The end cap's pictures.
+    cap: Vec<(Vec<Step>, Handle<Image>)>,
+}
+
+impl Column {
+    pub(super) fn spawn(self, screen: &mut ChildSpawnerCommands) {
+        for (chain, image) in self.cap {
+            screen.spawn((picture(&chain, image), WhileOpen));
+        }
+        for button in self.buttons {
+            button.spawn(screen);
+        }
+    }
+}
+
+/// Shows what's drawn only while the column's open while it is.
+pub fn open(open: Res<ColumnOpen>, mut shown: Query<&mut Visibility, With<WhileOpen>>) {
+    for mut visibility in &mut shown {
+        visibility.set_if_neq(crate::ui::visible(open.0));
+    }
+}
 
 /// An operation's button, by its place in the faction's list, and whether
 /// the side can use it now.
@@ -68,9 +109,40 @@ pub(super) struct Built {
     bar: Option<(Rect, Color, Shaded)>,
 }
 
-/// The column's buttons for `panel`'s operations, the floater being at
-/// the end of `within`: one [`ENTRY`] after another down its [`LIST`].
+/// The floater's toggle and end cap, and the column's buttons for
+/// `panel`'s operations, the floater being at the end of `within`: one
+/// [`ENTRY`] after another down its [`LIST`]. The rest of the floater is
+/// drawn as it is.
 pub(super) fn build(
+    floater: &Widget,
+    within: &[Step],
+    drawer: &mut Drawer,
+    panel: Option<&Panel>,
+    bindings: &crate::keys::Bindings,
+) -> Column {
+    let mut cap = Vec::new();
+    for child in &floater.children {
+        let name = child.name.as_str();
+        if name.eq_ignore_ascii_case(TOGGLE) {
+            drawer.pressable(&TOGGLE_PRESS, child, within);
+        } else if name.eq_ignore_ascii_case(END) {
+            if !drawer.flags.floater_end_cap {
+                continue;
+            }
+            let from = drawer.drawn.len();
+            drawer.widget(child, within);
+            cap = drawer.drawn.split_off(from);
+        } else {
+            drawer.widget(child, within);
+        }
+    }
+    Column {
+        buttons: buttons(floater, within, drawer, panel, bindings),
+        cap,
+    }
+}
+
+fn buttons(
     floater: &Widget,
     within: &[Step],
     drawer: &mut Drawer,
@@ -148,7 +220,7 @@ fn one(
 }
 
 impl Built {
-    pub(super) fn spawn(self, screen: &mut ChildSpawnerCommands) {
+    fn spawn(self, screen: &mut ChildSpawnerCommands) {
         let index = self.index;
         let at = self.at;
         // Placed within the button, as a share of its size.
@@ -180,6 +252,7 @@ impl Built {
                 Hovered::default(),
                 Blocks,
                 RelativeCursorPosition::default(),
+                WhileOpen,
             ))
             .with_children(|button| {
                 for face in self.frames {
@@ -279,7 +352,7 @@ fn tip(panel: &Panel, op: &Operation, left: f32) -> String {
     parts.join("\n\n")
 }
 
-/// Shows each button's frame for the states the mouse puts it in, none
+/// Shows each button's frame for the states the mouse puts it in, unfocused
 /// while it can't be used, and its icon greyed then.
 #[allow(clippy::type_complexity)]
 pub fn show(
@@ -288,7 +361,10 @@ pub fn show(
     mut icons: Query<(&AbilityIcon, &mut ImageNode)>,
 ) {
     for (button, hovered, pressed, children) in &buttons {
-        let holding = holding(false, hovered.get(), pressed, !button.usable);
+        // The game keeps the frame of an operation that's recharging or
+        // can't be afforded, though the button's disabled.
+        let usable = button.usable;
+        let holding = holding(false, hovered.get() && usable, pressed && usable, false);
         for &child in children {
             if let Ok((frame, mut shown)) = frames.get_mut(child) {
                 let all = frame.0.iter().all(|e| e.shown(&holding));
@@ -337,6 +413,43 @@ pub fn fill(
 mod tests {
     use super::*;
     use crate::special_ops::tests::{operating, panel};
+
+    fn when(states: &[&str]) -> tgdata::widgets::ViewElement {
+        tgdata::widgets::ViewElement {
+            name: String::new(),
+            kind: None,
+            bounds: Default::default(),
+            when: states.iter().map(|s| s.to_string()).collect(),
+            texture: None,
+            colour: [1.0; 3],
+            text: None,
+            font: None,
+            justify: None,
+            tiles: None,
+            children: Vec::new(),
+            fields: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_unusable_button_keeps_its_unfocused_frame_when_hovered() {
+        let mut app = App::new();
+        app.add_systems(Update, show);
+        let frame = |states: &[&str]| (AbilityFrame(vec![when(states)]), Visibility::Hidden);
+        let unfocused = app.world_mut().spawn(frame(&["ENABLED", "UNFOCUSED"])).id();
+        let focused = app.world_mut().spawn(frame(&["ENABLED", "FOCUSED"])).id();
+        let button = Ability {
+            index: 0,
+            usable: false,
+        };
+        app.world_mut()
+            .spawn((button, Hovered(true)))
+            .add_children(&[unfocused, focused]);
+        app.update();
+        let shown = |e| *app.world().get::<Visibility>(e).unwrap() == Visibility::Inherited;
+        assert!(shown(unfocused));
+        assert!(!shown(focused));
+    }
 
     #[test]
     fn a_button_greys_once_used_and_its_bar_refills_as_it_recharges() {

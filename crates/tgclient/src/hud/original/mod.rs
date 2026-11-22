@@ -84,6 +84,7 @@ impl Plugin for OriginalHudPlugin {
                 (
                     (select_toggles, show_pressables).chain(),
                     (abilities::refresh, abilities::show).chain(),
+                    abilities::open,
                     abilities::fill,
                     (groups::open, groups::show),
                     experience::refresh,
@@ -404,6 +405,8 @@ pub enum Follows {
     Politics,
     /// The group strip is open.
     GroupStrip,
+    /// The column of special operations is open.
+    AbilityColumn,
 }
 
 /// The widgets the interface repeats once for each entry a panel lists,
@@ -451,7 +454,7 @@ pub fn spawn(
     let skin = skin(game, &sim, &local);
     let widgets = game.game_widgets();
     let named = |name: &str| (widgets.iter()).find(|w| w.name.eq_ignore_ascii_case(name));
-    let mut abilities = Vec::new();
+    let mut column = None;
     let mut strip = None;
     let mut experience = None;
     let mut drawer = Drawer {
@@ -529,13 +532,21 @@ pub fn spawn(
             strip = Some(groups::build(widget, &within, &mut drawer));
             continue;
         }
+        let panel = operations.as_deref();
+        if name == abilities::FLOATER {
+            column = Some(abilities::build(
+                widget,
+                &within,
+                &mut drawer,
+                panel,
+                &bindings,
+            ));
+            continue;
+        }
         for child in &widget.children {
             drawer.widget(child, &within);
         }
-        let panel = operations.as_deref();
-        if name == abilities::FLOATER {
-            abilities = abilities::build(widget, &within, &mut drawer, panel, &bindings);
-        } else if name == experience::WIDGET {
+        if name == experience::WIDGET {
             let fonts = (&mut letters, &mut *faces);
             experience = experience::build(widget, &within, &mut drawer, panel, fonts);
         }
@@ -618,8 +629,8 @@ pub fn spawn(
             for button in pressables {
                 button.spawn(screen, &bindings);
             }
-            for ability in abilities {
-                ability.spawn(screen);
+            if let Some(column) = column {
+                column.spawn(screen);
             }
             if let Some(strip) = strip {
                 strip.spawn(screen);
@@ -1118,6 +1129,7 @@ pub fn select_toggles(
     chat: Res<crate::chat::Chat>,
     politics: Res<crate::politics::Politics>,
     strip: Option<Res<crate::control_groups::StripOpen>>,
+    column: Res<crate::special_ops::ColumnOpen>,
     mut buttons: Query<(&Follows, &mut Pressable)>,
 ) {
     for (follows, mut button) in &mut buttons {
@@ -1127,6 +1139,7 @@ pub fn select_toggles(
             Follows::Chat => chat.is_open(),
             Follows::Politics => politics.open,
             Follows::GroupStrip => strip.as_ref().is_some_and(|s| s.0),
+            Follows::AbilityColumn => column.0,
         };
         if button.selected != on {
             button.selected = on;
@@ -1440,6 +1453,7 @@ mod tests {
             .init_resource::<crate::supply::Border>()
             .init_resource::<crate::chat::Chat>()
             .init_resource::<crate::politics::Politics>()
+            .init_resource::<crate::special_ops::ColumnOpen>()
             .add_systems(Update, (disable_buttons, select_toggles));
         let button = (Pauses, Follows::Pause, Pressable::default());
         let button = app.world_mut().spawn(button).id();
@@ -1462,6 +1476,7 @@ mod tests {
             .insert_resource(crate::supply::Border(true))
             .init_resource::<crate::chat::Chat>()
             .init_resource::<crate::politics::Politics>()
+            .init_resource::<crate::special_ops::ColumnOpen>()
             .add_systems(Update, select_toggles);
         let border = (Follows::Border, Pressable::default());
         let border = app.world_mut().spawn(border).id();
