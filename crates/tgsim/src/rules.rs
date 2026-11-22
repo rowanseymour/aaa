@@ -128,6 +128,10 @@ pub struct Rules {
     pub kinds: HashMap<Id, tgmap::Kind>,
     /// Whether sides' objectives are kept in order of their text.
     pub sort_objectives: bool,
+    /// The difficulty levels, easiest first, and the match's, which
+    /// triggers compare by their place in that order.
+    pub difficulties: Vec<Id>,
+    pub difficulty: Option<Id>,
     /// The special operations that bear on supply, by id.
     pub operations: HashMap<Id, tgmap::Operation>,
     /// What those operations drop, by template, each standing anywhere and
@@ -254,6 +258,8 @@ impl Default for Rules {
             property_requires: HashMap::new(),
             kinds: HashMap::new(),
             sort_objectives: true,
+            difficulties: Vec::new(),
+            difficulty: None,
             operations: HashMap::new(),
             drops: HashMap::new(),
             buildable: HashMap::new(),

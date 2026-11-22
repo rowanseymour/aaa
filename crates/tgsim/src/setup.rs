@@ -42,6 +42,7 @@ impl World {
         world.settlements = map.settlements.clone();
         world.triggers = crate::Triggers::new(map.triggers.as_ref());
         world.triggers.names = map.named().map(|(n, id)| (n.to_string(), id)).collect();
+        world.triggers.objectives = map.objectives.clone().into();
         for p in &map.players {
             for t in &p.technologies {
                 world.grant(p.id, t.clone());

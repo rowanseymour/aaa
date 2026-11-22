@@ -114,6 +114,14 @@ pub enum Notice {
     Gained { player: u32, technology: Id },
     /// It no longer holds a technology it did.
     TechnologyLost { player: u32, technology: Id },
+    /// One of its objectives was given or set active again, completed or
+    /// failed, as `standing` says, or taken away, with none.
+    Objective {
+        player: u32,
+        text: String,
+        primary: bool,
+        standing: Option<crate::Standing>,
+    },
     /// An organization of its, by index into [`World::organizations`], has
     /// routed.
     Routed { player: u32, organization: usize },

@@ -83,9 +83,21 @@ pub struct Map {
     pub warnings: Vec<String>,
     /// The map's scripting, where it could be read.
     pub triggers: Option<Triggers>,
+    /// The objectives its triggers can give the sides.
+    pub objectives: Vec<Objective>,
     /// The world rules the map stores, which those chosen for the match
     /// replace.
     pub rules: StoredRules,
+}
+
+/// An objective a map's triggers can give a side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Objective {
+    /// What triggers call it by.
+    pub name: String,
+    /// What it says, from the map's strings.
+    pub text: String,
+    pub primary: bool,
 }
 
 /// The world rules a map stores: each one's value as the data writes it,
@@ -258,6 +270,20 @@ impl Map {
                 Default::default()
             }
         };
+        let objectives = match map.objectives() {
+            Ok(o) => o.objectives,
+            Err(e) => {
+                warnings.push(format!("objectives: {e}"));
+                Vec::new()
+            }
+        };
+        let objectives = (objectives.into_iter())
+            .map(|o| Objective {
+                text: strings.get(&o.text).cloned().unwrap_or(o.text),
+                name: o.name,
+                primary: o.primary,
+            })
+            .collect();
         Ok(Map {
             title: tgdata::map_title(name).to_string(),
             strings: Arc::new(strings),
@@ -278,6 +304,7 @@ impl Map {
             crowded,
             warnings,
             triggers,
+            objectives,
             rules: StoredRules::read(game, &mut map).map_err(err)?,
         })
     }

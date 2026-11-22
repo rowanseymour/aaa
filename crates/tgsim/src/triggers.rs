@@ -1,8 +1,7 @@
 //! A map's triggers: tested every tick in the map's order, each running
 //! its effects when its events and conditions allow.
 //!
-//! Events aren't carried out, so a trigger waiting on one never goes
-//! ahead; a condition or effect not handled here fails.
+//! An event, condition or effect not handled here never holds, or fails.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -11,7 +10,7 @@ use tgmap::Id;
 use tgmap::triggers::{Element, Parameter, Trigger, Value};
 
 use crate::targets::Thing;
-use crate::{SECOND, TICK, World};
+use crate::{Notice, SECOND, Standing, State, TICK, World};
 
 /// Where a trigger stands in the match.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -37,6 +36,37 @@ pub struct Triggers {
     pub suns: Vec<SunChange>,
     /// The countdown a trigger has put on screen, for every side to see.
     pub counter: Option<Counter>,
+    /// The objectives the map defines, for its triggers to give.
+    pub(crate) objectives: Arc<[tgmap::Objective]>,
+    /// The kingdoms an event's parameter and a condition's last picked,
+    /// which later ones can name as `mi_kingdom_event` and
+    /// `mi_kingdom_condition`, kept from one trigger and tick to the next.
+    pub event_kingdom: Option<u32>,
+    pub condition_kingdom: Option<u32>,
+    /// What's happened since the last pass that the world doesn't keep.
+    pub(crate) happened: Vec<Happening>,
+    /// The thing the trigger being run is run for, and the one a condition
+    /// last picked, while it's tested.
+    event_thing: Option<Thing>,
+    condition_thing: Option<Thing>,
+}
+
+/// Something events hear of that the world keeps nothing of.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Happening {
+    /// A side placed a building site of the template.
+    Begun { player: u32, template: Id },
+    /// A thing of the template was finished for a side: a site completed
+    /// or a packed building unpacked.
+    Finished { player: u32, template: Id },
+    /// A side recruited something of the template.
+    Recruited { player: u32, template: Id },
+}
+
+/// A thing that died since the last pass, with what last damaged it.
+struct Death {
+    dead: Thing,
+    killer: Option<Thing>,
 }
 
 /// A countdown from `seconds` of game time, shown at `at`. Reaching 0
@@ -81,7 +111,9 @@ impl Triggers {
             activated: (t.activation_time.max(0.0) / TICK).round() as u64,
         };
         for trigger in &t.triggers {
-            let elements = trigger.conditions.iter().chain(&trigger.effects);
+            let elements = (trigger.events.iter())
+                .chain(&trigger.conditions)
+                .chain(&trigger.effects);
             for e in elements.filter(|e| !HANDLED.contains(&e.name.as_str())) {
                 log::debug!("trigger {}: {} isn't carried out", trigger.name, e.name);
             }
@@ -93,6 +125,12 @@ impl Triggers {
             names: Arc::default(),
             suns: Vec::new(),
             counter: None,
+            objectives: Arc::default(),
+            event_kingdom: None,
+            condition_kingdom: None,
+            happened: Vec::new(),
+            event_thing: None,
+            condition_thing: None,
         }
     }
 }
@@ -104,11 +142,40 @@ impl crate::hash::Digest for Triggers {
         self.variables.digest(h);
         self.suns.digest(h);
         self.counter.digest(h);
+        self.event_kingdom.digest(h);
+        self.condition_kingdom.digest(h);
     }
 }
 
-/// The conditions and effects carried out.
+/// The events, conditions and effects carried out.
 const HANDLED: &[&str] = &[
+    "actor_captured_by_kingdom",
+    "actor_destroys_actor",
+    "kingdom_begins_construction_on_actor",
+    "kingdom_finishes_construction_on_actor",
+    "kingdom_recruits_actor",
+    "actor_is_dead",
+    "actor_owned_by_kingdom",
+    "actor_comparison_life",
+    "actor_comparison_morale",
+    "actor_has_state",
+    "actor_does_not_have_state",
+    "actor_visible_to_kingdom",
+    "difficulty_compare_difficulty",
+    "objective_succeeded",
+    "objective_failed",
+    "kingdom_default_lose",
+    "kingdom_has_no_settlements",
+    "kingdom_mission_lost",
+    "kingdom_enable_default_victory_condition",
+    "kingdom_gains_value_primary_resource",
+    "kingdom_gains_objective",
+    "kingdom_loses_objective",
+    "objective_complete_for_kingdom",
+    "objective_failed_for_kingdom",
+    "objective_incomplete_for_kingdom",
+    "object_destroyed",
+    "object_removed",
     "true",
     "activation_time",
     "value_compare_value",
@@ -146,47 +213,197 @@ fn compare(how: u32, a: f32, b: f32) -> bool {
 }
 
 impl World {
+    /// Keeps something that's happened for the triggers' next pass.
+    pub(crate) fn happen(&mut self, happening: Happening) {
+        self.triggers.happened.push(happening);
+    }
+
     /// Tests each active trigger in the map's order, running those that go
-    /// ahead.
+    /// ahead, then forgets what its events heard of.
     pub(crate) fn run_triggers(&mut self) {
+        let deaths = self.deaths();
         for t in 0..self.triggers.list.len() {
-            if !self.triggers.switches[t].active {
-                continue;
+            if self.triggers.switches[t].active {
+                self.test(t, &deaths);
             }
-            // Events aren't carried out: one waiting on any never goes ahead.
-            if !self.triggers.list[t].events.is_empty() {
-                continue;
+        }
+        self.triggers.happened.clear();
+    }
+
+    /// Tests the trigger at `t`, running it once for each of its event
+    /// things, or once if it has none, until a run goes ahead if it doesn't
+    /// repeat.
+    fn test(&mut self, t: usize, deaths: &[Death]) {
+        let list = Arc::clone(&self.triggers.list);
+        let trigger = &list[t];
+        let mut runs = vec![None];
+        if !trigger.events.is_empty() {
+            // Every event is heard, to gather all their things.
+            let heard: Vec<_> = (trigger.events.iter())
+                .map(|e| self.heard(e, deaths))
+                .collect();
+            if heard.iter().all(Option::is_none) {
+                return;
             }
-            let trigger = &self.triggers.list[t];
-            let mut held = trigger
+            let things: Vec<Thing> = heard.into_iter().flatten().flatten().collect();
+            if !things.is_empty() {
+                runs = things.into_iter().map(Some).collect();
+            }
+        }
+        let mut ran = false;
+        for thing in runs {
+            self.triggers.event_thing = thing;
+            self.triggers.condition_thing = None;
+            let held = trigger
                 .conditions
                 .iter()
                 .map(|c| self.condition_holds(t, c));
             let ahead = match trigger.all_conditions {
-                true => held.all(|h| h),
-                false => trigger.conditions.is_empty() || held.any(|h| h),
+                // Every condition is tested, for the things they pick.
+                true => held.fold(true, |all, h| all & h),
+                false => trigger.conditions.is_empty() | held.fold(false, |any, h| any | h),
             };
             if !ahead {
                 continue;
             }
             // Effects that fail do nothing, and the rest still run.
-            let list = Arc::clone(&self.triggers.list);
-            for effect in &list[t].effects {
+            for effect in &trigger.effects {
                 self.carry_out(effect);
             }
-            let ticks = self.ticks;
-            let repeats = self.triggers.list[t].repeats;
-            let switch = &mut self.triggers.switches[t];
-            match repeats {
-                true => switch.activated = ticks,
-                false => switch.active = false,
+            ran = true;
+            if !trigger.repeats {
+                break;
             }
+        }
+        self.triggers.event_thing = None;
+        self.triggers.condition_thing = None;
+        if !ran {
+            return;
+        }
+        let ticks = self.ticks;
+        let switch = &mut self.triggers.switches[t];
+        match trigger.repeats {
+            true => switch.activated = ticks,
+            false => switch.active = false,
         }
     }
 
+    /// The things that died since the last pass: on the tick before it, or
+    /// on that pass itself, by a trigger.
+    fn deaths(&self) -> Vec<Death> {
+        let Some(at) = self.ticks.checked_sub(1) else {
+            return Vec::new();
+        };
+        let from = |struck: Option<crate::Struck>| struck?.from.map(Thing::from);
+        let units = (0..self.units.len())
+            .filter(|&u| self.units[u].died == Some(at))
+            .map(|u| Death {
+                dead: Thing::Unit(u),
+                killer: from(self.units[u].struck),
+            });
+        let organizations = (0..self.organizations.len())
+            .filter(|&r| {
+                let members = self.organizations[r].units.iter();
+                let last = members.filter_map(|&u| self.units[u].died).max();
+                last == Some(at) && self.destroyed(r)
+            })
+            .map(|r| Death {
+                dead: Thing::Organization(r),
+                killer: from(self.organizations[r].struck),
+            });
+        let buildings = (0..self.buildings.len())
+            .filter(|&b| self.buildings[b].state == State::Destroyed(at))
+            .map(|b| Death {
+                dead: Thing::Building(b),
+                killer: from(self.buildings[b].struck),
+            });
+        units.chain(organizations).chain(buildings).collect()
+    }
+
+    /// Whether the event `e` happened since the last pass and, if so, the
+    /// things it was run for.
+    fn heard(&mut self, e: &Element, deaths: &[Death]) -> Option<Vec<Thing>> {
+        let p = &e.parameters;
+        let at = self.ticks.checked_sub(1)?;
+        let made = |made: fn(&Happening) -> Option<(u32, &Id)>| {
+            move |w: &mut World| {
+                let k = w.pick_kingdom(p.first(), Role::Event)?;
+                let template = template(p.get(1))?;
+                let matched = |h: &Happening| {
+                    made(h).is_some_and(|(player, t)| {
+                        player == k && template.as_ref().is_none_or(|n| n == t)
+                    })
+                };
+                w.triggers.happened.iter().any(matched).then(Vec::new)
+            }
+        };
+        match e.name.as_str() {
+            "actor_captured_by_kingdom" => {
+                let thing = self.thing(p.first());
+                let k = self.pick_kingdom(p.get(1), Role::Event)?;
+                let Some(Thing::Building(b)) = thing else {
+                    return None;
+                };
+                let building = &self.buildings[b];
+                (building.captured == Some(at) && building.owner == k)
+                    .then(|| vec![Thing::Building(b)])
+            }
+            "actor_destroys_actor" => self.destroys(p, deaths),
+            "kingdom_begins_construction_on_actor" => made(|h| match h {
+                Happening::Begun { player, template } => Some((*player, template)),
+                _ => None,
+            })(self),
+            "kingdom_finishes_construction_on_actor" => made(|h| match h {
+                Happening::Finished { player, template } => Some((*player, template)),
+                _ => None,
+            })(self),
+            "kingdom_recruits_actor" => made(|h| match h {
+                Happening::Recruited { player, template } => Some((*player, template)),
+                _ => None,
+            })(self),
+            _ => None,
+        }
+    }
+
+    /// Whether `actor_destroys_actor`, with the killer and the destroyed
+    /// as `p` names them, happened since the last pass, and its things.
+    fn destroys(&self, p: &[Parameter], deaths: &[Death]) -> Option<Vec<Thing>> {
+        let any = |p: Option<&Parameter>| p.is_some_and(|p| p.source == "mi_actor_any");
+        let (killer, destroyed) = (p.first(), p.get(1));
+        let things: Vec<Thing> = match (any(killer), any(destroyed)) {
+            (true, true) => (deaths.iter())
+                .flat_map(|d| d.killer.into_iter().chain([d.dead]))
+                .collect(),
+            (true, false) => {
+                let named = self.thing(destroyed)?;
+                let death = deaths.iter().find(|d| d.dead == named)?;
+                vec![death.killer?]
+            }
+            (false, true) => {
+                // Credited to exactly that thing.
+                let named = self.thing(killer)?;
+                let killed = deaths.iter().any(|d| d.killer == Some(named));
+                killed.then(|| vec![named])?
+            }
+            (false, false) => {
+                let (named, by) = (self.thing(destroyed)?, self.thing(killer)?);
+                let death = deaths.iter().find(|d| d.dead == named)?;
+                let unit_of = |k: Thing| match (by, k) {
+                    (Thing::Organization(r), Thing::Unit(u)) => self.units[u].organization == r,
+                    _ => false,
+                };
+                let credited = death.killer.is_some_and(|k| k == by || unit_of(k));
+                credited.then(|| vec![by])?
+            }
+        };
+        (!things.is_empty()).then_some(things)
+    }
+
     /// Whether the condition `c` of the trigger at `t` holds.
-    fn condition_holds(&self, t: usize, c: &Element) -> bool {
+    fn condition_holds(&mut self, t: usize, c: &Element) -> bool {
         let p = &c.parameters;
+        let thing = |w: &mut World| w.pick_thing(p.first());
+        let kingdom = |w: &mut World, i: usize| w.pick_kingdom(p.get(i), Role::Condition);
         match c.name.as_str() {
             "true" => true,
             "activation_time" => {
@@ -201,20 +418,157 @@ impl World {
                 (Some(a), Some(b)) => compare(comparison(p.get(1)), a, b),
                 _ => false,
             },
-            "kingdom_has_technology" => match (self.kingdom(p.first()), technology(p.get(1))) {
+            "kingdom_has_technology" => match (kingdom(self, 0), technology(p.get(1))) {
                 (Some(k), Some(t)) => self.holds(k, &t),
                 _ => false,
             },
             "kingdom_has_compare_value_primary_resource" => {
-                match (self.kingdom(p.first()), self.number(p.get(2))) {
+                match (kingdom(self, 0), self.number(p.get(2))) {
                     (Some(k), Some(v)) => {
                         compare(comparison(p.get(1)), self.stockpile(k).round(), v)
                     }
                     _ => false,
                 }
             }
+            // Naming nothing counts as dead.
+            "actor_is_dead" => thing(self).is_none_or(|t| self.dying(t)),
+            "actor_owned_by_kingdom" => match (thing(self), kingdom(self, 1)) {
+                (Some(t), Some(k)) => self.thing_owner(t) == k,
+                _ => false,
+            },
+            "actor_comparison_life" | "actor_comparison_morale" => {
+                let life = c.name == "actor_comparison_life";
+                let Some(t) = thing(self) else {
+                    return false;
+                };
+                let share = match life {
+                    true => self.life(t),
+                    false => self.morale_share(t),
+                };
+                match (share, self.number(p.get(2))) {
+                    (Some(share), Some(v)) => compare(comparison(p.get(1)), share * 100.0, v),
+                    _ => false,
+                }
+            }
+            "actor_has_state" | "actor_does_not_have_state" => {
+                let has = c.name == "actor_has_state";
+                let state = match p.get(1).map(|p| &p.value) {
+                    Some(Value::Int(n)) => *n,
+                    _ => return false,
+                };
+                // Neither holds of a thing that isn't there.
+                thing(self).is_some_and(|t| self.in_trigger_state(t, state) == has)
+            }
+            "actor_visible_to_kingdom" => match (thing(self), kingdom(self, 1)) {
+                (Some(t), Some(k)) => self.sees_thing(k, t),
+                _ => false,
+            },
+            "difficulty_compare_difficulty" => {
+                match (self.difficulty(p.first()), self.difficulty(p.get(2))) {
+                    (Some(a), Some(b)) => compare(comparison(p.get(1)), a as f32, b as f32),
+                    _ => false,
+                }
+            }
+            "objective_succeeded" | "objective_failed" => {
+                let standing = match c.name == "objective_succeeded" {
+                    true => Standing::Completed,
+                    false => Standing::Failed,
+                };
+                let k = kingdom(self, 1);
+                match (name(p.first()), k) {
+                    (Some(n), Some(k)) => {
+                        (self.objectives.get(&k)).is_some_and(|o| o.stands(n, standing))
+                    }
+                    _ => false,
+                }
+            }
+            "kingdom_default_lose" => kingdom(self, 0).is_some_and(|k| self.has_nothing_left(k)),
+            "kingdom_has_no_settlements" => {
+                kingdom(self, 0).is_some_and(|k| !self.settlements.iter().any(|s| s.owner == k))
+            }
             _ => false,
         }
+    }
+
+    /// Whether `t` is dying or has died.
+    fn dying(&self, t: Thing) -> bool {
+        match t {
+            Thing::Unit(u) => self.units[u].died.is_some(),
+            Thing::Organization(r) => self.destroyed(r),
+            Thing::Building(b) => matches!(self.buildings[b].state, State::Destroyed(_)),
+        }
+    }
+
+    /// The share of its most health `t` has; none for one with no health
+    /// of its own, as a regiment has.
+    fn life(&self, t: Thing) -> Option<f32> {
+        let (health, most) = match t {
+            Thing::Unit(u) => (self.units[u].health, self.max_health(u)),
+            Thing::Building(b) => (self.buildings[b].health, self.building_max_health(b)),
+            Thing::Organization(_) => return None,
+        };
+        (most > 0.0).then(|| health.max(0.0) / most)
+    }
+
+    /// The share of its most morale a regiment has; none for anything else.
+    fn morale_share(&self, t: Thing) -> Option<f32> {
+        let Thing::Organization(r) = t else {
+            return None;
+        };
+        let organization = &self.organizations[r];
+        (organization.morale_max > 0.0).then(|| organization.morale / organization.morale_max)
+    }
+
+    /// Whether `t` is itself in the state the game numbers `state`.
+    fn in_trigger_state(&self, t: Thing, state: u32) -> bool {
+        let Some(&named) = STATES.get(state as usize) else {
+            return false;
+        };
+        match (t, named) {
+            (_, "dead") => self.dying(t),
+            (Thing::Organization(r), _) if named.starts_with("mind_") => {
+                !self.destroyed(r) && self.activity(r) == named
+            }
+            (Thing::Organization(r), "out_of_supply") => !self.organizations[r].in_supply,
+            (Thing::Organization(r), "hq_attached") => self.organizations[r].hq.is_some(),
+            (Thing::Organization(r), "organization_entrenched") => {
+                self.organizations[r].entrenched.is_some()
+            }
+            (Thing::Organization(r), "unpacked") => self.organizations[r].unpacked_into.is_some(),
+            (Thing::Building(b), "construction") => self.buildings[b].constructing,
+            (Thing::Building(b), "structure_normal") => {
+                let building = &self.buildings[b];
+                building.standing() && !building.constructing
+            }
+            _ => {
+                log::debug!("trigger state {named} isn't told of {t:?}");
+                false
+            }
+        }
+    }
+
+    /// Whether `player` sees `t`: a regiment, or one of its units, when it
+    /// sees any of the regiment.
+    fn sees_thing(&self, player: u32, t: Thing) -> bool {
+        match t {
+            Thing::Building(b) => self.sees_building(player, b),
+            Thing::Unit(_) | Thing::Organization(_) => self.regiment_of(t).is_some_and(|r| {
+                let units = &self.organizations[r].units;
+                units.iter().any(|&u| self.sees_unit(player, u))
+            }),
+        }
+    }
+
+    /// The place among the difficulty levels of the one a parameter gives:
+    /// the match's, or one it names.
+    fn difficulty(&self, p: Option<&Parameter>) -> Option<usize> {
+        let p = p?;
+        let level = match (p.source.as_str(), &p.value) {
+            ("mi_difficulty_level_map", _) => self.rules.difficulty.clone()?,
+            ("mi_difficulty_level_specified", Value::String(n)) => Id::from(n.as_str()),
+            _ => return None,
+        };
+        self.rules.difficulties.iter().position(|d| *d == level)
     }
 
     /// Carries out the effect `e`, saying whether it did anything.
@@ -356,8 +710,179 @@ impl World {
                 self.triggers.counter = None;
                 true
             }
+            "kingdom_mission_lost" => match self.kingdom(p.first()) {
+                Some(k) => {
+                    self.lose(k);
+                    true
+                }
+                None => false,
+            },
+            "kingdom_enable_default_victory_condition" => {
+                match (self.kingdom(p.first()), p.get(1).map(|p| &p.value)) {
+                    (Some(k), Some(Value::Int(on))) => {
+                        self.set_default_defeat(k, *on != 0);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            "kingdom_gains_value_primary_resource" => {
+                match (self.kingdom(p.first()), self.number(p.get(1))) {
+                    (Some(k), Some(v)) => {
+                        let had = self.stockpile(k);
+                        self.set_stockpile(k, had + v);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            "kingdom_gains_objective" => match (self.kingdom(p.first()), name(p.get(1))) {
+                (Some(k), Some(n)) => self.give_objective(k, n),
+                _ => false,
+            },
+            "kingdom_loses_objective" => match (self.kingdom(p.first()), name(p.get(1))) {
+                (Some(k), Some(n)) => self.take_objective(k, n),
+                _ => false,
+            },
+            "objective_complete_for_kingdom"
+            | "objective_failed_for_kingdom"
+            | "objective_incomplete_for_kingdom" => {
+                let standing = match e.name.as_str() {
+                    "objective_complete_for_kingdom" => Standing::Completed,
+                    "objective_failed_for_kingdom" => Standing::Failed,
+                    _ => Standing::Active,
+                };
+                match (name(p.first()), self.kingdom(p.get(1))) {
+                    (Some(n), Some(k)) => self.settle_objective(k, n, standing),
+                    _ => false,
+                }
+            }
+            "object_destroyed" => match self.thing(p.first()) {
+                Some(t) => self.destroy_thing(t),
+                None => false,
+            },
+            "object_removed" => match self.thing(p.first()) {
+                Some(t) => self.remove_thing(t),
+                None => false,
+            },
             _ => false,
         }
+    }
+
+    /// Gives a side the map's objective `name`, active.
+    fn give_objective(&mut self, player: u32, name: &str) -> bool {
+        let defined = self.triggers.objectives.iter().find(|o| o.name == name);
+        let Some(objective) = defined.cloned() else {
+            return false;
+        };
+        let sorted = self.rules.sort_objectives;
+        let held = self.objectives.entry(player).or_default();
+        held.give(&objective.name, &objective.text, objective.primary, sorted);
+        self.notices.push(Notice::Objective {
+            player,
+            text: objective.text,
+            primary: objective.primary,
+            standing: Some(Standing::Active),
+        });
+        true
+    }
+
+    /// Takes the objective `name` from a side that holds it.
+    fn take_objective(&mut self, player: u32, name: &str) -> bool {
+        let taken = self.objectives.get_mut(&player).and_then(|o| o.take(name));
+        let Some(objective) = taken else {
+            return false;
+        };
+        self.notices.push(Notice::Objective {
+            player,
+            text: objective.text,
+            primary: objective.primary,
+            standing: None,
+        });
+        true
+    }
+
+    /// Sets where an objective a side holds stands.
+    fn settle_objective(&mut self, player: u32, name: &str, standing: Standing) -> bool {
+        let held = self.objectives.get_mut(&player);
+        let Some(objective) = held.and_then(|o| o.settle(name, standing)).cloned() else {
+            return false;
+        };
+        self.notices.push(Notice::Objective {
+            player,
+            text: objective.text,
+            primary: objective.primary,
+            standing: Some(standing),
+        });
+        true
+    }
+
+    /// Has `t` die as if killed, crediting no one; false for one already
+    /// dead.
+    fn destroy_thing(&mut self, t: Thing) -> bool {
+        if self.dying(t) {
+            return false;
+        }
+        let ticks = self.ticks;
+        match t {
+            Thing::Unit(u) => {
+                self.units[u].struck = None;
+                self.units[u].die(ticks);
+                self.mourn(u);
+                self.lost_member(u);
+            }
+            Thing::Organization(r) => {
+                self.organizations[r].struck = None;
+                for u in self.organizations[r].units.clone() {
+                    self.units[u].struck = None;
+                }
+                self.destroy(r);
+            }
+            // Brought down as in a fight, with no one to take it.
+            Thing::Building(b) => {
+                self.buildings[b].struck = None;
+                self.fall(b, None);
+            }
+        }
+        true
+    }
+
+    /// Takes `t` off the map at once, without its dying; false for one
+    /// already gone.
+    fn remove_thing(&mut self, t: Thing) -> bool {
+        let ticks = self.ticks;
+        let units = match t {
+            Thing::Unit(u) => vec![u],
+            Thing::Organization(r) => {
+                if let Some(hq) = self.packed_hq(r) {
+                    self.detach_all(hq);
+                }
+                let organization = &mut self.organizations[r];
+                organization.engaged.clear();
+                organization.guard = None;
+                organization.units.clone()
+            }
+            Thing::Building(b) => {
+                if !self.buildings[b].standing() && self.buildings[b].state != State::Disabled {
+                    return false;
+                }
+                self.remove(b, State::Sold(ticks));
+                return true;
+            }
+        };
+        let mut removed = false;
+        for u in units {
+            let unit = &mut self.units[u];
+            if unit.alive() {
+                unit.left = Some(crate::Left::Disbanded(ticks));
+                unit.besieged = None;
+                unit.target = None;
+                unit.halt();
+                unit.speed = 0.0;
+                removed = true;
+            }
+        }
+        removed
     }
 
     /// Adds `by` to the morale of the regiment `t` is or is in.
@@ -375,11 +900,13 @@ impl World {
         by != 0.0
     }
 
-    /// The thing a parameter names, by its id or its name, while it's on
-    /// the map.
+    /// The thing a parameter names, by its id or its name while it's on
+    /// the map, or as the trigger's event thing or condition thing.
     fn thing(&self, p: Option<&Parameter>) -> Option<Thing> {
         let p = p?;
         match (p.source.as_str(), &p.value) {
+            ("mi_actor_event", _) => self.triggers.event_thing,
+            ("mi_actor_condition", _) => self.triggers.condition_thing,
             ("mi_actor_id", Value::Int(id)) => self.by_id(*id),
             // The one that came into being last.
             ("mi_actor_named", Value::String(n)) => (self.triggers.names.iter().rev())
@@ -387,6 +914,33 @@ impl World {
                 .find_map(|&(_, id)| self.by_id(id)),
             _ => None,
         }
+    }
+
+    /// The thing a condition's parameter names, which becomes the
+    /// condition thing.
+    fn pick_thing(&mut self, p: Option<&Parameter>) -> Option<Thing> {
+        let thing = self.thing(p);
+        let named =
+            p.is_some_and(|p| matches!(p.source.as_str(), "mi_actor_id" | "mi_actor_named"));
+        if named && thing.is_some() {
+            self.triggers.condition_thing = thing;
+        }
+        thing
+    }
+
+    /// The side a parameter names, which becomes the event or the condition
+    /// kingdom when an event's or a condition's names it.
+    fn pick_kingdom(&mut self, p: Option<&Parameter>, role: Role) -> Option<u32> {
+        let k = self.kingdom(p);
+        let named =
+            p.is_some_and(|p| matches!(p.source.as_str(), "mi_kingdom_named" | "mi_kingdom_id"));
+        if let (true, Some(k)) = (named, k) {
+            match role {
+                Role::Event => self.triggers.event_kingdom = Some(k),
+                Role::Condition => self.triggers.condition_kingdom = Some(k),
+            }
+        }
+        k
     }
 
     /// The thing on the map with the map id `id`.
@@ -427,8 +981,72 @@ impl World {
                 .find(|k| k.name.eq_ignore_ascii_case(n))
                 .map(|k| k.id),
             ("mi_kingdom_id", Value::Int(id)) => players.iter().find(|k| k.id == *id).map(|k| k.id),
+            ("mi_kingdom_event", _) => self.triggers.event_kingdom,
+            ("mi_kingdom_condition", _) => self.triggers.condition_kingdom,
             _ => None,
         }
+    }
+}
+
+/// What picked a parameter's kingdom, which decides what remembers it.
+#[derive(Clone, Copy)]
+enum Role {
+    Event,
+    Condition,
+}
+
+/// The states a trigger can test, by the game's numbering.
+const STATES: &[&str] = &[
+    "mind_attacking",
+    "mind_bombard",
+    "mind_building",
+    "mind_chasing",
+    "mind_engaged",
+    "mind_exhausted",
+    "mind_guarding",
+    "mind_joining",
+    "mind_moving",
+    "mind_reattaching",
+    "mind_regrouping",
+    "mind_repairing",
+    "mind_resting",
+    "mind_retreating",
+    "mind_routing",
+    "mind_reforming",
+    "mind_exploring",
+    "mind_rampaging",
+    "mind_razing",
+    "out_of_supply",
+    "under_siege",
+    "construction",
+    "organization_entrenched",
+    "dead",
+    "falling",
+    "structure_packing",
+    "structure_unpacking",
+    "structure_normal",
+    "structure_researching",
+    "structure_upgrading",
+    "structure_razing",
+    "structure_recruiting",
+    "active_construction",
+    "summoning",
+    "unpacked",
+    "mind_packing",
+    "mind_unpacking",
+    "missing_primary",
+    "unloading",
+    "disabled",
+    "targeted",
+    "hq_attached",
+];
+
+/// The template a parameter names, or none for any.
+fn template(p: Option<&Parameter>) -> Option<Option<Id>> {
+    match p.map(|p| (p.source.as_str(), &p.value))? {
+        ("mi_actor_data_named", Value::String(n)) => Some(Some(Id::from(n.as_str()))),
+        ("mi_actor_data_any", _) => Some(None),
+        _ => None,
     }
 }
 
@@ -470,7 +1088,7 @@ fn name(p: Option<&Parameter>) -> Option<&str> {
 mod tests {
     use tgmap::triggers::{Element, Parameter, Trigger, Value};
 
-    use super::Triggers;
+    use super::{Happening, Triggers};
     use crate::experience::regiment_tests::veterans;
     use crate::heroes::tests::pool;
     use crate::testing::run;
@@ -999,5 +1617,413 @@ mod tests {
         dead.units[1].died = Some(0);
         dead.tick();
         assert_eq!(dead.organizations[1].experience, 0.0);
+    }
+
+    fn heard(id: u32, repeats: bool, events: Vec<Element>, effects: Vec<Element>) -> Trigger {
+        Trigger {
+            events,
+            ..trigger(id, true, repeats, Vec::new(), effects)
+        }
+    }
+
+    fn any() -> Parameter {
+        parameter("ma_actor", "mi_actor_any", Value::Int(0))
+    }
+
+    fn event_thing() -> Parameter {
+        parameter("ma_actor", "mi_actor_event", Value::Int(0))
+    }
+
+    fn template(id: &str) -> Parameter {
+        parameter(
+            "ma_actor_data",
+            "mi_actor_data_named",
+            Value::String(id.into()),
+        )
+    }
+
+    fn objective(name: &str) -> Parameter {
+        parameter("ma_objective", "mi_objective", Value::String(name.into()))
+    }
+
+    #[test]
+    fn a_death_is_heard_once_and_runs_the_trigger_for_its_killer() {
+        // Player 2's rifleman (id 4) killed by player 1's (unit 0).
+        let killed = element("actor_destroys_actor", vec![any(), actor_id(4)]);
+        let by_ours = element("actor_owned_by_kingdom", vec![event_thing(), kingdom(1)]);
+        let trigger = Trigger {
+            conditions: vec![by_ours],
+            ..heard(1, true, vec![killed], vec![incr("kills")])
+        };
+        let mut w = with(veterans(), vec![trigger], &[("kills", 0.0)]);
+        // Named while its remains lie.
+        w.rules.remains.insert("soldier".into(), [0.5, 0.5]);
+        w.tick();
+        assert_eq!(count(&w, "kills"), 0.0);
+        crate::testing::hit_by(&mut w, 1, 0);
+        let ticks = w.ticks;
+        w.units[1].die(ticks);
+        w.tick();
+        assert_eq!(count(&w, "kills"), 1.0);
+        w.tick();
+        assert_eq!(count(&w, "kills"), 1.0);
+    }
+
+    #[test]
+    fn a_death_no_one_dealt_has_no_killer_to_hear_of() {
+        let killed = element("actor_destroys_actor", vec![any(), actor_id(4)]);
+        let all = element("actor_destroys_actor", vec![any(), any()]);
+        let mut w = with(
+            veterans(),
+            vec![
+                heard(1, true, vec![killed], vec![incr("named")]),
+                heard(2, true, vec![all], vec![incr("any")]),
+            ],
+            &[("named", 0.0), ("any", 0.0)],
+        );
+        let ticks = w.ticks;
+        w.units[1].die(ticks);
+        w.tick();
+        assert_eq!(count(&w, "named"), 0.0);
+        // The unit and its regiment, each run for.
+        assert_eq!(count(&w, "any"), 2.0);
+    }
+
+    #[test]
+    fn a_named_killer_is_heard_of_for_its_kills() {
+        let killer = element("actor_destroys_actor", vec![actor_id(2), any()]);
+        let regiment = element("actor_destroys_actor", vec![actor_id(1), actor_id(4)]);
+        let mut w = with(
+            veterans(),
+            vec![
+                heard(1, true, vec![killer], vec![incr("unit")]),
+                heard(2, true, vec![regiment], vec![incr("regiment")]),
+            ],
+            &[("unit", 0.0), ("regiment", 0.0)],
+        );
+        w.rules.remains.insert("soldier".into(), [0.5, 0.5]);
+        crate::testing::hit_by(&mut w, 1, 0);
+        let ticks = w.ticks;
+        w.units[1].die(ticks);
+        w.tick();
+        assert_eq!(count(&w, "unit"), 1.0);
+        // Named both ways, a regiment stands for its units.
+        assert_eq!(count(&w, "regiment"), 1.0);
+    }
+
+    #[test]
+    fn a_capture_is_heard_by_the_side_that_took_it() {
+        let house = crate::testing::building(50, 2, [30.0, 30.0]);
+        let w = crate::testing::with_buildings(veterans(), &[house]);
+        let taken = |k| element("actor_captured_by_kingdom", vec![actor_id(50), kingdom(k)]);
+        let mut w = with(
+            w,
+            vec![
+                heard(1, true, vec![taken(1)], vec![incr("ours")]),
+                heard(2, true, vec![taken(2)], vec![incr("theirs")]),
+            ],
+            &[("ours", 0.0), ("theirs", 0.0)],
+        );
+        w.change_hands(0, 1);
+        w.tick();
+        w.tick();
+        assert_eq!((count(&w, "ours"), count(&w, "theirs")), (1.0, 0.0));
+    }
+
+    #[test]
+    fn recruits_and_buildings_are_heard_by_template_and_side() {
+        let recruits = |k, t: Parameter| element("kingdom_recruits_actor", vec![kingdom(k), t]);
+        let any_template = parameter("ma_actor_data", "mi_actor_data_any", Value::Int(0));
+        let finished = element(
+            "kingdom_finishes_construction_on_actor",
+            vec![kingdom(1), template("rus_depot_ammo")],
+        );
+        let mut w = with(
+            veterans(),
+            vec![
+                heard(
+                    1,
+                    true,
+                    vec![recruits(1, template("regiment_rus_infantry"))],
+                    vec![incr("infantry")],
+                ),
+                heard(2, true, vec![recruits(1, any_template)], vec![incr("any")]),
+                heard(
+                    3,
+                    true,
+                    vec![recruits(2, template("regiment_rus_infantry"))],
+                    vec![incr("theirs")],
+                ),
+                heard(4, true, vec![finished], vec![incr("depots")]),
+            ],
+            &[
+                ("infantry", 0.0),
+                ("any", 0.0),
+                ("theirs", 0.0),
+                ("depots", 0.0),
+            ],
+        );
+        w.happen(Happening::Recruited {
+            player: 1,
+            template: Id::from("regiment_rus_infantry"),
+        });
+        w.happen(Happening::Finished {
+            player: 1,
+            template: Id::from("rus_depot_ammo"),
+        });
+        w.tick();
+        w.tick();
+        let counts = ["infantry", "any", "theirs", "depots"].map(|n| count(&w, n));
+        assert_eq!(counts, [1.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn the_event_kingdom_is_the_last_an_event_named() {
+        let recruits = element(
+            "kingdom_recruits_actor",
+            vec![kingdom(2), template("regiment_rus_infantry")],
+        );
+        let since = parameter("ma_kingdom", "mi_kingdom_event", Value::Int(0));
+        let won = element("kingdom_mission_won", vec![since]);
+        let mut w = with(
+            veterans(),
+            vec![heard(1, false, vec![recruits], vec![won])],
+            &[],
+        );
+        w.happen(Happening::Recruited {
+            player: 2,
+            template: Id::from("regiment_rus_infantry"),
+        });
+        w.tick();
+        assert_eq!(w.outcome(2), Outcome::Won);
+        assert_eq!(w.triggers.event_kingdom, Some(2));
+    }
+
+    #[test]
+    fn naming_nothing_is_dead_and_states_are_the_things_own() {
+        let nobody = parameter("ma_actor", "mi_actor_named", Value::String("nobody".into()));
+        let dead = element("actor_is_dead", vec![nobody.clone()]);
+        let state = |name: &str, n| {
+            element(
+                name,
+                vec![
+                    actor_id(1),
+                    parameter("ma_state", "mi_state", Value::Int(n)),
+                ],
+            )
+        };
+        let w = veterans();
+        let mut w = with(
+            w,
+            vec![
+                trigger(1, true, false, vec![dead], vec![incr("dead")]),
+                trigger(
+                    3,
+                    true,
+                    false,
+                    vec![state("actor_does_not_have_state", 41)],
+                    vec![incr("free")],
+                ),
+                trigger(
+                    4,
+                    true,
+                    false,
+                    vec![state("actor_has_state", 41)],
+                    vec![incr("attached")],
+                ),
+                // Neither of a thing that isn't there.
+                trigger(
+                    5,
+                    true,
+                    false,
+                    vec![element(
+                        "actor_does_not_have_state",
+                        vec![nobody, parameter("ma_state", "mi_state", Value::Int(41))],
+                    )],
+                    vec![incr("missing")],
+                ),
+            ],
+            &[
+                ("dead", 0.0),
+                ("free", 0.0),
+                ("attached", 0.0),
+                ("missing", 0.0),
+            ],
+        );
+        w.tick();
+        let counts = ["dead", "free", "attached", "missing"].map(|n| count(&w, n));
+        assert_eq!(counts, [1.0, 1.0, 0.0, 0.0]);
+        // What it's doing is one state, by the game's numbering.
+        let doing = super::STATES.iter().position(|&s| s == w.activity(0));
+        let regiment = crate::targets::Thing::Organization(0);
+        assert!(w.in_trigger_state(regiment, doing.unwrap() as u32));
+        assert!(!w.in_trigger_state(regiment, 17));
+    }
+
+    #[test]
+    fn health_is_compared_as_a_share_and_a_regiment_has_none() {
+        let life = |id, n| {
+            element(
+                "actor_comparison_life",
+                vec![actor_id(id), at_least(), int(n)],
+            )
+        };
+        let mut w = with(
+            veterans(),
+            vec![
+                trigger(1, true, false, vec![life(2, 50)], vec![incr("half")]),
+                trigger(2, true, false, vec![life(2, 99)], vec![incr("whole")]),
+                trigger(3, true, false, vec![life(1, 0)], vec![incr("regiment")]),
+            ],
+            &[("half", 0.0), ("whole", 0.0), ("regiment", 0.0)],
+        );
+        let most = w.max_health(0);
+        w.units[0].health = most * 0.6;
+        w.tick();
+        let counts = ["half", "whole", "regiment"].map(|n| count(&w, n));
+        assert_eq!(counts, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn difficulties_compare_by_their_place() {
+        let map = parameter(
+            "ma_difficulty_level",
+            "mi_difficulty_level_map",
+            Value::Int(0),
+        );
+        let level = |n: &str| {
+            parameter(
+                "ma_difficulty_level",
+                "mi_difficulty_level_specified",
+                Value::String(n.into()),
+            )
+        };
+        let compared = |n| {
+            element(
+                "difficulty_compare_difficulty",
+                vec![map.clone(), at_least(), level(n)],
+            )
+        };
+        let mut w = with(
+            veterans(),
+            vec![
+                trigger(1, true, false, vec![compared("easy")], vec![incr("easy")]),
+                trigger(2, true, false, vec![compared("hard")], vec![incr("hard")]),
+            ],
+            &[("easy", 0.0), ("hard", 0.0)],
+        );
+        w.rules.difficulties = ["easy", "medium", "hard"].map(Id::from).to_vec();
+        w.rules.difficulty = Some(Id::from("MEDIUM"));
+        w.tick();
+        assert_eq!((count(&w, "easy"), count(&w, "hard")), (1.0, 0.0));
+    }
+
+    #[test]
+    fn objectives_are_given_settled_and_tested() {
+        let gains = element(
+            "kingdom_gains_objective",
+            vec![kingdom(1), objective("take_it")],
+        );
+        let done = element(
+            "objective_complete_for_kingdom",
+            vec![objective("take_it"), kingdom(1)],
+        );
+        let unknown = element(
+            "kingdom_gains_objective",
+            vec![kingdom(1), objective("nothing")],
+        );
+        let succeeded = element(
+            "objective_succeeded",
+            vec![objective("take_it"), kingdom(1)],
+        );
+        let won = element("kingdom_mission_won", vec![kingdom(1)]);
+        let mut w = with(
+            veterans(),
+            vec![
+                trigger(1, true, false, Vec::new(), vec![gains, unknown]),
+                trigger(2, true, false, vec![after(1)], vec![done]),
+                trigger(3, true, false, vec![succeeded], vec![won]),
+            ],
+            &[],
+        );
+        w.triggers.objectives = vec![tgmap::Objective {
+            name: "take_it".into(),
+            text: "1. Take it".into(),
+            primary: true,
+        }]
+        .into();
+        w.tick();
+        let held = &w.objectives[&1].0;
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].standing, crate::Standing::Active);
+        assert!(w.notices.contains(&Notice::Objective {
+            player: 1,
+            text: "1. Take it".into(),
+            primary: true,
+            standing: Some(crate::Standing::Active),
+        }));
+        run(&mut w, 1.1);
+        assert_eq!(w.objectives[&1].0[0].standing, crate::Standing::Completed);
+        assert_eq!(w.outcome(1), Outcome::Won);
+    }
+
+    #[test]
+    fn a_side_can_lose_or_be_kept_in_with_nothing() {
+        let lost = element("kingdom_mission_lost", vec![kingdom(2)]);
+        let off = element(
+            "kingdom_enable_default_victory_condition",
+            vec![
+                kingdom(1),
+                parameter("ma_boolean", "mi_boolean", Value::Int(0)),
+            ],
+        );
+        let nothing = element("kingdom_default_lose", vec![kingdom(1)]);
+        let w = with(
+            veterans(),
+            vec![
+                trigger(1, true, false, Vec::new(), vec![lost, off]),
+                trigger(2, true, false, vec![nothing], vec![incr("nothing")]),
+            ],
+            &[("nothing", 0.0)],
+        );
+        let mut w = w;
+        w.tick();
+        assert_eq!(w.outcome(2), Outcome::Lost);
+        assert!(!w.fates[&1].default_defeat);
+        assert_eq!(count(&w, "nothing"), 0.0);
+    }
+
+    #[test]
+    fn a_thing_a_trigger_destroys_is_heard_of_next_tick_and_one_removed_never() {
+        let destroyed = element("object_destroyed", vec![actor_id(1)]);
+        let removed = element("object_removed", vec![actor_id(3)]);
+        let killed = element("actor_destroys_actor", vec![any(), any()]);
+        let mut w = with(
+            veterans(),
+            vec![
+                heard(1, true, vec![killed], vec![incr("deaths")]),
+                trigger(2, true, false, Vec::new(), vec![destroyed, removed]),
+            ],
+            &[("deaths", 0.0)],
+        );
+        w.tick();
+        assert!(w.destroyed(0) && w.destroyed(1));
+        assert_eq!(count(&w, "deaths"), 0.0);
+        w.tick();
+        // Its unit and the regiment, on the tick after.
+        assert_eq!(count(&w, "deaths"), 2.0);
+        assert!(w.units[1].died.is_none() && w.units[1].left.is_some());
+    }
+
+    #[test]
+    fn money_is_given_to_a_side() {
+        let gives = element(
+            "kingdom_gains_value_primary_resource",
+            vec![kingdom(1), int(1000)],
+        );
+        let mut w = running(vec![gives]);
+        let had = w.stockpile(1);
+        w.tick();
+        assert!((w.stockpile(1) - had - 1000.0).abs() < 1e-3);
     }
 }

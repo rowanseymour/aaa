@@ -130,6 +130,10 @@ impl World {
             self.buildings[centre].template,
             self.buildings[centre].id
         );
+        self.happen(crate::triggers::Happening::Recruited {
+            player,
+            template: self.organizations[r].template.clone(),
+        });
         self.notices.push(Notice::PutOut {
             player,
             building: centre,

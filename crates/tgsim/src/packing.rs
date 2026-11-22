@@ -139,11 +139,14 @@ impl World {
             let ticks = (unpacks.seconds / TICK).round() as u64;
             self.buildings[b].unpacking = Some((self.ticks, self.ticks + ticks));
         }
-        for b in &mut self.buildings {
-            if let Some((_, end)) = b.unpacking
+        for b in 0..self.buildings.len() {
+            let building = &mut self.buildings[b];
+            if let Some((_, end)) = building.unpacking
                 && self.ticks >= end
             {
-                b.unpacking = None;
+                building.unpacking = None;
+                let (player, template) = (building.owner, building.template.clone());
+                self.happen(crate::triggers::Happening::Finished { player, template });
             }
         }
         for b in 0..self.buildings.len() {

@@ -8,6 +8,7 @@ use crate::economy::money;
 use crate::packing::unpack_facing;
 use crate::supply::BEAT;
 use crate::targets::User;
+use crate::triggers::Happening;
 use crate::{
     Build, CONTACT, Notice, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Refused, State, TICK,
     Target, World, squared_distance, within,
@@ -343,6 +344,10 @@ impl World {
         let b = self.buildings.len();
         self.push_buildings(std::slice::from_ref(&site), true);
         self.buildings[b].constructing = true;
+        self.happen(Happening::Begun {
+            player,
+            template: template.clone(),
+        });
         let left = self.stockpile(player) - cost;
         self.set_stockpile(player, left);
         log::debug!(
@@ -434,6 +439,8 @@ impl World {
                 let player = building.owner;
                 if full && building.constructing {
                     building.constructing = false;
+                    let template = building.template.clone();
+                    self.happen(Happening::Finished { player, template });
                     self.notices.push(Notice::Constructed {
                         player,
                         building: b,

@@ -97,7 +97,7 @@ pub use terrain::{
 };
 pub use views::{Animation, AnimationKind, Footing, Portrait, View};
 pub use world_rules::{
-    CITY_VICTORY_RATIO, FOG_OF_WAR, LobbyRule, RuleChoice, RuleKind, RuleValues,
+    CITY_VICTORY_RATIO, DIFFICULTY_LEVEL, FOG_OF_WAR, LobbyRule, RuleChoice, RuleKind, RuleValues,
     STARTING_EXPERIENCE, STOCKPILE, SUN, number,
 };
 
