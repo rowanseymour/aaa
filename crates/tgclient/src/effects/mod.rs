@@ -290,12 +290,16 @@ impl Effects {
             weapon: Some(landing.weapon),
             landed: Some(landing.at),
         };
-        let target = Some(landing.target);
+        let target = landing.target;
         let landed = (weapon.projectile.as_ref())
             .and_then(|p| self.objects.get(p))
             .map(|o| o.destroyed.clone())
             .unwrap_or_default();
         self.queue(when, &landed, Source::Projectile(landing.from), target);
+        // A landing on the ground has no target to play them on.
+        if target.is_none() {
+            return;
+        }
         let per_target = weapon.effects.per_target.clone();
         let when = When {
             landed: None,
@@ -923,7 +927,7 @@ mod tests {
             tick: 9,
             from: me,
             weapon: 0,
-            target: Target::Unit(1),
+            target: Some(Target::Unit(1)),
             at: [5.0, 6.0],
         };
         effects.land(&landing, &shelled, 9.0);

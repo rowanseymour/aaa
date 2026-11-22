@@ -167,7 +167,7 @@ pub(super) fn notice(
         if let Some(w) = fighter(sim, l.from).and_then(|f| f.weapons.get(l.weapon)) {
             effects.land(l, w, at.at);
             if let Some(p) = &w.projectile {
-                let to = sim.position(l.target);
+                let to = l.target.map_or(l.at, |t| sim.position(t));
                 sounds.landed(&time, p, l.at, to, sim.owner(l.from));
             }
         }

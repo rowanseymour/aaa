@@ -243,6 +243,23 @@ pub(crate) fn caught<T: Copy>(
     near.into_iter().map(|(_, t, edge)| (t, edge)).collect()
 }
 
+/// What a shot is aimed at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Aimed {
+    Thing(Target),
+    /// A spot on the ground.
+    Ground([f32; 2]),
+}
+
+impl Aimed {
+    pub(crate) fn thing(self) -> Option<Target> {
+        match self {
+            Aimed::Thing(t) => Some(t),
+            Aimed::Ground(_) => None,
+        }
+    }
+}
+
 impl World {
     /// Each of `targets` with where it is and the circle round its soft
     /// shape, however it's turned, for [`caught`].
@@ -472,11 +489,13 @@ impl World {
                 fired_ago[w] = 0.0;
                 self.use_on_user(weapon, (s, by), &mut hits);
                 match weapon.flight {
-                    Some(flight) => launched.push(self.launch(s, by, w, weapon, flight, t)),
+                    Some(flight) => {
+                        launched.push(self.launch(s, by, w, weapon, flight, Aimed::Thing(t)))
+                    }
                     None => {
                         let bombard = self.bombards(s, weapon);
                         let at = self.impact(s, weapon, self.position(t));
-                        self.strike(weapon, at, t, (s, by), bombard, &mut hits)
+                        self.strike(weapon, at, Some(t), (s, by), bombard, &mut hits)
                     }
                 }
             }
@@ -570,6 +589,10 @@ impl World {
         unit.met = None;
         let Some((t, pick)) = decided else {
             unit.target = None;
+            if self.units[u].shelling.is_some() {
+                self.bombard_with(u, hits, launched);
+                return;
+            }
             self.mend(u);
             return;
         };
@@ -586,10 +609,23 @@ impl World {
             self.units[u].busy = self.ticks + self.recharged_in(u, pick.weapon, most);
             return;
         }
-        let fighter = unit.fighter.as_ref().expect("units that pick can fight");
-        let weapon = fighter.weapons[pick.weapon].clone();
-        unit.shot = Some((self.ticks, pick.weapon));
-        unit.fired_ago[pick.weapon] = 0.0;
+        self.fire(u, pick.weapon, Aimed::Thing(t), hits, launched);
+    }
+
+    /// Has the unit at `u` use its weapon `w` on what it's aimed at.
+    pub(crate) fn fire(
+        &mut self,
+        u: usize,
+        w: usize,
+        aimed: Aimed,
+        hits: &mut Vec<Hit>,
+        launched: &mut Vec<Projectile>,
+    ) {
+        let unit = &mut self.units[u];
+        let fighter = unit.fighter.as_ref().expect("units that fire can fight");
+        let weapon = fighter.weapons[w].clone();
+        unit.shot = Some((self.ticks, w));
+        unit.fired_ago[w] = 0.0;
         unit.busy = self.ticks + (weapon.choice.lasts / TICK).round() as u64;
         self.play_once(u, weapon.animation.as_deref());
         self.units[u].fired_in_fight = true;
@@ -597,11 +633,11 @@ impl World {
         let by = self.owner(s);
         self.use_on_user(&weapon, (s, by), hits);
         match weapon.flight {
-            Some(flight) => launched.push(self.launch(s, by, pick.weapon, &weapon, flight, t)),
+            Some(flight) => launched.push(self.launch(s, by, w, &weapon, flight, aimed)),
             None => {
                 let bombard = self.bombards(s, &weapon);
-                let at = self.impact(s, &weapon, self.position(t));
-                self.strike(&weapon, at, t, (s, by), bombard, hits)
+                let at = self.impact(s, &weapon, self.aimed_point(aimed));
+                self.strike(&weapon, at, aimed.thing(), (s, by), bombard, hits)
             }
         }
     }
@@ -615,8 +651,16 @@ impl World {
         }
     }
 
+    /// Where `aimed` is now.
+    pub(crate) fn aimed_point(&self, aimed: Aimed) -> [f32; 2] {
+        match aimed {
+            Aimed::Thing(t) => self.position(t),
+            Aimed::Ground(at) => at,
+        }
+    }
+
     /// The projectile `s`, of player `by`, fires with its weapon `w` at
-    /// `t`: flying for its life if it has one, else from `s` to where it
+    /// `aimed`: flying for its life if it has one, else from `s` to where it
     /// aims at its speed, and aimed ahead of a moving target by as far as
     /// it moves in that time. Heights aren't simulated, so distances are
     /// across the ground.
@@ -627,27 +671,27 @@ impl World {
         w: usize,
         weapon: &Weapon,
         flight: tgmap::Flight,
-        t: Target,
+        aimed: Aimed,
     ) -> Projectile {
-        let aim = self.position(t);
+        let aim = self.aimed_point(aimed);
         let seconds = match (flight.life > 0.0, flight.speed > 0.0) {
             (true, _) => flight.life,
             (false, true) => distance(self.position(s), aim) / flight.speed,
             (false, false) => 0.0,
         };
-        let velocity = match t {
-            Target::Unit(u) => {
+        let velocity = match aimed {
+            Aimed::Thing(Target::Unit(u)) => {
                 let u = &self.units[u];
                 [0, 1].map(|i| (u.position[i] - u.previous[i]) / TICK)
             }
-            Target::Building(_) => [0.0; 2],
+            Aimed::Thing(Target::Building(_)) | Aimed::Ground(_) => [0.0; 2],
         };
         Projectile {
             from: s,
             by,
             weapon: w,
             shot: weapon.clone(),
-            target: t,
+            target: aimed.thing(),
             at: self.impact(s, weapon, [0, 1].map(|i| aim[i] + velocity[i] * seconds)),
             lands: self.ticks + (seconds / TICK - 1e-4).ceil().max(0.0) as u64,
             bombard: self.bombards(s, weapon),
@@ -712,7 +756,7 @@ impl World {
         let (s, at) = (Target::Unit(u), unit.position);
         let by = self.owner(s);
         let mut hits = Vec::new();
-        self.strike(&weapon, at, s, (s, by), false, &mut hits);
+        self.strike(&weapon, at, Some(s), (s, by), false, &mut hits);
         self.land_all(hits, &mut Vec::new());
     }
 
@@ -970,13 +1014,19 @@ impl World {
     /// Whether `s`'s turret for `weapon`, if it has one, can be aimed at
     /// `t`'s centre.
     pub(crate) fn in_arc(&self, s: Target, weapon: &Weapon, t: Target) -> bool {
+        self.in_arc_at(s, weapon, self.position(t))
+    }
+
+    /// Whether `s`'s turret for `weapon`, if it has one, can be aimed at
+    /// `at`.
+    pub(crate) fn in_arc_at(&self, s: Target, weapon: &Weapon, at: [f32; 2]) -> bool {
         let (position, facing) = match s {
             Target::Unit(u) => (self.units[u].position, self.units[u].facing),
             Target::Building(b) => (self.buildings[b].position, self.buildings[b].facing),
         };
         let turrets = self.fighter(s).map(|f| &f.turrets[..]).unwrap_or_default();
         (weapon.aimed_by.and_then(|i| turrets.get(i)))
-            .is_none_or(|turret| crate::in_arc(position, facing, turret, self.position(t)))
+            .is_none_or(|turret| crate::in_arc(position, facing, turret, at))
     }
 
     /// How much a target is worth a defending building's fire before
@@ -1120,15 +1170,15 @@ impl World {
     }
 
     /// Records what a shot fired by `from` of `by`'s side, as bombardment
-    /// or not, landing at `at` and aimed at `t`, does to what it hits: `t`,
-    /// or for an area shot whatever around `at` the weapon fires on. Each
+    /// or not, landing at `at` and aimed at `t`, or the ground, does to what
+    /// it hits: `t`, or for an area shot whatever around `at` the weapon fires on. Each
     /// of its effects that reaches a thing hit is a hit of its own, in the
     /// order the weapon lists them.
     fn strike(
         &self,
         weapon: &Weapon,
         at: [f32; 2],
-        t: Target,
+        t: Option<Target>,
         (from, by): (Target, u32),
         bombard: bool,
         hits: &mut Vec<Hit>,
@@ -1139,7 +1189,7 @@ impl World {
         };
         let mut reached = Vec::new();
         if weapon.area <= 0.0 {
-            if self.fighter(t).is_some() {
+            if let Some(t) = t.filter(|&t| self.fighter(t).is_some()) {
                 reached.push((t, 1.0));
             }
         } else {
@@ -1326,7 +1376,7 @@ mod tests {
         let landed = &w.landings[0];
         assert_eq!(
             (landed.tick, landed.from, landed.target),
-            (5, Target::Unit(0), Target::Unit(1))
+            (5, Target::Unit(0), Some(Target::Unit(1)))
         );
         run(&mut w, 0.6);
         assert_eq!(w.units[0].health, 70.0);
@@ -2145,7 +2195,7 @@ mod tests {
         let mut hits = Vec::new();
         w.use_on_user(&weapon, (s, 1), &mut hits);
         let at = w.impact(s, &weapon, w.position(t));
-        w.strike(&weapon, at, t, (s, 1), false, &mut hits);
+        w.strike(&weapon, at, Some(t), (s, 1), false, &mut hits);
         let done = hits.iter().map(|h| (h.target, h.amount)).collect();
         (w, done)
     }
@@ -2177,7 +2227,7 @@ mod tests {
         w.rules.damage_filters.insert("gunfire".into(), 4);
         let mut hits = Vec::new();
         let (s, t) = (Target::Unit(0), Target::Unit(1));
-        w.strike(&sniper(), w.position(t), t, (s, 1), false, &mut hits);
+        w.strike(&sniper(), w.position(t), Some(t), (s, 1), false, &mut hits);
         for hit in hits {
             w.land(hit);
         }
@@ -2216,7 +2266,7 @@ mod tests {
         w.units[1].health = 5.0;
         let mut hits = Vec::new();
         let (s, t) = (Target::Unit(0), Target::Unit(1));
-        w.strike(&sniper(), w.position(t), t, (s, 1), false, &mut hits);
+        w.strike(&sniper(), w.position(t), Some(t), (s, 1), false, &mut hits);
         w.land_all(hits, &mut Vec::new());
         assert!(!w.units[1].alive());
         assert_eq!(w.units[1].death, Some(Id::from("shot")));
@@ -2271,7 +2321,7 @@ mod tests {
         let (s, t) = (Target::Unit(0), Target::Unit(1));
         let mut hits = Vec::new();
         let at = w.impact(s, &charge, w.position(t));
-        w.strike(&charge, at, t, (s, 1), false, &mut hits);
+        w.strike(&charge, at, Some(t), (s, 1), false, &mut hits);
         let hit: Vec<Target> = hits.iter().map(|h| h.target).collect();
         assert_eq!(hit, [Target::Unit(2)]);
     }
@@ -2289,7 +2339,7 @@ mod tests {
         let (s, t) = (Target::Unit(0), Target::Unit(1));
         let mut hits = Vec::new();
         let at = [w.position(t)[0] + 4.0, w.position(t)[1]];
-        w.strike(&shell, at, t, (s, 1), false, &mut hits);
+        w.strike(&shell, at, Some(t), (s, 1), false, &mut hits);
         let done: Vec<(f32, f32)> = hits.iter().map(|h| (h.amount, h.morale)).collect();
         assert_eq!(done, [(50.0, 0.0), (40.0, 0.0), (0.0, 1.0)]);
     }

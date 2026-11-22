@@ -47,6 +47,10 @@ impl World {
             }
             Command::Run { organization, .. } => self.may_run(player, organization),
             Command::Rout { organization } => self.may_rout(player, organization),
+            Command::Bombard {
+                organization,
+                target,
+            } => self.may_bombard(player, organization, target),
             Command::Move { organization, .. }
             | Command::Guard { organization, .. }
             | Command::Attack { organization, .. }
@@ -139,6 +143,7 @@ impl World {
         self.playable(player)?;
         self.heeded(&command)?;
         let steering = steered(&command);
+        let bombard = matches!(command, Command::Bombard { .. });
         match command {
             Command::Move { organization, to } => self.order_move(player, organization, to)?,
             Command::Attack { organization, to } => self.order_attack(player, organization, to)?,
@@ -156,6 +161,10 @@ impl World {
                 enemy,
             } => self.order_pursue(player, organization, enemy)?,
             Command::Stop { organization } => self.order_stop(player, organization)?,
+            Command::Bombard {
+                organization,
+                target,
+            } => self.order_bombard(player, organization, target)?,
             Command::Guard { organization, to } => self.order_guard(player, organization, to)?,
             Command::GuardPiece {
                 organization,
@@ -265,6 +274,13 @@ impl World {
         }
         if let (Some(r), false) = (steering, grouped) {
             self.leave_group(r);
+        }
+        // Any other order is a new one for its members, which bombarding
+        // gives way to, whether or not it sends them anywhere.
+        if let (Some(r), false) = (steering, bombard) {
+            for u in self.organizations[r].units.clone() {
+                self.units[u].shelling = None;
+            }
         }
         // An order cuts a reform short.
         if let Some(r) = steering {
@@ -641,6 +657,7 @@ pub(crate) fn steered(command: &Command) -> Option<usize> {
         | Command::Attack { organization, .. }
         | Command::Run { organization, .. }
         | Command::Pursue { organization, .. }
+        | Command::Bombard { organization, .. }
         | Command::Guard { organization, .. }
         | Command::GuardPiece { organization, .. }
         | Command::MoveOnto { organization, .. }
