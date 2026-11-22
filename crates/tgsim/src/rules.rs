@@ -117,6 +117,9 @@ pub struct Rules {
     pub economy_effects: HashMap<Id, tgmap::EconomyEffect>,
     /// Each property's enchantment type, for those that have one.
     pub enchantment_types: HashMap<Id, Id>,
+    /// The properties a thing's kind needs for each property to be on it,
+    /// for those that need any, by its id.
+    pub property_requires: HashMap<Id, Vec<Id>>,
     /// What each template's things are, by template, for the technologies
     /// and operations that work only on some.
     pub kinds: HashMap<Id, tgmap::Kind>,
@@ -238,6 +241,7 @@ impl Default for Rules {
             supply_effects: HashMap::new(),
             economy_effects: HashMap::new(),
             enchantment_types: HashMap::new(),
+            property_requires: HashMap::new(),
             kinds: HashMap::new(),
             sort_objectives: true,
             operations: HashMap::new(),

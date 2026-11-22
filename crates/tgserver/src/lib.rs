@@ -204,6 +204,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         supply_effects: game.supply_effects(),
         economy_effects: game.economy_effects(),
         enchantment_types: game.enchantment_types(),
+        property_requires: game.property_requirements(),
         kinds: game.kinds(),
         sort_objectives: game.sort_objectives(),
         heroes,
