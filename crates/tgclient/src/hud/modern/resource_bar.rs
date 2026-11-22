@@ -1,13 +1,13 @@
 //! Our resource bar in the window's upper right corner: the shared
 //! [cells](crate::resource_bar::Cell) in a bar, and a second bar under it
 //! previewing what the order under the cursor would make of them, with
-//! the [times](super::times) beside it.
+//! the [times](super::times) beside it and the tooltip under both.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
 use crate::resource_bar::{Cell, Previewing, stockpile};
-use crate::ui::{Font, Hint, Ink, Surface, backed, label};
+use crate::ui::{self, Font, Hint, Ink, Surface, backed, label};
 use crate::{Loaded, Local, Sim};
 
 const CELL: f32 = 80.0;
@@ -17,6 +17,9 @@ const CELL: f32 = 80.0;
 const STOCKPILE_CELL: f32 = 112.0;
 const HEIGHT: f32 = 22.0;
 const GAP: f32 = 4.0;
+
+/// The widest the tooltip under the bar is before its words wrap.
+const TIP_WIDTH: f32 = 300.0;
 
 /// One of the two bars: the player's economy now, or previewed.
 #[derive(Component)]
@@ -58,7 +61,7 @@ pub fn spawn(
     let right = 2.0 * super::times::PILL + HEIGHT + bar_width + 3.0 * GAP;
     let left = super::special_ops::CLEAR + super::groups::WIDTH;
     commands.insert_resource(crate::ui_scale::TopRow(
-        left + 2.0 * GAP + right + crate::ui_scale::MARGIN,
+        left + 2.0 * GAP + right + super::actions::PAD,
     ));
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
         root.spawn((
@@ -110,12 +113,29 @@ pub fn spawn(
             }
         });
     };
+    // Under the bars, as far from them as the other docked tooltips are
+    // from their panes.
+    let said = commands
+        .spawn((
+            ui::hint_box(
+                Node {
+                    margin: UiRect::top(px(super::actions::PAD - GAP)),
+                    ..default()
+                },
+                px(TIP_WIDTH),
+            ),
+            GlobalZIndex(ui::layer::HUD_TOP),
+        ))
+        .id();
     commands
         .spawn((
+            ui::Docks(said),
             Node {
                 position_type: PositionType::Absolute,
-                top: px(crate::ui_scale::MARGIN),
-                right: px(crate::ui_scale::MARGIN),
+                // As far in as the action palette under it, and the
+                // tooltips from their panes.
+                top: px(super::actions::PAD),
+                right: px(super::actions::PAD),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::FlexEnd,
                 row_gap: px(GAP),
@@ -149,7 +169,8 @@ pub fn spawn(
                 bar(row, false);
             });
             bar(root, true);
-        });
+        })
+        .add_child(said);
 }
 
 /// Shows the preview bar only while there's something to preview, and

@@ -50,7 +50,8 @@ pub fn spawn(mut commands: Commands) {
             Panel,
             Node {
                 position_type: PositionType::Absolute,
-                right: px(crate::ui_scale::MARGIN),
+                // As far in as a docked tooltip sits from its pane.
+                right: px(PAD),
                 bottom: px(0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::End,

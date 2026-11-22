@@ -11,8 +11,7 @@ use crate::intent::Asks;
 use crate::keys::Bindings;
 use crate::special_ops::{Operation, Panel, action, probe};
 use crate::ui::{
-    self, Click, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel,
-    tooltip,
+    self, Click, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, tooltip,
 };
 use crate::ui::{Blocks, GLYPH_DIR};
 use crate::{Leaders, Loaded, Local, Sim};
@@ -28,8 +27,8 @@ const TRAY: f32 = BUTTON + 2.0 * PAD;
 const MEDAL: f32 = 16.0;
 
 /// How far right of the left edge the panel leaves clear for what's
-/// beside it.
-pub const CLEAR: f32 = TRAY + 2.0 * GAP;
+/// beside it, as far as a docked tooltip sits from its pane.
+pub const CLEAR: f32 = TRAY + PAD;
 
 /// How far from the left edge what's beside the panel starts, such as the
 /// group strip: clear of the panel, which only a side with a faction has.
@@ -41,11 +40,20 @@ pub fn beside(local: &Local, leaders: &Leaders) -> f32 {
     }
 }
 
+/// Where the panel's and the group strip's tooltips open: beside the
+/// panel, under the strip, whose bottom the panel starts level with.
+pub fn tips_at(local: &Local, leaders: &Leaders) -> Vec2 {
+    Vec2::new(beside(local, leaders), TOP)
+}
+
+/// How far down the panel starts: level with the bottom of the group strip
+/// beside it, so their tooltips can share a place.
+const TOP: f32 = super::groups::HEIGHT + PAD;
+
 /// Where what shares the top left corner starts: beside the panel, under
 /// the group strip.
 pub fn corner(local: &Local, leaders: &Leaders) -> Vec2 {
-    let top = super::groups::HEIGHT + 2.0 * GAP;
-    Vec2::new(beside(local, leaders), top)
+    Vec2::new(beside(local, leaders), TOP)
 }
 
 /// The experience's figure, with what it was last shown as, to redo only
@@ -85,6 +93,7 @@ pub fn spawn(
     mut cache: ResMut<crate::ui::ImageCache>,
     bindings: Res<Bindings>,
     shared: Option<Res<Panel>>,
+    tip: Option<Res<super::groups::SharedTip>>,
 ) {
     let Some(shared) = shared else {
         return;
@@ -98,117 +107,121 @@ pub fn spawn(
             (op, icon, bindings.marked(&action(op.index), &op.name))
         })
         .collect();
-    commands
-        .spawn((
-            Blocks,
-            ui::ledge(
-                Surface::Hud,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(crate::ui_scale::MARGIN),
-                    left: px(0),
-                    width: px(TRAY),
-                    padding: UiRect::all(px(PAD)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(GAP),
-                    ..default()
-                },
-            ),
-            GlobalZIndex(crate::ui::layer::HUD_TOP),
-            DespawnOnExit(super::DRAWN),
+    let mut root = commands.spawn(Blocks);
+    // The experience's tooltip opens where the operations' do.
+    if let Some(tip) = tip {
+        root.insert(ui::Docks(tip.0));
+    }
+    root.insert((
+        ui::ledge(
+            Surface::Hud,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(TOP),
+                left: px(0),
+                width: px(TRAY),
+                padding: UiRect::all(px(PAD)),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        ),
+        GlobalZIndex(crate::ui::layer::HUD_TOP),
+        DespawnOnExit(super::DRAWN),
+    ))
+    .with_children(|tray| {
+        tray.spawn((
+            ExperienceBox,
+            Marked::plain(shared.words.title.clone()),
+            Hint(String::new()),
+            Node {
+                height: px(ROW),
+                margin: UiRect::bottom(px(GAP)),
+                column_gap: px(GAP),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
         ))
-        .with_children(|tray| {
-            tray.spawn((
-                ExperienceBox,
-                Marked::plain(shared.words.title.clone()),
-                Hint(String::new()),
-                Node {
-                    height: px(ROW),
-                    column_gap: px(GAP),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-            ))
-            .with_children(|row| {
-                if let Some(medal) = medal {
-                    row.spawn((
-                        ImageNode::new(medal),
-                        Node {
-                            width: px(MEDAL),
-                            height: px(MEDAL),
-                            ..default()
-                        },
-                        Pickable::IGNORE,
-                    ));
-                }
-                row.spawn((ExperienceText::default(), label("", Font::Hud, Ink::Body)));
-            });
-            for (op, icon, name) in buttons {
-                let index = op.index;
-                let (tip, recharge_line) = pane(tray, &name, op);
-                tray.spawn((
-                    OperationButton {
-                        index,
-                        tip,
-                        recharge_line,
+        .with_children(|row| {
+            if let Some(medal) = medal {
+                row.spawn((
+                    ImageNode::new(medal),
+                    Node {
+                        width: px(MEDAL),
+                        height: px(MEDAL),
+                        ..default()
                     },
-                    Button,
-                    ui::called(format!("special_op.{}", index + 1)),
-                    Asks::new(action(index)),
-                    Click::COMMAND,
-                    Hovered::default(),
-                    Pickable::default(),
-                    panel(
-                        Surface::Slot,
-                        Node {
-                            width: px(BUTTON),
-                            height: px(BUTTON),
-                            border: UiRect::all(px(2)),
-                            flex_direction: FlexDirection::Column,
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::SpaceEvenly,
-                            ..default()
-                        },
-                    ),
-                    Edge::Border,
-                ))
-                .with_children(|button| {
-                    let size = Node {
-                        width: px(ICON.x),
-                        height: px(ICON.y),
-                        ..default()
-                    };
-                    match icon {
-                        Some(icon) => {
-                            button.spawn((
-                                OperationIcon,
-                                ImageNode::new(icon),
-                                Shade::Dimmed,
-                                size,
-                                Pickable::IGNORE,
-                            ));
-                        }
-                        None => {
-                            button.spawn((size, Pickable::IGNORE));
-                        }
-                    }
-                    let bar = Node {
-                        width: px(ICON.x),
-                        height: px(BAR),
-                        ..default()
-                    };
-                    button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
-                });
+                    Pickable::IGNORE,
+                ));
             }
+            row.spawn((ExperienceText::default(), label("", Font::Hud, Ink::Body)));
         });
+        for (op, icon, name) in buttons {
+            let index = op.index;
+            let (tip, recharge_line) = pane(tray, &name, op);
+            tray.spawn((
+                OperationButton {
+                    index,
+                    tip,
+                    recharge_line,
+                },
+                Button,
+                ui::called(format!("special_op.{}", index + 1)),
+                Asks::new(action(index)),
+                Click::COMMAND,
+                Hovered::default(),
+                Pickable::default(),
+                // Square and touching, as one column of tiles.
+                ui::backed(
+                    Surface::Slot,
+                    Node {
+                        width: px(BUTTON),
+                        height: px(BUTTON),
+                        border: UiRect::all(px(2)),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::SpaceEvenly,
+                        ..default()
+                    },
+                ),
+                Edge::Clear,
+            ))
+            .with_children(|button| {
+                let size = Node {
+                    width: px(ICON.x),
+                    height: px(ICON.y),
+                    ..default()
+                };
+                match icon {
+                    Some(icon) => {
+                        button.spawn((
+                            OperationIcon,
+                            ImageNode::new(icon),
+                            Shade::Dimmed,
+                            size,
+                            Pickable::IGNORE,
+                        ));
+                    }
+                    None => {
+                        button.spawn((size, Pickable::IGNORE));
+                    }
+                }
+                let bar = Node {
+                    width: px(ICON.x),
+                    height: px(BAR),
+                    ..default()
+                };
+                button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
+            });
+        }
+    });
 }
 
 /// Spawns an operation's tooltip, hidden until its button is hovered: its
 /// name, what its effects do, its Cost and Area, how long it has left to
-/// recharge while it is, then its description. It sits a little way right
-/// of the tray, level with its top, as the action palette's sits above the
-/// palette. Gives the tooltip and its recharge line.
+/// recharge while it is, then its description. It opens at
+/// [`tips_at`], level with the tray's top and clear of its side, where the
+/// group strip's open too. Gives the tooltip and its recharge line.
 fn pane(tray: &mut ChildSpawnerCommands, name: &Marked, op: &Operation) -> (Entity, Entity) {
     let mut line = Entity::PLACEHOLDER;
     let node = Node {
@@ -274,9 +287,14 @@ fn pane(tray: &mut ChildSpawnerCommands, name: &Marked, op: &Operation) -> (Enti
     (tip, line)
 }
 
-/// Shows the tooltip of the operation under the pointer, and only that.
-pub fn tips(buttons: Query<(&OperationButton, &Hovered)>, mut nodes: Query<&mut Node>) {
-    for (button, hovered) in &buttons {
+/// Shows the tooltip of the operation under the pointer, and only that,
+/// and frames its button.
+pub fn tips(
+    mut buttons: Query<(&OperationButton, &Hovered, &mut Edge)>,
+    mut nodes: Query<&mut Node>,
+) {
+    for (button, hovered, mut edge) in &mut buttons {
+        edge.set_if_neq(Edge::lit(false, hovered.get(), Edge::Clear));
         if let Ok(mut node) = nodes.get_mut(button.tip) {
             crate::ui::show(&mut node, hovered.get());
         }
@@ -469,12 +487,20 @@ mod tests {
             .collect();
         let on = Hovered(true);
         let line = Entity::PLACEHOLDER;
-        app.world_mut().spawn((button(0, tips[0], line), on));
+        app.world_mut()
+            .spawn((button(0, tips[0], line), on, Edge::Clear));
         let off = Hovered(false);
-        app.world_mut().spawn((button(1, tips[1], line), off));
+        app.world_mut()
+            .spawn((button(1, tips[1], line), off, Edge::Clear));
         app.update();
         let shown = |e: Entity| app.world().get::<Node>(e).map(|n| n.display);
         assert_eq!(shown(tips[0]), Some(Display::Flex));
         assert_eq!(shown(tips[1]), Some(Display::None));
+        let framed = (app.world_mut().query::<(&OperationButton, &Edge)>())
+            .iter(app.world())
+            .map(|(b, e)| (b.index, *e))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(framed[&0], Edge::Hovered);
+        assert_eq!(framed[&1], Edge::Clear);
     }
 }
