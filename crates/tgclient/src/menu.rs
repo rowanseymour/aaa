@@ -59,8 +59,8 @@ pub fn open(
 
 /// What stays on the main menu's screen whichever column is up.
 /// The camera comes with [`crate::backdrop`].
-fn backdrop(mut commands: Commands) {
-    let version = concat!("Version ", env!("CARGO_PKG_VERSION"));
+fn backdrop(mut commands: Commands, look: Res<Look>) {
+    let version = format!("Version {}", look.version);
     commands.spawn((
         // Backed to be read over the map.
         panel(

@@ -9,5 +9,6 @@ fn main() -> ExitCode {
         name: "aa",
         tag: "aa",
         example_map: "allies10_berlin",
+        version: env!("CARGO_PKG_VERSION"),
     })
 }
