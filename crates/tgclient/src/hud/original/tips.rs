@@ -18,12 +18,18 @@ const PANE: &str = "ToolTipGame";
 /// Its text's.
 const TEXT: &str = "LeftLabel";
 /// How big a glyph in a tooltip's table is drawn, in the layouts' pixels.
-const GLYPH: f32 = 15.0;
+const GLYPH: f32 = 13.0;
+/// How far from the text's left a table's amounts start, and the gap
+/// between amounts, in the layouts' pixels, as the game's tooltips measure.
+const TAB: f32 = 99.0;
+const SPACE: f32 = 4.0;
 
 /// The pane, and what it says.
 #[derive(Component)]
 pub struct Pane {
     font: String,
+    /// The font a title is in.
+    title: String,
     body: Color,
     key: Color,
     short: Color,
@@ -72,6 +78,8 @@ impl Built {
         let label = pane.find(TEXT).and_then(|l| l.parts.first());
         let font = label.and_then(|l| l.font.clone()).unwrap_or(PLAIN.into());
         letters.read(pictures.game, faces, &font);
+        let title = (pictures.game.tooltip_title_font()).unwrap_or_else(|| font.clone());
+        letters.read(pictures.game, faces, &title);
         let [r, g, b] = label.map_or([1.0; 3], |l| l.colour);
         let tiles = (pane.view.iter())
             .flat_map(|v| std::iter::once(v).chain(&v.children))
@@ -91,6 +99,7 @@ impl Built {
             frame: tiles.and_then(|t| framed(pictures, t)),
             pane: Pane {
                 font,
+                title,
                 body: Color::srgb(r, g, b),
                 key,
                 short,
@@ -236,32 +245,42 @@ pub fn show(
 /// The pane's lines for what it says.
 fn write(lines: &mut ChildSpawnerCommands, pane: &Pane, letters: &Letters, saying: &Saying) {
     let text = |words: &str, colour: Color| letters.text(&pane.font, words, colour);
-    let title = |lines: &mut ChildSpawnerCommands, name: &Marked| {
+    // A title in the title's font but as far apart as the rest's lines, and
+    // for a tooltip, the blank line the game puts after it.
+    let title = |lines: &mut ChildSpawnerCommands, name: &Marked, more: bool| {
         lines
-            .spawn(text(&name.before, pane.body))
+            .spawn(letters.text_within(&pane.title, &pane.font, &name.before, pane.body))
             .with_children(|line| {
                 let span = |words: &str, colour| {
                     (
                         TextSpan::new(words),
-                        letters.font(&pane.font),
+                        letters.font(&pane.title),
                         TextColor(colour),
                     )
                 };
                 line.spawn(span(&name.key, pane.key));
                 line.spawn(span(&name.after, pane.body));
             });
+        if more {
+            // A space alone would be laid out as no line at all.
+            lines.spawn(text("\u{a0}", pane.body));
+        }
     };
     match saying {
         Saying::Hint(name, hint) => {
             if let Some(name) = name {
-                title(lines, name);
+                title(lines, name, false);
             }
             if !hint.is_empty() {
                 lines.spawn(text(hint, pane.body));
             }
         }
         Saying::Tip(tip) => {
-            title(lines, &tip.title);
+            let more = tip.help.is_some()
+                || !tip.table.is_empty()
+                || !tip.notes.is_empty()
+                || tip.why.is_some();
+            title(lines, &tip.title, more);
             if let Some(help) = &tip.help {
                 lines.spawn(text(help, pane.body));
             }
@@ -269,27 +288,42 @@ fn write(lines: &mut ChildSpawnerCommands, pane: &Pane, letters: &Letters, sayin
                 let table = Node {
                     display: Display::Grid,
                     grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
-                    column_gap: px(24),
+                    ..default()
+                };
+                // Apart by a space, so a label past the tab doesn't run into
+                // its amounts.
+                let apart = Measured {
+                    gap: Some(SPACE),
                     ..default()
                 };
                 lines
-                    .spawn((table, Pickable::IGNORE))
+                    .spawn((table, apart, Pickable::IGNORE))
                     .with_children(|table| {
                         for row in &tip.table {
-                            table.spawn(text(&row.label, pane.body));
-                            let amounts = Node {
-                                column_gap: px(4),
-                                align_items: AlignItems::Center,
+                            let label = Measured {
+                                min_width: Some(TAB - SPACE),
                                 ..default()
                             };
-                            table
-                                .spawn((amounts, Pickable::IGNORE))
-                                .with_children(|line| {
-                                    for q in &row.amounts {
-                                        glyph(line, q);
-                                        line.spawn(text(&q.label(), pane.body));
-                                    }
-                                });
+                            table.spawn((text(&row.label, pane.body), Node::default(), label));
+                            let amounts = Measured {
+                                gap: Some(SPACE),
+                                ..default()
+                            };
+                            let line = (Node::default(), amounts, Pickable::IGNORE);
+                            table.spawn(line).with_children(|line| {
+                                for q in &row.amounts {
+                                    let amount = Node {
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    };
+                                    line.spawn((amount, Pickable::IGNORE)).with_children(
+                                        |amount| {
+                                            glyph(amount, q);
+                                            amount.spawn(text(&q.label(), pane.body));
+                                        },
+                                    );
+                                }
+                            });
                         }
                     });
             }
@@ -337,6 +371,7 @@ mod tests {
         let lines = app.world_mut().spawn(Node::default()).id();
         let pane = Pane {
             font: PLAIN.into(),
+            title: PLAIN.into(),
             body: Color::WHITE,
             key: Color::WHITE,
             short: Color::WHITE,

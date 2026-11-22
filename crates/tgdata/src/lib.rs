@@ -73,7 +73,9 @@ pub use guard::{GUARDING, GuardRules};
 pub use heroes::Hero;
 pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
-pub use interface::{Command, ConnectionLook, CursorLook, FontLook, FormationLook, SupplyBorder};
+pub use interface::{
+    Backup, Command, ConnectionLook, CursorLook, FontLook, FormationLook, SupplyBorder, Typeface,
+};
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use morale::{
     CHASING, ENGAGED, EXHAUSTED, MoraleEffect, MoraleRules, REFORMING, RESTING, ROUTING, RoutRules,
@@ -1388,6 +1390,61 @@ mod tests {
     }
 
     #[test]
+    fn a_system_face_is_stood_in_for_by_the_file_named_for_it() {
+        let dir = folder(
+            "system-face",
+            &[
+                ("index_x.lst", "Fonts/*.tgi"),
+                (
+                    "AVars.tgi",
+                    "[Vars]\n{\nstring TextFontIDSToolTipName = heavy\n}",
+                ),
+                (
+                    "Fonts/fonts.tgi",
+                    "[Font]\n{\nids = plain\nsize = 12\n[CharacterSet]\n{\n\
+                     font = /Fonts/TrueType/Own.ttf\nbackup_font = Sans\n\
+                     backup_font_size = 11\nuse_backup_font_when_smaller_than = 12\n}\n}\n\
+                     [Font]\n{\nids = heavy\nsize = 14\n[CharacterSet]\n{\n\
+                     font = Sans ;; a system face\nbold = true\n}\n}\n\
+                     [Font]\n{\nids = missing\n[CharacterSet]\n{\nfont = Serif\n}\n}\n\
+                     [SystemFont]\n{\nname = Sans\nfont = /Fonts/TrueType/Sans.ttf\n\
+                     bold_font = /Fonts/TrueType/SansBold.ttf\n}",
+                ),
+                ("Fonts/TrueType/Own.ttf", ""),
+                ("Fonts/TrueType/Sans.ttf", ""),
+                ("Fonts/TrueType/SansBold.ttf", ""),
+            ],
+        );
+        let mut game = empty();
+        game.add_depot(&dir).unwrap();
+        let face = |file: &str, system| {
+            Some(Typeface {
+                file: Some(file.into()),
+                system,
+            })
+        };
+        let plain = game.font("plain").unwrap();
+        assert_eq!(plain.face, face("Fonts/TrueType/Own.ttf", false));
+        let backup = Backup {
+            face: face("Fonts/TrueType/Sans.ttf", true),
+            size: 11.0,
+            below: 12.0,
+        };
+        assert_eq!(plain.backup, Some(backup));
+        assert_eq!(game.tooltip_title_font().as_deref(), Some("heavy"));
+        let heavy = game.font("heavy").unwrap();
+        assert_eq!(heavy.face, face("Fonts/TrueType/SansBold.ttf", true));
+        assert_eq!((heavy.size, heavy.backup), (14.0, None));
+        // A system face with no stand-in is still the system's.
+        let missing = Typeface {
+            file: None,
+            system: true,
+        };
+        assert_eq!(game.font("missing").unwrap().face, Some(missing));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn this_projects_own_fonts_are_there() {
         let game = own_data();
         let fonts = game.parse_named(
@@ -1402,7 +1459,7 @@ mod tests {
             .collect();
         assert!(!ids.is_empty());
         for ids in ids {
-            let file = game.font(&ids).and_then(|f| f.file);
+            let file = game.font(&ids).and_then(|f| f.face?.file);
             assert!(file.is_some(), "{ids} has no face");
         }
     }

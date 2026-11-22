@@ -375,7 +375,7 @@ impl Faces {
     /// Reads the faces from `game`, or says which isn't there.
     pub fn read(game: &GameData) -> Result<Faces, String> {
         let face = |ids: &str| {
-            let file = game.font(ids).and_then(|f| f.file);
+            let file = game.font(ids).and_then(|f| f.face?.file);
             file.and_then(|f| game.read(&f))
                 .ok_or_else(|| format!("no font {ids} in this project's data"))
         };

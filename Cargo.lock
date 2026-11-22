@@ -5899,6 +5899,7 @@ dependencies = [
  "tgserver",
  "tgsim",
  "toml",
+ "ttf-parser",
 ]
 
 [[package]]

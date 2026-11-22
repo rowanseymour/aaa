@@ -1,0 +1,9 @@
+;; Faces standing in for the Windows ones the game's fonts name but its data
+;; doesn't hold, each with the same metrics as the face it stands in for.
+
+[SystemFont]
+{
+	name = Arial
+	font = /Fonts/TrueType/LiberationSans-Regular.ttf
+	bold_font = /Fonts/TrueType/LiberationSans-Bold.ttf
+}
