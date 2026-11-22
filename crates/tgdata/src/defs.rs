@@ -1357,6 +1357,8 @@ pub struct Minimap {
     /// and while they're out of the supply they need.
     pub color_under_siege: Option<[f32; 3]>,
     pub color_requires_supply: Option<[f32; 3]>,
+    /// What the player's own selected things are marked in.
+    pub color_owned_selected: Option<[f32; 3]>,
 }
 
 /// An order the player can give what they've selected, shown as a button.

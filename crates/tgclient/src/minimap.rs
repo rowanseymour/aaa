@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::RelativeCursorPosition;
 use tgdata::{GameData, Id};
-use tgmap::{Ground, Map, Tile};
+use tgmap::{Map, Tile};
 use tgrender::camera::RtsCamera;
 use tgrender::space::{map_point, world};
 
@@ -26,10 +26,6 @@ use tgsim::{Relation, State};
 /// high-density screen.
 const PIXELS: usize = 512;
 
-const SHALLOW: [f32; 3] = [0.34, 0.48, 0.68];
-const DEEP: [f32; 3] = [0.17, 0.28, 0.5];
-/// How deep water is before it takes the deep colour.
-const DEEP_AT: f32 = 3.0;
 /// How much of the map's side one texel of an icon covers, going by the
 /// game's Corps HQ icon on its Berlin map.
 const ICON_TEXEL: f32 = 0.0058;
@@ -63,6 +59,7 @@ struct Icon {
 
 const UNDER_SIEGE: [f32; 3] = [1.0, 0.0, 0.0];
 const REQUIRES_SUPPLY: [f32; 3] = [0.0, 1.0, 0.0];
+const OWNED_SELECTED: [f32; 3] = [1.0; 3];
 /// Seconds a blinking mark spends in each of its colours.
 const BLINK: f32 = 0.5;
 
@@ -74,6 +71,8 @@ struct Colours {
     /// and while they're out of the supply they need.
     under_siege: [u8; 3],
     requires_supply: [u8; 3],
+    /// What the player's own selected things are marked in.
+    selected: [u8; 3],
 }
 
 impl Colours {
@@ -100,6 +99,7 @@ impl Colours {
                 .map(rgb),
                 under_siege: rgb(m.color_under_siege.unwrap_or(UNDER_SIEGE)),
                 requires_supply: rgb(m.color_requires_supply.unwrap_or(REQUIRES_SUPPLY)),
+                selected: rgb(m.color_owned_selected.unwrap_or(OWNED_SELECTED)),
             },
             None => {
                 warn!("no minimap colours; using the marks' tints");
@@ -112,6 +112,7 @@ impl Colours {
                     units: tints,
                     under_siege: rgb(UNDER_SIEGE),
                     requires_supply: rgb(REQUIRES_SUPPLY),
+                    selected: rgb(OWNED_SELECTED),
                 }
             }
         }
@@ -217,12 +218,11 @@ fn decode_icon(
     })
 }
 
-/// The ground as the image's pixels: each tile in its terrain's colour, or
-/// blue by depth under water, shaded by slope as if lit from the top, and
-/// clear outside the diamond.
+/// The ground as the image's pixels: each tile flat in its terrain's
+/// colour, water included, and clear outside the diamond.
 fn draw_ground(map: &Map, colours: &[[f32; 3]]) -> Vec<u8> {
-    let (ground, terrain) = (&map.ground, &map.terrain);
-    let size = ground.size();
+    let terrain = &map.terrain;
+    let size = map.ground.size();
     let tile = size / terrain.side as f32;
     let mut pixels = vec![0; PIXELS * PIXELS * 4];
     for row in 0..PIXELS {
@@ -232,27 +232,11 @@ fn draw_ground(map: &Map, colours: &[[f32; 3]]) -> Vec<u8> {
             if !(0.0..size).contains(&x) || !(0.0..size).contains(&y) {
                 continue;
             }
-            let height = ground.height_at([x, y]);
-            let depth = water_depth(ground, [x, y], height);
-            let rgb = match depth {
-                Some(d) => {
-                    let t = (d / DEEP_AT).clamp(0.0, 1.0);
-                    [0, 1, 2].map(|i| SHALLOW[i] + (DEEP[i] - SHALLOW[i]) * t)
-                }
-                None => {
-                    let (tx, ty) = ((x / tile) as usize, (y / tile) as usize);
-                    let kind = terrain.at(tx, ty).terrain as usize;
-                    let c = colours.get(kind).copied().unwrap_or([0.5; 3]);
-                    // Brighter where the ground rises towards the bottom
-                    // corner, so it faces the top one.
-                    let d = tile;
-                    let rise = ground.height_at([x + d, y - d]) - ground.height_at([x - d, y + d]);
-                    let shade = (1.0 + rise / d * 0.4).clamp(0.6, 1.4);
-                    c.map(|c| c * shade)
-                }
-            };
+            let (tx, ty) = ((x / tile) as usize, (y / tile) as usize);
+            let kind = terrain.at(tx, ty).terrain as usize;
+            let [r, g, b] = colours.get(kind).copied().unwrap_or([0.5; 3]);
             let at = (row * PIXELS + col) * 4;
-            let [r, g, b, _] = Color::srgb(rgb[0], rgb[1], rgb[2]).to_srgba().to_u8_array();
+            let [r, g, b, _] = Color::srgb(r, g, b).to_srgba().to_u8_array();
             pixels[at..at + 4].copy_from_slice(&[r, g, b, 255]);
         }
     }
@@ -292,6 +276,16 @@ fn samples(size: f32) -> Vec<Sample> {
     samples
 }
 
+/// How bright the minimap's ground is under the fog, of its full
+/// brightness, with a shade of its own for explored ground.
+fn brightness(seen: tgsim::Seen) -> f32 {
+    const EXPLORED: f32 = 0.7;
+    match seen {
+        tgsim::Seen::Explored => EXPLORED,
+        seen => crate::fog::brightness(seen),
+    }
+}
+
 /// Darkens the ground into `fogged` as the fog of war darkens it, blended
 /// between tiles, once the fog has changed.
 fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
@@ -304,8 +298,8 @@ fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
     if tiles.is_empty() {
         return;
     }
-    let light: Vec<f32> = tiles.iter().map(|&s| crate::fog::brightness(s)).collect();
-    let off_map = crate::fog::brightness(tgsim::Seen::Unexplored);
+    let light: Vec<f32> = tiles.iter().map(|&s| brightness(s)).collect();
+    let off_map = brightness(tgsim::Seen::Unexplored);
     let at = |t: Tile| t.index(side).map_or(off_map, |i| light[i]);
     for s in &minimap.samples {
         let t = s.tile;
@@ -320,15 +314,6 @@ fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
     }
 }
 
-/// How far below the water's surface the ground is, where there is water.
-fn water_depth(ground: &Ground, [x, y]: [f32; 2], height: f32) -> Option<f32> {
-    let cell = ground.size() / (ground.side - 1) as f32;
-    let (vx, vy) = ((x / cell).round() as usize, (y / cell).round() as usize);
-    let i = vy.min(ground.side - 1) * ground.side + vx.min(ground.side - 1);
-    let depth = ground.surface[i] - height;
-    (ground.water[i] && depth > 0.0).then_some(depth)
-}
-
 /// Redraws the markers and the camera's view over the ground. While the
 /// player's side has its minimap's fog lifted, as by Radar Scan, the
 /// ground has no fog and everything is marked as it is now.
@@ -338,6 +323,7 @@ pub fn update(
     fog: Res<crate::fog::Fog>,
     sim: Res<Sim>,
     local: Res<crate::Local>,
+    (selected, selected_building): (Res<crate::Selected>, Res<crate::SelectedBuilding>),
     outline: Res<crate::supply::Outline>,
     look: Res<crate::supply::BorderLook>,
     time: Res<Time<Real>>,
@@ -386,9 +372,10 @@ pub fn update(
     }
     // The player's own things in trouble blink.
     let warn = time.elapsed_secs() % (2.0 * BLINK) < BLINK;
-    let own = |owner: u32| warn && local.0 == Some(owner);
+    let mine = |owner: u32| local.0 == Some(owner);
+    let own = |owner: u32| warn && mine(owner);
     let neutral = minimap.colours.buildings[Colours::of(Relation::Neutral)];
-    let mut icons = Vec::new();
+    let (mut icons, mut squares) = (Vec::new(), Vec::new());
     for (b, building) in sim.0.buildings.iter().enumerate() {
         // Marked as last seen, gone or not.
         let shown = match fog.building(b) {
@@ -407,36 +394,50 @@ pub fn update(
             .sides
             .player(building.owner)
             .is_none_or(|p| p.independent);
+        let picked = mine(building.owner) && selected_building.0 == Some(b);
         let rgb = match building.state {
             _ if independent && building.zone.is_none() => continue,
             _ if independent => neutral,
-            State::Disabled => [100; 3],
             _ if own(building.owner) && building.besieged.is_some() => minimap.colours.under_siege,
             _ if own(building.owner) && sim.0.out_of_supply(b) => minimap.colours.requires_supply,
+            _ if picked => minimap.colours.selected,
+            State::Disabled => [100; 3],
             _ => colour(&minimap.colours.buildings, building.owner),
         };
-        // Drawn last, over the units.
-        if let Some(icon) = minimap.icons.get(&building.template) {
-            icons.push((icon, building.position, rgb));
-            continue;
+        match minimap.icons.get(&building.template) {
+            Some(icon) => icons.push((picked, icon, building.position, rgb)),
+            None => squares.push((to_px(building.position), rgb)),
         }
-        canvas.square(to_px(building.position), 4.0, [0; 3]);
-        canvas.square(to_px(building.position), 3.0, rgb);
     }
     let shown =
         |(u, unit): &(usize, &tgsim::Unit)| unit.alive() && (revealed || fog.shows_unit(*u));
+    let (mut dots, mut on_top) = (Vec::new(), Vec::new());
     for (_, unit) in sim.0.units.iter().enumerate().filter(shown) {
         let organization = &sim.0.organizations[unit.organization];
         let fighting = !organization.engaged.is_empty() || unit.besieged.is_some();
-        let rgb = match own(organization.owner) && fighting {
-            true => minimap.colours.under_siege,
-            false => colour(&minimap.colours.units, organization.owner),
-        };
-        canvas.square(to_px(unit.position), 2.0, rgb);
+        let at = to_px(unit.position);
+        match () {
+            _ if own(organization.owner) && fighting => {
+                dots.push((at, minimap.colours.under_siege))
+            }
+            _ if mine(organization.owner) && selected.0.contains(&unit.organization) => {
+                on_top.push((at, minimap.colours.selected))
+            }
+            _ => dots.push((at, colour(&minimap.colours.units, organization.owner))),
+        }
     }
-    for (icon, at, rgb) in icons {
+    // Drawn from the lowest rank up: units' dots edged in black, then
+    // buildings, then icons, then the player's selected things over all.
+    canvas.dots(&dots);
+    for (at, rgb) in squares {
+        canvas.square(at, 4.0, [0; 3]);
+        canvas.square(at, 3.0, rgb);
+    }
+    icons.sort_by_key(|&(picked, ..)| picked);
+    for (_, icon, at, rgb) in icons {
         canvas.icon(minimap.size, icon, at, rgb);
     }
+    canvas.dots(&on_top);
     if let Ok((camera, rts)) = cameras.single() {
         // From where the camera is this frame rather than where it was
         // last drawn.
@@ -488,7 +489,8 @@ impl Canvas<'_> {
     }
 
     /// An icon tinted by `rgb`, centred on a world position, its texels
-    /// [`ICON_TEXEL`] of the map's side apart along the map's axes.
+    /// [`ICON_TEXEL`] of the map's side apart along the map's axes. In pure
+    /// white it's a white silhouette, its dark outlines included.
     fn icon(&mut self, size: f32, icon: &Icon, [x, y]: [f32; 2], rgb: [u8; 3]) {
         let texel = size * ICON_TEXEL;
         let (w, h) = (icon.width as f32, icon.height as f32);
@@ -508,26 +510,25 @@ impl Canvas<'_> {
                 }
                 let at = (v as usize * icon.width + u as usize) * 4;
                 let [r, g, b, a] = [0, 1, 2, 3].map(|i| icon.rgba[at + i] as u32);
-                let tinted = [r, g, b]
-                    .into_iter()
-                    .zip(rgb)
-                    .map(|(c, t)| (c * t as u32 / 255) as u8);
-                self.blend(col, row, tinted, a as u8);
+                let texel = match rgb {
+                    [255, 255, 255] => rgb,
+                    _ => [0, 1, 2].map(|i| ([r, g, b][i] * rgb[i] as u32 / 255) as u8),
+                };
+                if a > 0 {
+                    self.set(col, row, texel);
+                }
             }
         }
     }
 
-    /// Lays a colour over a pixel with the given opacity.
-    fn blend(&mut self, x: i32, y: i32, rgb: impl Iterator<Item = u8>, alpha: u8) {
-        let n = PIXELS as i32;
-        if alpha == 0 || !(0..n).contains(&x) || !(0..n).contains(&y) {
-            return;
+    /// Units' dots, each edged in black where it doesn't cover another's
+    /// dot.
+    fn dots(&mut self, dots: &[(Vec2, [u8; 3])]) {
+        for &(at, _) in dots {
+            self.square(at, 3.0, [0; 3]);
         }
-        let at = (y * n + x) as usize * 4;
-        let a = alpha as u32;
-        for (i, c) in rgb.enumerate() {
-            let under = self.0[at + i] as u32;
-            self.0[at + i] = ((c as u32 * a + under * (255 - a)) / 255) as u8;
+        for &(at, rgb) in dots {
+            self.square(at, 2.0, rgb);
         }
     }
 
@@ -725,6 +726,25 @@ mod tests {
         assert_eq!(at([centre[0] - 0.5, centre[1]]), [0, 255, 0]);
         assert_eq!(at([centre[0] + 0.5, centre[1]]), [0, 0, 0]);
         assert_eq!(at([centre[0] - 0.5, centre[1] + 1.0]), [9; 3]);
+    }
+
+    #[test]
+    fn white_icons_are_flat() {
+        // A white texel and a black outline one, both drawn white.
+        let icon = Icon {
+            width: 2,
+            height: 1,
+            rgba: Arc::from([255, 255, 255, 255, 0, 0, 0, 255].as_slice()),
+        };
+        let mut pixels = vec![9; PIXELS * PIXELS * 4];
+        let size = 1.0 / ICON_TEXEL;
+        let centre = [size / 2.0; 2];
+        Canvas(&mut pixels).icon(size, &icon, centre, [255; 3]);
+        for dx in [-0.5, 0.5] {
+            let p = to_image(size, [centre[0] + dx, centre[1]]) * PIXELS as f32;
+            let i = (p.y as usize * PIXELS + p.x as usize) * 4;
+            assert_eq!(pixels[i..i + 3], [255; 3]);
+        }
     }
 
     #[test]
