@@ -359,6 +359,15 @@ impl GameData {
         sellable.into_keys().collect()
     }
 
+    /// The templates whose buildings can't be turned as they're placed.
+    pub fn axis_locked(&self) -> HashSet<Id> {
+        let locked = self.by_template(|t| {
+            let locked = t.flags.iter().rev().find_map(|f| f.axis_locked);
+            (locked == Some(true)).then_some(())
+        });
+        locked.into_keys().collect()
+    }
+
     /// Each template's [`Supply`], for those that give it, by template id.
     pub fn supplies(&self) -> HashMap<Id, Supply> {
         self.by_template(|t| {

@@ -902,6 +902,8 @@ pub struct Flags {
     pub flying: Option<bool>,
     /// It stands on the half-tile grid.
     pub tile_locked: Option<bool>,
+    /// It faces the default way when it's built, however it was aimed.
+    pub axis_locked: Option<bool>,
     /// Nothing gets in its way.
     pub ethereal: Option<bool>,
     /// Every side has it explored from the start, when the match's fog

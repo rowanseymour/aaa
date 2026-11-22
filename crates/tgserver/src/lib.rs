@@ -212,6 +212,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         operations,
         drops,
         buildable,
+        axis_locked: game.axis_locked(),
         building_padding: raising.padding(),
         decays: game.decays(),
         logistics: game.logistics(),
