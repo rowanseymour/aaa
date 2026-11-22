@@ -90,6 +90,11 @@ const HANDLED: &[&str] = &[
     "activation_time",
     "value_compare_value",
     "kingdom_has_compare_value_primary_resource",
+    "kingdom_has_technology",
+    "kingdom_gains_technology",
+    "kingdom_loses_technology",
+    "actor_gains_technology",
+    "actor_loses_technology",
     "kingdom_gains_hero",
     "kingdom_loses_hero",
     "kingdom_mission_won",
@@ -221,6 +226,22 @@ impl World {
             "kingdom_loses_technology" => match (self.kingdom(p.first()), technology(p.get(1))) {
                 (Some(k), Some(t)) => {
                     self.lose_given(k, &t);
+                    true
+                }
+                _ => false,
+            },
+            "actor_gains_technology" => match (self.thing(p.first()), technology(p.get(1))) {
+                (Some(t), Some(tech)) => {
+                    self.gain_own(t, tech);
+                    true
+                }
+                _ => false,
+            },
+            "actor_loses_technology" => match (self.thing(p.first()), technology(p.get(1))) {
+                (Some(t), Some(tech)) => {
+                    if !self.lose_own(t, &tech) {
+                        log::debug!("{t:?} has no copy of its own of {tech} to lose");
+                    }
                     true
                 }
                 _ => false,
@@ -745,6 +766,89 @@ mod tests {
             vec![trigger(1, true, false, Vec::new(), effects)],
             &[],
         )
+    }
+
+    fn tech(id: &str) -> Parameter {
+        parameter("ma_technology", "mi_technology", Value::String(id.into()))
+    }
+
+    #[test]
+    fn things_given_a_technology_hold_their_own_copies_of_it() {
+        let gains = |a: u32, t: &str| element("actor_gains_technology", vec![actor_id(a), tech(t)]);
+        let loses = |a: u32, t: &str| element("actor_loses_technology", vec![actor_id(a), tech(t)]);
+        let mut w = with(
+            veterans(),
+            vec![
+                trigger(
+                    1,
+                    true,
+                    false,
+                    Vec::new(),
+                    vec![gains(1, "radar"), gains(1, "radar"), gains(4, "armoured")],
+                ),
+                trigger(2, true, false, vec![after(1)], vec![loses(1, "radar")]),
+            ],
+            &[],
+        );
+        let templates: Vec<Id> = (w.organizations.iter().map(|o| o.template.clone()))
+            .chain(w.units.iter().map(|u| u.template.clone()))
+            .collect();
+        for t in templates {
+            w.rules.kinds.insert(t, tgmap::Kind::default());
+        }
+        (w.rules.property_requires).insert(Id::from("armoured"), vec![Id::from("tank")]);
+        // Each property bears once on a member, its regiment's copies and
+        // its side's grant together.
+        let bears = |w: &World, u: usize| {
+            let table: std::collections::HashMap<Id, Vec<Id>> = [
+                (Id::from("radar"), Vec::new()),
+                (Id::from("armoured"), Vec::new()),
+            ]
+            .into();
+            (w.borne(&table, |e| e, crate::Target::Unit(u))).count()
+        };
+        let unit = w.organizations[0].units[0];
+        w.gain_taken_back(1, Id::from("radar"));
+        w.tick();
+        let copies = |w: &World| {
+            (w.organizations[0].properties.iter())
+                .filter(|h| h.property.as_str() == "radar")
+                .count()
+        };
+        assert_eq!(copies(&w), 2);
+        assert_eq!(bears(&w, unit), 1);
+        // What a thing's kind doesn't meet the needs of isn't given.
+        assert!(w.organizations[1].properties.is_empty());
+        assert!(w.units.iter().all(|u| u.properties.is_empty()));
+        // Its side losing it leaves its own, and losing one of those the
+        // other.
+        w.lose_given(1, &Id::from("radar"));
+        run(&mut w, 1.0);
+        assert_eq!(copies(&w), 1);
+        assert_eq!(bears(&w, unit), 1);
+        // A member holds its own, and a building loses what it researched.
+        let member = crate::targets::Thing::Unit(unit);
+        w.gain_own(member, Id::from("radar"));
+        assert_eq!(w.units[unit].properties.len(), 1);
+        assert!(w.lose_own(member, &Id::from("radar")));
+        assert!(!w.lose_own(member, &Id::from("radar")));
+        // A property its template lists, its side holds and it has a copy
+        // of fights once.
+        let template = w.units[unit].template.clone();
+        (w.rules.kinds.get_mut(&template).unwrap().properties).push(Id::from("radar"));
+        let sharp = tgmap::CombatEffect {
+            attack: 5.0,
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert(Id::from("radar"), sharp);
+        w.gain_taken_back(1, Id::from("radar"));
+        w.gain_own(member, Id::from("radar"));
+        let held = w.timed_on(crate::Target::Unit(unit));
+        assert_eq!(w.held_effect(1, &template, held, []).attack, 5.0);
+        // Nothing's given to what has no properties.
+        w.rules.kinds.clear();
+        w.gain_own(crate::targets::Thing::Organization(0), Id::from("radar"));
+        assert_eq!(copies(&w), 1);
     }
 
     #[test]

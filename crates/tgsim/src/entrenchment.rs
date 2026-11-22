@@ -60,12 +60,9 @@ impl World {
         let (owner, template) = (organization.owner, &organization.template);
         let e = &self.rules.entrenchment;
         let time = *e.times.get(template)?;
-        let kind = self.rules.kinds.get(template);
-        let own = kind.into_iter().flat_map(|k| &k.properties);
-        let own = own.filter_map(|p| e.rates.get(p));
         let held = &organization.properties;
-        let bearing = self.bearing(&e.rates, |e| &e.requires, owner, template, held);
-        let rate = 1.0 + own.chain(bearing).map(|e| e.rate).sum::<f32>();
+        let bearing = self.bearing_with_own(&e.rates, |e| &e.requires, owner, template, held);
+        let rate = 1.0 + bearing.map(|e| e.rate).sum::<f32>();
         (rate > 0.0).then(|| time / rate)
     }
 

@@ -284,6 +284,14 @@ impl GameData {
         self.property_effects(|p| p.enchantment_type.clone())
     }
 
+    /// The properties a thing needs for each property to be on it, for
+    /// those that need any, by its id.
+    pub fn property_requirements(&self) -> HashMap<Id, Vec<Id>> {
+        let mut all = self.property_effects(|p| Some(listed(p.required_properties.as_deref())));
+        all.retain(|_, r| !r.is_empty());
+        all
+    }
+
     /// What `effect` makes of each property, for those it makes anything
     /// of, by its id: the shared ones, technologies among them, and those
     /// abilities give.
