@@ -148,8 +148,8 @@ impl Orders {
         }
     }
 
-    /// The players the game was let in to a match hosted elsewhere to
-    /// give the orders of; `None` for a match hosted here, where it gives
+    /// The players the game was let in to a multiplayer match to give the
+    /// orders of; `None` for a match it plays alone, where it gives
     /// anyone's.
     pub(crate) fn players(&self) -> Option<&[u32]> {
         match &self.host {
@@ -240,9 +240,10 @@ impl Orders {
         let _ = self.client.vote(drop);
     }
 
-    /// Whether the match's host is elsewhere, and so the match isn't the
-    /// game's to do as it likes with.
-    pub(crate) fn joined_to(&self) -> bool {
+    /// Whether the match is a multiplayer game, hosted here for others to
+    /// join or joined elsewhere, and so isn't the game's to do as it likes
+    /// with.
+    pub(crate) fn multiplayer(&self) -> bool {
         self.players().is_some()
     }
 
@@ -277,7 +278,7 @@ impl Orders {
     /// asked of it before then.
     pub(crate) fn waiting(&self) -> bool {
         let record = self.record();
-        self.joined_to() && !self.gone && record.steps == 0 && record.given.is_empty()
+        self.multiplayer() && !self.gone && record.steps == 0 && record.given.is_empty()
     }
 
     /// Whether the host would carry `action` out if asked.
@@ -440,7 +441,7 @@ impl Orders {
     /// still being set up, so that it doesn't take the game for lost: how
     /// everyone stands, who's gone and what's said.
     pub(crate) fn wait(&mut self) {
-        if self.quit || !self.joined_to() {
+        if self.quit || !self.multiplayer() {
             return;
         }
         if let Hosted::Shared {
@@ -692,7 +693,7 @@ mod tests {
         assert!(orders.waiting() && !orders.may(&Action::Pause(true)));
         let stop = Command::Stop { organization: 0 };
         assert_eq!(orders.give(&world, 1, stop), Err(Refused::NotYours));
-        assert!(orders.joined_to());
+        assert!(orders.multiplayer());
         assert_eq!(orders.players(), Some(&[1][..]));
         // A tick the host hasn't sent isn't played.
         assert!(orders.step(&mut world).is_empty());
@@ -803,8 +804,20 @@ mod tests {
         assert_eq!((world.ticks, host.schedule().record().given.len()), (2, 0));
         // A host here does whatever it's asked.
         let hosting = Orders::hosting(Setup::default(), fresh(), None, "Player");
-        assert!(!hosting.joined_to() && hosting.players().is_none());
+        assert!(!hosting.multiplayer() && hosting.players().is_none());
         assert!(hosting.may(&Action::Win(1)) && hosting.may(&stop(2, 1)));
+    }
+
+    #[test]
+    fn a_match_hosted_here_for_others_to_join_is_multiplayer() {
+        let mut host: Host<Line> = Host::new(Setup::default(), super::testing::fresh());
+        let (ours, mut theirs) = tgserver::pair();
+        tgserver::join(&mut theirs, vec![1], "Player 1".into()).unwrap();
+        host.greet(Box::new(ours));
+        assert!(matches!(host.seat()[..], [Ok(_)]));
+        let welcome = tgserver::welcome(&mut theirs).unwrap().unwrap();
+        let orders = Orders::sharing(host, Box::new(theirs), welcome);
+        assert!(orders.multiplayer());
     }
 
     #[test]

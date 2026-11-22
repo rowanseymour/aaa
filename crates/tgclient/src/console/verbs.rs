@@ -598,7 +598,7 @@ pub(crate) fn developing(world: &World) -> Result<(), String> {
     if !world.get_resource::<crate::Dev>().is_some_and(|d| d.0) {
         return Err("only with --dev".into());
     }
-    if (world.get_resource::<Orders>()).is_some_and(Orders::joined_to) {
+    if (world.get_resource::<Orders>()).is_some_and(Orders::multiplayer) {
         return Err("only in a match no other machine shares".into());
     }
     Ok(())

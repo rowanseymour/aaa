@@ -1,6 +1,6 @@
 //! The keys that pause the match and set how fast it's played, and what
 //! either interface's pause button shows and asks for, as the key does:
-//! Escape's menu leaves a match hosted elsewhere playing on.
+//! Escape's menu leaves a multiplayer match playing on.
 
 use std::ops::RangeInclusive;
 
