@@ -11,12 +11,16 @@ use tgsim::World;
 
 use crate::{Focus, Loaded, Sim, banners, fog, minimap, ui};
 
-/// What the cursor points at on the map, on the ground or through the
-/// minimap, and not through the action grid.
+/// A place on the map the console has put the cursor, in world units, for
+/// a run with no window to have one.
+#[derive(Resource, Default)]
+pub struct Placed(pub Option<[f32; 2]>);
+
+/// The cursor's point on the ground: the window's, or the console's.
 #[derive(SystemParam)]
-pub(crate) struct Pointer<'w, 's> {
-    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
-    cameras: Query<
+pub(crate) struct GroundCursor<'w, 's> {
+    pub(crate) windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    pub(crate) cameras: Query<
         'w,
         's,
         (
@@ -25,6 +29,24 @@ pub(crate) struct Pointer<'w, 's> {
             &'static RtsCamera,
         ),
     >,
+    placed: Option<Res<'w, Placed>>,
+}
+
+impl GroundCursor<'_, '_> {
+    /// The point on the ground under the cursor, in world units.
+    pub(crate) fn at(&self, ground: &Ground) -> Option<[f32; 2]> {
+        match self.placed.as_ref().and_then(|p| p.0) {
+            Some(p) => Some(p),
+            None => pointed(&self.windows, &self.cameras, ground),
+        }
+    }
+}
+
+/// What the cursor points at on the map, on the ground or through the
+/// minimap, and not through the action grid.
+#[derive(SystemParam)]
+pub(crate) struct Pointer<'w, 's> {
+    cursor: GroundCursor<'w, 's>,
     panels: ui::Panels<'w, 's>,
     pub(crate) minimap: Res<'w, minimap::Minimap>,
     views: Query<'w, 's, &'static RelativeCursorPosition, With<minimap::MinimapView>>,
@@ -51,9 +73,7 @@ impl Pointer<'_, '_> {
             return None;
         }
         match self.minimap.spot(&self.views) {
-            minimap::Spot::Off => {
-                pointed(&self.windows, &self.cameras, ground).map(Pointing::Ground)
-            }
+            minimap::Spot::Off => self.cursor.at(ground).map(Pointing::Ground),
             minimap::Spot::OffMap => None,
             minimap::Spot::At(p) => Some(Pointing::Minimap(p)),
         }
@@ -91,8 +111,8 @@ pub(crate) fn nearest(
         .map(|(r, _)| r)
 }
 
-/// The point on the ground under the cursor, in world units.
-pub(crate) fn pointed(
+/// The point on the ground under the window's cursor, in world units.
+fn pointed(
     windows: &Query<&Window, With<PrimaryWindow>>,
     cameras: &Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     ground: &Ground,
@@ -115,8 +135,7 @@ pub(crate) fn pointed(
 /// minimap or the interface's panels, which cover the map.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn focus(
-    windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
+    cursor: GroundCursor,
     banners: Query<banners::Pointed<banners::Banner>>,
     hq_banners: Query<banners::Pointed<banners::HqBanner>>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
@@ -130,11 +149,9 @@ pub(crate) fn focus(
     const REACH: f32 = 2.0;
     // Beside the view, where it's cut narrower than the window, a banner
     // at its edge reaches out of sight.
-    let beside = windows
-        .single()
-        .ok()
+    let beside = (cursor.windows.single().ok())
         .and_then(Window::cursor_position)
-        .zip(cameras.single().ok())
+        .zip(cursor.cameras.single().ok())
         .is_some_and(|(at, (c, ..))| c.logical_viewport_rect().is_some_and(|r| !r.contains(at)));
     if !minimap::pointer_away(minimap) || panels.under_cursor() || beside {
         focus.set_if_neq(Focus::Nothing);
@@ -149,7 +166,7 @@ pub(crate) fn focus(
         focus.set_if_neq(found);
         return;
     }
-    let Some(point) = pointed(&windows, &cameras, &loaded.map.ground) else {
+    let Some(point) = cursor.at(&loaded.map.ground) else {
         focus.set_if_neq(Focus::Nothing);
         return;
     };

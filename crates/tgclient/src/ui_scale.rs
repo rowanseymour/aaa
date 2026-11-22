@@ -65,6 +65,7 @@ pub(crate) fn fit_ui(
     menu: Option<Res<pause::PauseMenu>>,
     dialog: Option<Res<connection::Dialog>>,
     top: Option<Res<TopRow>>,
+    frame: Option<Res<shot::Frame>>,
     mut scale: ResMut<UiScale>,
 ) {
     let window = windows.single().ok();
@@ -79,7 +80,8 @@ pub(crate) fn fit_ui(
         return;
     }
     // Without a window, a screenshot's image.
-    let size = window.map_or(shot::SIZE.as_vec2(), |w| w.size());
+    let frame = frame.map_or(shot::SIZE, |f| f.0).as_vec2();
+    let size = window.map_or(frame, |w| w.size());
     if size.min_element() <= 0.0 {
         return;
     }

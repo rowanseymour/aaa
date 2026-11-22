@@ -7,6 +7,8 @@
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
+use bevy::input::mouse::MouseButtonInput;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use bevy::ui_widgets::{Activate, Button};
@@ -82,21 +84,60 @@ pub fn buttons(world: &mut World) -> (Vec<Seen>, usize) {
 
 /// Activates the button with this id.
 pub fn click(world: &mut World, id: &str) -> Result<(), String> {
-    let (seen, _) = buttons(world);
-    let Some(button) = seen.iter().find(|b| b.id.eq_ignore_ascii_case(id)) else {
-        return Err(format!("no button {id:?} to press; ui lists them"));
-    };
-    if world
-        .get::<bevy::ui::InteractionDisabled>(button.entity)
-        .is_some()
-    {
+    let button = seen(world, id)?;
+    if world.get::<bevy::ui::InteractionDisabled>(button).is_some() {
         return Err(format!("button {id:?} is disabled"));
     }
-    world.trigger(Activate {
-        entity: button.entity,
-    });
+    world.trigger(Activate { entity: button });
     world.flush();
     Ok(())
+}
+
+/// The button on screen with id `id`.
+fn seen(world: &mut World, id: &str) -> Result<Entity, String> {
+    let (seen, _) = buttons(world);
+    let button = seen.iter().find(|b| b.id.eq_ignore_ascii_case(id));
+    let button = button.ok_or_else(|| format!("no button {id:?} to press; ui lists them"))?;
+    Ok(button.entity)
+}
+
+/// The button the pointer is held over, by [`hover`], as if the mouse were
+/// on it.
+#[derive(Resource, Default)]
+pub struct Over(Option<Entity>);
+
+/// Holds the pointer over the button with id `id`, showing what hovering
+/// on it would, or with none, takes it off.
+pub fn hover(world: &mut World, id: Option<&str>) -> Result<(), String> {
+    let button = id.map(|id| seen(world, id)).transpose()?;
+    world.resource_mut::<Over>().0 = button;
+    Ok(())
+}
+
+/// Keeps the button [`hover`] chose hovered, after picking has found the
+/// mouse over nothing.
+pub fn hold_over(mut commands: Commands, over: Res<Over>, hovered: Query<&Hovered>) {
+    let Some(button) = over.0 else {
+        return;
+    };
+    if hovered.get(button).is_ok_and(|h| !h.0) {
+        commands.entity(button).insert(Hovered(true));
+    }
+}
+
+/// Presses or lets go of a mouse button, wherever the cursor is.
+pub fn mouse(world: &mut World, button: MouseButton, state: ButtonState) {
+    let window = primary(world);
+    world.write_message(MouseButtonInput {
+        button,
+        state,
+        window,
+    });
+}
+
+fn primary(world: &mut World) -> Entity {
+    let mut windows = world.query_filtered::<Entity, With<PrimaryWindow>>();
+    windows.iter(world).next().unwrap_or(Entity::PLACEHOLDER)
 }
 
 /// The keys a chord holds down, written as a hotkey file does, such as
@@ -140,8 +181,7 @@ pub fn release(world: &mut World, keys: &[KeyCode]) {
 }
 
 fn send(world: &mut World, key_code: KeyCode, logical_key: Key, state: ButtonState) {
-    let mut windows = world.query_filtered::<Entity, With<PrimaryWindow>>();
-    let window = windows.iter(world).next().unwrap_or(Entity::PLACEHOLDER);
+    let window = primary(world);
     world.write_message(KeyboardInput {
         key_code,
         logical_key,
@@ -209,6 +249,28 @@ mod tests {
         assert_eq!(world.resource::<Clicked>().0, ["launch", "second"]);
         assert!(click(&mut world, "gone").is_err(), "it's hidden");
         assert!(click(&mut world, "nothing").is_err());
+    }
+
+    #[test]
+    fn a_button_hovered_stays_hovered_until_let_go() {
+        let mut world = world();
+        world.init_resource::<Over>();
+        let mut named = world.query::<(Entity, &ButtonId)>();
+        let first = named.iter(&world).find(|(_, id)| id.0 == "first");
+        let first = first.map(|(e, _)| e).unwrap();
+        world.entity_mut(first).insert(Hovered(false));
+        let hovered = |world: &mut World| {
+            world.run_system_cached(hold_over).unwrap();
+            world.get::<Hovered>(first).unwrap().0
+        };
+        hover(&mut world, Some("FIRST")).unwrap();
+        assert!(hovered(&mut world));
+        world.entity_mut(first).insert(Hovered(false));
+        assert!(hovered(&mut world), "picking found the mouse elsewhere");
+        hover(&mut world, None).unwrap();
+        world.entity_mut(first).insert(Hovered(false));
+        assert!(!hovered(&mut world));
+        assert!(hover(&mut world, Some("gone")).is_err(), "it's hidden");
     }
 
     #[test]

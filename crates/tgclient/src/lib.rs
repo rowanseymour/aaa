@@ -362,9 +362,6 @@ pub fn run(program: Program) -> ExitCode {
     };
     let once = screenshot.is_some();
     let windowless = once || headless;
-    let screenshot = windowless.then(|| ShotPlugin {
-        path: screenshot.map(Into::into),
-    });
     let (dir, map) = match args.as_slice() {
         [dir] => (dir, None),
         [dir, map] if joining.is_none() => (dir, Some(map)),
@@ -407,6 +404,11 @@ pub fn run(program: Program) -> ExitCode {
         },
     };
     let ui_scale = saved.ui_scale().unwrap_or(1.0);
+    // Without a window, the resolution chosen sizes the picture instead.
+    let screenshot = windowless.then(|| ShotPlugin {
+        path: screenshot.map(Into::into),
+        size: saved.resolution().map_or(shot::SIZE, UVec2::from),
+    });
     // Before there's a window, so that a host that isn't there or won't
     // let the game in is said where the game was asked for.
     let name = name
@@ -531,6 +533,7 @@ pub fn run(program: Program) -> ExitCode {
                 .run_if(in_state(Screen::Match)),
         )
         .init_resource::<Focus>()
+        .init_resource::<pointing::Placed>()
         .init_resource::<ghost::Ghost>()
         .init_resource::<placing::Anchor>()
         .init_resource::<ghost::Landing>()

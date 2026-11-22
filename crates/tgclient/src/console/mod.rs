@@ -49,7 +49,12 @@ pub struct ConsolePlugin;
 impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Console>()
+            .init_resource::<crate::drive::Over>()
             .add_observer(shot_taken)
+            .add_systems(
+                PreUpdate,
+                crate::drive::hold_over.after(bevy::picking::PickingSystems::Hover),
+            )
             .add_systems(Startup, spawn)
             // Not while the pause menu is up, whose pause the console could undo.
             .add_systems(
@@ -98,6 +103,8 @@ pub struct Console {
     settling: u32,
     /// Keys `press` holds down, to let go of.
     held: Vec<KeyCode>,
+    /// The mouse button `mouse` holds down, to let go of.
+    held_mouse: Option<MouseButton>,
     /// When, on the clock that never pauses, `wait` is over.
     until: Option<f64>,
     /// Scripts held until a match starts, or the first menu is up.
@@ -238,6 +245,9 @@ pub(crate) fn run(world: &mut World) {
     // A frame after they went down, so they were seen held together.
     let held = std::mem::take(&mut world.resource_mut::<Console>().held);
     crate::drive::release(world, &held);
+    if let Some(button) = world.resource_mut::<Console>().held_mouse.take() {
+        crate::drive::mouse(world, button, bevy::input::ButtonState::Released);
+    }
     let now = world.resource::<Time<Real>>().elapsed_secs_f64();
     let loading = world
         .get_resource::<State<Screen>>()

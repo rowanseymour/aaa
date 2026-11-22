@@ -18,6 +18,9 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `screenshot file.png` | saves what the window shows to a file, answering once it's written | ✓ |  |
 | `ui` | lists the ids of the buttons on screen that can be pressed, and which are chosen |  |  |
 | `click button` | presses a button, by its id; ui lists them |  |  |
+| `hover [button]` | holds the pointer over a button, by its id, as the mouse would be; without one, takes it off |  |  |
+| `pointer [x y \| off]` | puts the cursor on the map at x y, in metres, in place of the window's; off gives it back; without, says where it is |  | ✓ |
+| `mouse left \| right` | clicks a mouse button where the cursor is |  |  |
 | `press key` | presses a key as a hotkey file writes it, e.g. esc, f1 or ctrl-s |  |  |
 | `ask intent` | asks for what a hotkey file names, as its key would, e.g. ActorCommand stop |  |  |
 | `wait seconds` | lets that long go by before the next command | ✓ |  |
