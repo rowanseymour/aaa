@@ -1160,6 +1160,14 @@ fn sitter(drawn: &Drawn, leaders: &Leaders, template: &str, owner: u32) -> Sitte
 /// building, and which.
 type Alone = Option<(bool, usize)>;
 
+/// The map's sun: not the stage's own light, nor the menu backdrop's, still
+/// up as the match starts.
+type MapSun = (
+    With<DirectionalLight>,
+    Without<bevy::camera::visibility::RenderLayers>,
+    Without<crate::backdrop::Backdrop>,
+);
+
 /// Draws the portrait of what the display shows, for either interface to
 /// show once it's there.
 #[allow(clippy::too_many_arguments)]
@@ -1173,7 +1181,7 @@ pub fn portray(
     mut assets: MapAssets,
     mut stage: ResMut<Stage>,
     mut asked: bevy::ecs::system::Local<Option<(Sitter, Alone)>>,
-    suns: Query<&Transform, With<DirectionalLight>>,
+    suns: Query<&Transform, MapSun>,
 ) {
     let mode = showing.now.as_ref().map(|(mode, _)| mode);
     let wanted = mode.and_then(|mode| {

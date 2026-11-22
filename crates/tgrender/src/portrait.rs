@@ -63,6 +63,11 @@ pub struct Stage {
     camera: Entity,
     /// What shines on the sitter, from the first to sit.
     light: Option<Entity>,
+    /// The map's sun as it shows now, its diffuse and ambient colours.
+    sun: [[f32; 3]; 2],
+    /// Whether the sitter is lit by [`Stage::sun`] rather than the stage's
+    /// own white light.
+    sunlit: bool,
     /// Who's on it, and the root of their model.
     sitter: Option<(Sitter, Entity)>,
     /// How many have sat, so that no two fidget alike.
@@ -100,12 +105,6 @@ impl Stage {
                 },
                 RenderTarget::from(face.clone()),
                 RenderLayers::layer(LAYER),
-                // White light all round: see [`crate::light::color_lights`].
-                AmbientLight {
-                    color: crate::stored::rgb([AMBIENT; 3]),
-                    brightness: light_unit(),
-                    ..default()
-                },
             ))
             .id();
         Stage {
@@ -113,9 +112,45 @@ impl Stage {
             fitted,
             camera,
             light: None,
+            sun: [[1.0; 3]; 2],
+            sunlit: false,
             sitter: None,
             sat: 0,
         }
+    }
+
+    /// Takes the map's sun as it shows now, its `diffuse` and `ambient`
+    /// colours undimmed, for faces to be lit by.
+    pub fn sun(&mut self, commands: &mut Commands, diffuse: [f32; 3], ambient: [f32; 3]) {
+        self.sun = [diffuse, ambient];
+        if self.sunlit {
+            self.shine(commands);
+        }
+    }
+
+    /// Lights the sitter: a face by the map's sun, as skinned units on the
+    /// map are, and a fitted model by the stage's own white light.
+    ///
+    /// The light falls on everything the camera sees, so a face's few
+    /// unskinned shapes take the sun too, and a fitted model's skinned
+    /// ones the white light; see `docs/divergences.md`.
+    fn shine(&self, commands: &mut Commands) {
+        let Some(light) = self.light else { return };
+        let [diffuse, ambient] = match self.sunlit {
+            true => self.sun,
+            false => [[1.0; 3], [AMBIENT; 3]],
+        };
+        commands.entity(light).insert(DirectionalLight {
+            illuminance: std::f32::consts::PI * light_unit(),
+            color: crate::stored::rgb(diffuse),
+            ..default()
+        });
+        // See [`crate::light::color_lights`].
+        commands.entity(self.camera).insert(AmbientLight {
+            color: crate::stored::rgb(ambient),
+            brightness: light_unit(),
+            ..default()
+        });
     }
 
     /// The image the sitter is drawn to, and whether it's a fitted model's
@@ -214,8 +249,9 @@ impl Models {
     /// Puts `sitter` on the stage in place of whoever was there, a face
     /// that's `greeting` playing first what it plays on being selected.
     /// The first to sit is lit from `sun`, the way the map's sun shines,
-    /// and so are all after. False if it has no model that can be drawn,
-    /// which leaves the stage empty.
+    /// and so are all after; see [`Stage::shine`] for the light's colour.
+    /// False if it has no model that can be drawn, which leaves the stage
+    /// empty.
     pub fn sit(
         &mut self,
         commands: &mut Commands,
@@ -228,14 +264,12 @@ impl Models {
         stage.clear(commands);
         stage.sat = stage.sat.wrapping_add(1);
         stage.light.get_or_insert_with(|| {
-            let light = DirectionalLight {
-                illuminance: std::f32::consts::PI * light_unit(),
-                ..default()
-            };
             let shining = Transform::default().looking_to(sun, Vec3::Y);
             let layer = RenderLayers::layer(LAYER);
-            commands.spawn((light, shining, layer)).id()
+            commands.spawn((shining, layer)).id()
         });
+        stage.sunlit = matches!(sitter, Sitter::Face(_));
+        stage.shine(commands);
         let placed = match sitter {
             Sitter::Face(id) => self.sit_face(commands, assets, stage, id, greeting),
             Sitter::Model { template, owner } => self.sit_model(commands, assets, template, *owner),
@@ -286,7 +320,8 @@ impl Models {
         let root = commands
             .spawn((root(path, Transform::from_translation(AT)), Sitting))
             .id();
-        self.spawn_meshes(commands, assets, root, model, staged(None), 0.0);
+        // Lit by the sun as on the map, each material reflecting alike.
+        self.spawn_meshes(commands, assets, root, model, Paint::default(), 0.0);
         let of_kind = |kind: AnimationKind| -> Vec<String> {
             let animations = portrait.view.animations.iter();
             animations
