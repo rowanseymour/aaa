@@ -352,12 +352,24 @@ pub(crate) fn pursue(
     organizations: &[usize],
     e: usize,
 ) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
-    give_each(sim, orders, player, organizations, sim.centre(e), |r| {
-        tgsim::Command::Pursue {
-            organization: r,
-            enemy: e,
-        }
-    })
+    // What has only bombarding weapons has no Attack, and bombards instead.
+    give_each(
+        sim,
+        orders,
+        player,
+        organizations,
+        sim.centre(e),
+        |r| match sim.only_bombards(r) {
+            true => tgsim::Command::Bombard {
+                organization: r,
+                target: tgsim::Shelled::Thing(tgsim::Piece::Organization(e)),
+            },
+            false => tgsim::Command::Pursue {
+                organization: r,
+                enemy: e,
+            },
+        },
+    )
 }
 
 /// Gives each organization the command `command` makes for it. Returns

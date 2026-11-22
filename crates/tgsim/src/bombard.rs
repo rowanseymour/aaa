@@ -316,8 +316,9 @@ impl World {
         if weapons.iter().any(|&(_, near)| near) {
             return true;
         }
-        let heading = unit.path.first().copied().unwrap_or(unit.position);
-        if within(heading, b.spot, ARRIVAL_REACH) {
+        // One on its way is left to get there; one stopped short is sent
+        // on again.
+        if unit.moving() || within(unit.position, b.spot, ARRIVAL_REACH) {
             return true;
         }
         if self.no_route(u, b.spot) {
@@ -552,6 +553,18 @@ mod tests {
         let stop = Command::Stop { organization: 0 };
         w.apply(1, stop).unwrap();
         assert!(!w.organizations[0].bombarding);
+        assert!(w.units[0].shelling.is_none());
+    }
+
+    #[test]
+    fn an_order_that_sends_nobody_anywhere_still_ends_their_shelling() {
+        let mut w = shelling(vec![mortar(30.0)]);
+        w.apply(1, bombard(ENEMY)).unwrap();
+        run(&mut w, 0.5);
+        assert!(w.units[0].shelling.is_some());
+        // Engaged, a stop sends nobody to their places.
+        w.organizations[0].engaged = vec![Piece::Organization(1)];
+        w.apply(1, Command::Stop { organization: 0 }).unwrap();
         assert!(w.units[0].shelling.is_none());
     }
 

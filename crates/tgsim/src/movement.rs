@@ -1156,8 +1156,10 @@ impl World {
                         unit.facing = unit.end_facing;
                     }
                     false => {
+                        // Trying another way is the same move.
+                        let shelling = unit.shelling;
                         unit.take(again, exact);
-                        (unit.goal, unit.ways) = (Some(goal), ways + 1);
+                        (unit.goal, unit.ways, unit.shelling) = (Some(goal), ways + 1, shelling);
                     }
                 }
             }

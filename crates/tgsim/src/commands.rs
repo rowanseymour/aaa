@@ -143,6 +143,7 @@ impl World {
         self.playable(player)?;
         self.heeded(&command)?;
         let steering = steered(&command);
+        let bombard = matches!(command, Command::Bombard { .. });
         match command {
             Command::Move { organization, to } => self.order_move(player, organization, to)?,
             Command::Attack { organization, to } => self.order_attack(player, organization, to)?,
@@ -273,6 +274,13 @@ impl World {
         }
         if let (Some(r), false) = (steering, grouped) {
             self.leave_group(r);
+        }
+        // Any other order is a new one for its members, which bombarding
+        // gives way to, whether or not it sends them anywhere.
+        if let (Some(r), false) = (steering, bombard) {
+            for u in self.organizations[r].units.clone() {
+                self.units[u].shelling = None;
+            }
         }
         // An order cuts a reform short.
         if let Some(r) = steering {
