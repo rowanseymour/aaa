@@ -222,8 +222,8 @@ pub fn cheat(
     orders: Res<crate::Orders>,
     mut fog: ResMut<Fog>,
 ) {
-    // A match hosted elsewhere isn't the game's to cheat at.
-    if crate::intent::asked(&mut intents, "Fog") && !orders.joined_to() {
+    // A multiplayer match isn't the game's to cheat at.
+    if crate::intent::asked(&mut intents, "Fog") && !orders.multiplayer() {
         fog.lifted = !fog.lifted;
     }
 }

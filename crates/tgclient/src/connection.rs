@@ -308,10 +308,10 @@ pub fn open(dialog: &mut Dialog) {
 
 /// Whether the dialog can be opened: only in a match with others in it.
 pub fn openable(orders: &Orders) -> bool {
-    orders.joined_to()
+    orders.multiplayer()
 }
 
-/// Keeps the dialog open while a match hosted elsewhere loads, opens it
+/// Keeps the dialog open while a multiplayer match loads, opens it
 /// once the match has been held for a moment, and closes it as play
 /// begins or the match goes on if that's what opened it.
 fn watch(
@@ -327,7 +327,7 @@ fn watch(
     if !held {
         dialog.held_since = None;
     }
-    if orders.joined_to() && !orders.gone() && !loading.is_empty() {
+    if orders.multiplayer() && !orders.gone() && !loading.is_empty() {
         dialog.opened = Some(Opened::Loading);
         return;
     }

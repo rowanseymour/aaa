@@ -272,9 +272,10 @@ impl Toggling<'_, '_> {
     pub fn open(&mut self, panel: Panel) {
         let displays = &mut *self.displays;
         if displays.open.is_none() {
-            // A match hosted elsewhere is other people's too, and plays on.
-            displays.paused_it = !self.orders.pausing() && !self.orders.joined_to();
-            if !self.orders.joined_to() {
+            // A multiplayer match, even one hosted here, is other people's too,
+            // and plays on.
+            displays.paused_it = !self.orders.pausing() && !self.orders.multiplayer();
+            if !self.orders.multiplayer() {
                 self.orders.act(Action::Pause(true));
             }
         }
@@ -543,6 +544,17 @@ mod tests {
         assert!(open(&app).is_none() && !paused(&app));
         let menu = app.world_mut().run_system_cached(pause::closed);
         assert!(menu.unwrap());
+    }
+
+    #[test]
+    fn it_leaves_a_multiplayer_match_playing() {
+        let mut app = app();
+        let (_host, orders, _) = crate::orders::testing::joined(&[1]);
+        app.insert_resource(orders);
+        press(&mut app, KeyCode::F2);
+        assert!(open(&app) == Some(Panel::Technologies) && !paused(&app));
+        press(&mut app, KeyCode::F2);
+        assert!(open(&app).is_none() && !paused(&app));
     }
 
     #[test]

@@ -197,9 +197,10 @@ fn open(
     leaving: Option<String>,
 ) {
     menu.open = true;
-    // A match hosted elsewhere is other people's too, and plays on.
-    menu.was_paused = orders.pausing() || orders.joined_to();
-    if !orders.joined_to() {
+    // A multiplayer match, even one hosted here, is other people's too,
+    // and plays on.
+    menu.was_paused = orders.pausing() || orders.multiplayer();
+    if !orders.multiplayer() {
         orders.act(Action::Pause(true));
     }
 
