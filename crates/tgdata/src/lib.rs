@@ -7,6 +7,7 @@
 //! for, so that each is made once. It can be shared between threads, which
 //! share what it keeps: a table read on one is there for the others.
 
+mod actor_states;
 mod audio;
 mod campaigns;
 

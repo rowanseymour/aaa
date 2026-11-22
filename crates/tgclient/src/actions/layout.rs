@@ -1,6 +1,8 @@
 //! Which orders and menu entries the grid offers, and the slots they
 //! take.
 
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 use tgdata::Id;
 use tgsim::{Lacking, Researchable};
@@ -8,7 +10,7 @@ use tgsim::{Lacking, Researchable};
 use crate::control_groups;
 
 use super::looks::{Looks, look_of};
-use super::press::{can_pack, sell_command, shown_hq};
+use super::press::{sell_command, shown_hq};
 use super::{
     CANCEL, COMMAND_ALL, Entry, Face, Give, MENU_CANCEL, Menu, ORDERS, Offer, Page, SLOTS, Shown,
 };
@@ -88,13 +90,15 @@ impl BuildingButtons<'_> {
 
 /// Which of [`ORDERS`] the selection has: packed buildings move, stop and,
 /// one at a time, unpack; organizations of them can also retreat and
-/// guard; anything else has the rest. One thing selected alone can be
-/// disbanded, unless it's attached to an HQ, which it can detach from
-/// instead, or on its way to unpack; while it fights it's greyed. Only
-/// where the game has HQs can organizations attach to them, and only where
-/// it has heroes can one company selected alone take one on or let it go.
-/// Rout shows while any of them could rout now. Two or more have the
-/// Group Behavior switch of their current group, `behavior`, to flip.
+/// guard; anything else has the rest. What's unpacking has none, and with
+/// several selected an order shows while any of the rest has it, but those
+/// the data offers only to one thing selected alone. What isn't attached
+/// to an HQ can be disbanded; what is can detach from it instead, and
+/// while it fights Disband is greyed. What isn't engaged can attach to an
+/// HQ while some HQ of its side takes its kind, and where the game has
+/// heroes a company can take one on or let one go. Rout shows while any
+/// of them could rout now. Two or more have the Group Behavior switch of
+/// their current group, `behavior`, to flip.
 pub(crate) fn offered(
     sim: &tgsim::World,
     player: Option<u32>,
@@ -102,39 +106,47 @@ pub(crate) fn offered(
     has: GameHas,
     behavior: Option<bool>,
 ) -> [bool; ORDERS.len()] {
+    let one = selected.len() == 1;
+    let selected: Vec<usize> = (selected.iter().copied())
+        .filter(|&r| !sim.unpacking(r))
+        .collect();
+    let selected = &selected[..];
+    let any = |f: &dyn Fn(&tgsim::Organization) -> bool| {
+        selected.iter().any(|&r| f(&sim.organizations[r]))
+    };
     let packed = |&r: &usize| sim.organizations[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
     let lone = selected.iter().all(|&r| sim.lone(r));
-    let disband = match selected {
-        &[r] => {
-            let r = &sim.organizations[r];
-            r.hq.is_none() && r.unpack_at.is_none()
-        }
-        _ => false,
-    };
     // A company leads with its captain, whose place a hero takes.
-    let led = match selected {
-        &[r] => has.heroes && sim.organizations[r].leader.is_some() && !sim.lone(r) && !all_packed,
-        _ => false,
-    };
+    let led = has.heroes
+        && (selected.iter())
+            .any(|&r| sim.organizations[r].leader.is_some() && !sim.lone(r) && !packed(&r));
+    let hqs = sim.hqs();
+    let attachable = (selected.iter())
+        .any(|&r| sim.organizations[r].engaged.is_empty() && hqs.iter().any(|h| sim.suits(h, r)));
     let rout = selected.iter().any(|&r| can(sim, player, Give::Rout, r));
     let builds = builder(sim, selected).is_some();
     let repairs = selected.iter().any(|&r| repairs(sim, r));
-    ORDERS.map(|(ids, _)| match ids {
-        "construct" => builds,
-        "repair" => repairs,
-        "unpack" => all_packed && selected.len() == 1,
-        "rout" => rout,
-        "kill" => !all_packed,
-        "hq_attach" => has.hqs && !all_packed,
-        "hq_detach" => has.hqs && !all_packed && !disband,
-        "retreat" | "guard" => !all_packed || !lone,
-        "disband" => disband,
-        "attach" | "detach" => led,
+    let mut out = ORDERS.map(|(ids, _)| match ids {
         control_groups::ENABLE => behavior == Some(false),
         control_groups::DISABLE => behavior == Some(true),
+        _ if selected.is_empty() => false,
+        "construct" => builds,
+        "repair" => repairs,
+        "unpack" => all_packed && one,
+        "rout" => rout,
+        "kill" => !all_packed,
+        "hq_attach" => attachable,
+        "hq_detach" => any(&|r| r.hq.is_some()),
+        "retreat" | "guard" => !all_packed || !lone,
+        "disband" => any(&|r| r.hq.is_none()),
+        "attach" | "detach" => led,
         _ => true,
-    })
+    });
+    for (offered, &alone) in out.iter_mut().zip(&has.alone) {
+        *offered &= one || !alone;
+    }
+    out
 }
 
 /// The first of the selected organizations that can build anything, which
@@ -168,17 +180,17 @@ pub(crate) fn can(sim: &tgsim::World, player: Option<u32>, give: Give, r: usize)
 /// change.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct GameHas {
-    /// Templates that take attachments, as HQs.
-    hqs: bool,
     heroes: bool,
+    /// Per [`ORDERS`], whether it's offered only with one thing selected.
+    pub(crate) alone: [bool; ORDERS.len()],
 }
 
 impl GameHas {
-    pub(crate) fn of(rules: &tgsim::Rules) -> GameHas {
-        let attaching = |l: &tgmap::Logistics| l.attachments.is_some_and(|n| n > 0);
+    pub(crate) fn of(rules: &tgsim::Rules, commands: &HashMap<Id, tgdata::Command>) -> GameHas {
+        let alone = |ids: &str| commands.get(&Id::from(ids)).is_some_and(|c| c.alone);
         GameHas {
-            hqs: rules.logistics.values().any(attaching),
             heroes: !rules.heroes.is_empty(),
+            alone: ORDERS.map(|(ids, _)| alone(ids)),
         }
     }
 }
@@ -282,6 +294,27 @@ pub(crate) fn layout(
     out
 }
 
+/// The structure state a building's in, by the data's id: researching or
+/// recruiting while its queue has something under way.
+pub(crate) fn structure_state(b: &tgsim::Building) -> &'static str {
+    match b.queue.front().map(|c| &c.work) {
+        _ if b.packing.is_some() => "structure_packing",
+        _ if b.unpacking.is_some() => "structure_unpacking",
+        Some(tgsim::Work::Research(_)) => "structure_researching",
+        Some(tgsim::Work::Raise(_)) => "structure_recruiting",
+        None => "structure_normal",
+    }
+}
+
+/// Whether the building at `b` offers what it deploys and researches, and
+/// where those go: not while it packs or unpacks, which take every command
+/// away, nor in a structure state the data types `busy`.
+fn deploys(sim: &tgsim::World, b: usize) -> bool {
+    let state = structure_state(&sim.buildings[b]);
+    !matches!(state, "structure_packing" | "structure_unpacking")
+        && !sim.rules().busy_states.contains(&Id::from(state))
+}
+
 /// Whether pressing the button for `entry` can do anything now.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ready(
@@ -303,7 +336,10 @@ pub(crate) fn ready(
             (give, _) => give.is_some(),
         },
         Entry::Research(i) => researches[i] == Researchable::Ready,
-        Entry::Pack => building.is_some_and(|b| can_pack(sim, b)),
+        Entry::Pack => building.is_some_and(|building| {
+            let pack = tgsim::Command::Pack { building };
+            local.is_some_and(|p| sim.check(p, &pack).is_ok())
+        }),
         Entry::Recruit(i) => {
             let lacking = &lacks[i];
             looks.menu(sim, building)[i].organization.is_some()
@@ -369,14 +405,17 @@ pub(crate) fn contents(
         &order_slots,
         &offered(sim, local, selected, looks.has, behavior),
         building.map(|b| BuildingButtons {
-            deploy: looks.deploy.0,
-            location: looks.location.0,
+            deploy: looks.deploy.0.filter(|_| deploys(sim, b)),
+            location: looks.location.0.filter(|_| deploys(sim, b)),
             recruits: &recruits,
-            research: looks.research.0,
+            research: looks.research.0.filter(|_| deploys(sim, b)),
             researches: &researches,
             // Where what it raises goes matters whether or not any of it
             // can be raised now.
-            rally: looks.rally.0.filter(|_| !menu.is_empty()),
+            rally: looks
+                .rally
+                .0
+                .filter(|_| !menu.is_empty() && deploys(sim, b)),
             pack: looks
                 .pack
                 .0
@@ -457,8 +496,69 @@ mod tests {
         ORDERS.iter().position(|(i, _)| *i == id).map(Entry::Order)
     }
 
+    /// A match with a building, 0, researching if `researching`, where the
+    /// data types the states `busy` lists busy.
+    fn hq(busy: &[&str], researching: bool) -> tgsim::World {
+        let rules = tgsim::Rules {
+            busy_states: busy.iter().map(|&s| Id::from(s)).collect(),
+            ..Default::default()
+        };
+        let mut w = crate::orders::testing::fresh_by(rules);
+        w.add_buildings(&[tgmap::Building {
+            id: 9,
+            template: "hq".into(),
+            owner: 1,
+            position: [20.0, 20.0],
+            facing: [0.0, -1.0],
+            fighter: Default::default(),
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle: None,
+            deploy: None,
+            organization: None,
+            awake: false,
+        }]);
+        if researching {
+            let research = tgdata::Research {
+                technology: Id::from("tech"),
+                grant: tgdata::Grant::Side,
+                seconds: 1.0,
+                cost: Default::default(),
+                structures: Vec::new(),
+                structures_any: false,
+                properties: Vec::new(),
+                properties_any: false,
+            };
+            w.buildings[0].queue.push_back(tgsim::Commission {
+                work: tgsim::Work::Research(research),
+                ticks: 10,
+                paid: 0.0,
+                to: None,
+                held: true,
+                id: 1,
+            });
+        }
+        w
+    }
+
     #[test]
-    fn hq_and_hero_orders_are_offered_only_where_the_game_has_them() {
+    fn packing_takes_deploying_away_and_busy_structure_states_do_too() {
+        let mut w = hq(&[], false);
+        assert_eq!(structure_state(&w.buildings[0]), "structure_normal");
+        assert!(deploys(&w, 0));
+        // Whatever the data types them.
+        w.buildings[0].unpacking = Some((0, 10));
+        assert!(!deploys(&w, 0));
+        // A state's type decides the rest.
+        let w = hq(&[], true);
+        assert_eq!(structure_state(&w.buildings[0]), "structure_researching");
+        assert!(deploys(&w, 0));
+        assert!(!deploys(&hq(&["STRUCTURE_RESEARCHING"], true), 0));
+    }
+
+    #[test]
+    fn hero_orders_are_offered_only_where_the_game_has_them() {
         let mut w = crate::orders::testing::fresh();
         let ids = |offered: [bool; ORDERS.len()]| -> Vec<&str> {
             (ORDERS.iter().zip(offered))
@@ -467,21 +567,35 @@ mod tests {
                 .filter(|ids| ids.contains("attach") || ids.contains("detach"))
                 .collect()
         };
-        let both = GameHas {
-            hqs: true,
+        let heroes = GameHas {
             heroes: true,
+            ..Default::default()
         };
+        // No HQ takes the kind, so HQ Attach never shows.
         assert!(ids(offered(&w, None, &[0], GameHas::default(), None)).is_empty());
         // A hero takes a captain's place, which this has none of.
-        assert_eq!(ids(offered(&w, None, &[0], both, None)), ["hq_attach"]);
+        assert!(ids(offered(&w, None, &[0], heroes, None)).is_empty());
         w.organizations[0].leader = Some(0);
-        let led = ["attach", "detach", "hq_attach"];
-        assert_eq!(ids(offered(&w, None, &[0], both, None)), led);
-        // One company at a time.
         assert_eq!(
-            ids(offered(&w, None, &[0, 1], both, None)),
-            ["hq_attach", "hq_detach"]
+            ids(offered(&w, None, &[0], heroes, None)),
+            ["attach", "detach"]
         );
+        w.organizations[0].hq = Some(50);
+        let attached = ["attach", "detach", "hq_detach"];
+        assert_eq!(ids(offered(&w, None, &[0], heroes, None)), attached);
+    }
+
+    #[test]
+    fn what_the_data_offers_only_alone_shows_only_with_one_selected() {
+        let w = crate::orders::testing::fresh();
+        let mut has = GameHas::default();
+        let i = |id: &str| ORDERS.iter().position(|(ids, _)| *ids == id).unwrap();
+        assert!(offered(&w, None, &[0, 1], has, None)[i("disband")]);
+        has.alone[i("disband")] = true;
+        assert!(!offered(&w, None, &[0, 1], has, None)[i("disband")]);
+        assert!(offered(&w, None, &[0], has, None)[i("disband")]);
+        // The rest show for the two as before.
+        assert!(offered(&w, None, &[0, 1], has, None)[i("move")]);
     }
 
     #[test]
@@ -501,6 +615,26 @@ mod tests {
         // Any one of several will do; another side's never does.
         assert!(routs(&w, 1, &[1, 0]));
         assert!(!routs(&w, 2, &[0]));
+    }
+
+    #[test]
+    fn what_unpacks_has_no_orders_but_the_others_selected_keep_theirs() {
+        let mut w = hq(&[], false);
+        let ids = |w: &tgsim::World, selected: &[usize]| -> Vec<&str> {
+            let offered = offered(w, Some(1), selected, GameHas::default(), None);
+            (ORDERS.iter().zip(offered))
+                .filter(|&(_, o)| o)
+                .map(|((ids, _), _)| *ids)
+                .collect()
+        };
+        assert!(ids(&w, &[0]).contains(&"disband"));
+        w.organizations[0].unpacked_into = Some(0);
+        w.buildings[0].unpacking = Some((0, 10));
+        assert!(ids(&w, &[0]).is_empty());
+        // Player 2's organization stands in for another of the selection.
+        w.organizations[1].owner = 1;
+        let others = ids(&w, &[0, 1]);
+        assert!(others.contains(&"move"));
     }
 
     #[test]

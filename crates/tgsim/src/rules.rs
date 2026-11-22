@@ -154,6 +154,9 @@ pub struct Rules {
     /// [`World::activity`](crate::World::activity) naming it. One not
     /// listed allows it.
     pub resupplying: HashMap<Id, bool>,
+    /// The states whose type is `busy`, which changes what a building in
+    /// one offers.
+    pub busy_states: HashSet<Id>,
     /// The organization templates each building template recruits, which are
     /// those that can attach to it as an HQ.
     pub recruit_lists: HashMap<Id, Vec<Id>>,
@@ -260,6 +263,7 @@ impl Default for Rules {
             logistics: HashMap::new(),
             resupply_rates: HashMap::new(),
             resupplying: HashMap::new(),
+            busy_states: HashSet::new(),
             recruit_lists: HashMap::new(),
             heroes: Vec::new(),
             faction_groups: HashMap::new(),

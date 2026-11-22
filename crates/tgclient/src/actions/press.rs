@@ -400,18 +400,6 @@ pub(super) fn sell_command(building: usize) -> tgsim::Command {
     tgsim::Command::Sell { building }
 }
 
-/// Whether a building can pack now: not while it's packing or unpacking,
-/// nor when it's too hurt.
-pub(super) fn can_pack(sim: &tgsim::World, building: usize) -> bool {
-    let b = &sim.buildings[building];
-    let floor = sim
-        .rules()
-        .packing
-        .get(&b.template)
-        .map_or(1.0, |p| p.health_min);
-    !b.busy() && b.health > floor * b.fighter.health * b.health_factor
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
