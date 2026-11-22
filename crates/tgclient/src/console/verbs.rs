@@ -557,7 +557,11 @@ pub(crate) fn help(args: &[&str]) -> Reply {
         [name] => {
             let v = find(name).ok_or("no such command")?;
             let dev = if v.dev { DEV_ONLY } else { "" };
-            Ok(format!("{} {}\n  {}{dev}", v.name, v.args, v.does))
+            let original = if v.original { ORIGINAL } else { "" };
+            Ok(format!(
+                "{} {}\n  {}{dev}{original}",
+                v.name, v.args, v.does
+            ))
         }
         _ => Err(usage("help")),
     }
@@ -582,6 +586,9 @@ pub(crate) fn exec(world: &mut World, args: &[&str], depth: usize) -> Reply {
 }
 
 /// What `help` adds to what a verb for developing the game does.
+/// What `help` adds about a verb the original games also have.
+const ORIGINAL: &str = "; the original games have it too, though not always taking the same words";
+
 pub(crate) const DEV_ONLY: &str = "; only with --dev, in a match no other machine shares";
 
 /// Why a verb for developing the game can't run, if it can't: only with
