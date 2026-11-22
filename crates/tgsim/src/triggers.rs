@@ -3,11 +3,11 @@
 //!
 //! An event, condition or effect not handled here never holds, or fails.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use tgmap::Id;
 use tgmap::triggers::{Element, Parameter, Trigger, Value};
+use tgmap::{Id, Shape};
 
 use crate::targets::Thing;
 use crate::{Notice, Piece, Refused, SECOND, Standing, State, TICK, World};
@@ -43,6 +43,13 @@ pub struct Triggers {
     /// `mi_kingdom_condition`, kept from one trigger and tick to the next.
     pub event_kingdom: Option<u32>,
     pub condition_kingdom: Option<u32>,
+    /// The map's areas, in its order.
+    pub(crate) areas: Arc<[tgmap::Area]>,
+    /// Who was in each of `areas` at its last check.
+    pub(crate) inside: Vec<Vec<Thing>>,
+    /// The soft shape of each organization template, which places a
+    /// regiment in an area.
+    pub(crate) organization_soft: Arc<HashMap<Id, Shape>>,
     /// What's happened since the last pass that the world doesn't keep.
     pub(crate) happened: Vec<Happening>,
     /// The interface commands the map listens for, in lower case.
@@ -74,6 +81,8 @@ pub(crate) enum Happening {
     /// A player ran an interface command the map listens for, in lower
     /// case.
     Heard { command: String },
+    /// A thing came into the area triggers name by this id.
+    Entered { area: u32, thing: Thing },
 }
 
 /// A thing that died since the last pass, with what last damaged it.
@@ -139,6 +148,9 @@ impl Triggers {
             suns: Vec::new(),
             counter: None,
             objectives: Arc::default(),
+            areas: Arc::default(),
+            inside: Vec::new(),
+            organization_soft: Arc::default(),
             event_kingdom: None,
             condition_kingdom: None,
             happened: Vec::new(),
@@ -164,6 +176,7 @@ impl crate::hash::Digest for Triggers {
         self.condition_kingdom.digest(h);
         self.listening.digest(h);
         self.selected.digest(h);
+        self.inside.digest(h);
     }
 }
 
@@ -175,6 +188,8 @@ const SELECTION: &[&str] = &[
 
 /// The events, conditions and effects carried out.
 const HANDLED: &[&str] = &[
+    "actor_enters_area",
+    "actor_inside_area",
     "event_script_heard",
     "effect_ui_script_listen",
     "actor_selected_by_kingdom",
@@ -413,6 +428,25 @@ impl World {
                 (latest == Some(k)).then(|| vec![Thing::Building(b)])
             }
             "actor_destroys_actor" => self.destroys(p, deaths),
+            "actor_enters_area" => {
+                let Some(Value::Int(id)) = p.get(1).map(|p| &p.value) else {
+                    return None;
+                };
+                let any = p.first().is_some_and(|p| p.source == "mi_actor_any");
+                let named = if any {
+                    None
+                } else {
+                    Some(self.thing(p.first())?)
+                };
+                let things: Vec<Thing> = (self.triggers.happened.iter())
+                    .filter_map(|h| match *h {
+                        Happening::Entered { area, thing } if area == *id => Some(thing),
+                        _ => None,
+                    })
+                    .filter(|&t| named.is_none_or(|n| n == t))
+                    .collect();
+                (!things.is_empty()).then_some(things)
+            }
             "event_script_heard" => {
                 let command = name(p.first())?.to_lowercase();
                 let heard =
@@ -528,6 +562,25 @@ impl World {
                 };
                 // Neither holds of a thing that isn't there.
                 thing(self).is_some_and(|t| self.in_trigger_state(t, state) == has)
+            }
+            "actor_inside_area" => {
+                let Some(area) = (p.get(1)).and_then(|p| match p.value {
+                    Value::Int(id) => self.area(id),
+                    _ => None,
+                }) else {
+                    return false;
+                };
+                let areas = Arc::clone(&self.triggers.areas);
+                let area = &areas[area];
+                if p.first().is_some_and(|p| p.source == "mi_actor_any") {
+                    let found = self.first_in(area);
+                    if found.is_some() {
+                        self.triggers.condition_thing = found;
+                    }
+                    return found.is_some();
+                }
+                let place = thing(self).and_then(|t| self.soft_place(t));
+                place.is_some_and(|o| area.touches(&o))
             }
             "actor_visible_to_kingdom" => match (thing(self), kingdom(self, 1)) {
                 (Some(t), Some(k)) => self.sees_thing(k, t),
@@ -1217,7 +1270,9 @@ mod tests {
     use super::{Happening, Triggers};
     use crate::experience::regiment_tests::veterans;
     use crate::heroes::tests::pool;
+    use crate::targets::Thing;
     use crate::testing::run;
+    use crate::testing::{at_war, battle, soldier};
     use crate::{Notice, Outcome, World};
     use tgmap::Id;
 
@@ -2237,6 +2292,110 @@ mod tests {
         assert!(late.is_err());
         w.tick();
         assert_eq!(count(&w, "moves"), 1.0);
+    }
+
+    /// Two regiments of player 1's, ids 1 and 3 with units 2 and 4, at
+    /// 10, 10 and 10, 20, and the map's areas.
+    fn among(areas: Vec<tgmap::Area>, triggers: Vec<Trigger>, variables: &[(&str, f32)]) -> World {
+        let fighters = vec![soldier(vec![]), soldier(vec![])];
+        let mut w = with(battle(&[1, 1], fighters, at_war()), triggers, variables);
+        let soft = tgmap::Shape::Circle { radius: 1.0 };
+        w.triggers.organization_soft = std::sync::Arc::new([("squad".into(), soft)].into());
+        w.triggers.inside = vec![Vec::new(); areas.len()];
+        w.triggers.areas = areas.into();
+        w
+    }
+
+    fn circle(id: u32, position: [f32; 2], radius: f32) -> tgmap::Area {
+        tgmap::Area {
+            id,
+            name: String::new(),
+            position,
+            facing: [0.0, -1.0],
+            outline: tgmap::AreaShape::Circle,
+            radius,
+        }
+    }
+
+    /// A box 4 a side.
+    fn square(id: u32, position: [f32; 2]) -> tgmap::Area {
+        tgmap::Area {
+            outline: tgmap::AreaShape::Box {
+                low: [-2.0, -2.0],
+                high: [2.0, 2.0],
+            },
+            ..circle(id, position, libm::hypotf(2.0, 2.0))
+        }
+    }
+
+    fn area(id: u32) -> Parameter {
+        parameter("ma_area", "mi_area", Value::Int(id))
+    }
+
+    #[test]
+    fn things_enter_an_area_each_time_they_come_into_it() {
+        let entered = |actor| element("actor_enters_area", vec![actor, area(7)]);
+        let mut w = among(
+            vec![circle(7, [10.0, 10.0], 2.0)],
+            vec![
+                heard(1, true, vec![entered(any())], vec![incr("any")]),
+                heard(2, true, vec![entered(actor_id(3))], vec![incr("named")]),
+            ],
+            &[("any", 0.0), ("named", 0.0)],
+        );
+        // What stands in it at the start enters on the first tick: the
+        // regiment and its unit, each.
+        w.tick();
+        assert_eq!((count(&w, "any"), count(&w, "named")), (2.0, 0.0));
+        w.tick();
+        assert_eq!(count(&w, "any"), 2.0);
+        // A regiment enters by its leader's place.
+        w.units[1].position = [11.0, 10.0];
+        w.tick();
+        assert_eq!((count(&w, "any"), count(&w, "named")), (4.0, 1.0));
+        // Leaving and coming back enters again.
+        w.units[1].position = [10.0, 20.0];
+        w.tick();
+        w.units[1].position = [11.0, 10.0];
+        w.tick();
+        assert_eq!((count(&w, "any"), count(&w, "named")), (6.0, 2.0));
+        // The dying leave.
+        let ticks = w.ticks;
+        w.units[1].die(ticks);
+        w.tick();
+        assert_eq!(
+            w.triggers.inside[0],
+            [Thing::Unit(0), Thing::Organization(0)]
+        );
+    }
+
+    #[test]
+    fn being_inside_is_tested_by_outline_or_for_anything_by_the_list_test() {
+        let inside = |actor| element("actor_inside_area", vec![actor, area(7)]);
+        let condition = parameter("ma_actor", "mi_actor_condition", Value::Int(0));
+        let first = element("actor_owned_by_kingdom", vec![condition, kingdom(1)]);
+        let mut w = among(
+            vec![square(7, [10.0, 23.5])],
+            vec![
+                trigger(
+                    1,
+                    true,
+                    true,
+                    vec![inside(actor_id(3))],
+                    vec![incr("named")],
+                ),
+                trigger(2, true, true, vec![inside(any()), first], vec![incr("any")]),
+            ],
+            &[("named", 0.0), ("any", 0.0)],
+        );
+        // Regiment 3 at 10, 20 is 3.5 off the middle of the box's side:
+        // within the area's radius grown by its own, but 1.5 from the
+        // outline.
+        w.tick();
+        assert_eq!((count(&w, "named"), count(&w, "any")), (0.0, 1.0));
+        w.units[1].position = [10.0, 21.0];
+        w.tick();
+        assert_eq!((count(&w, "named"), count(&w, "any")), (1.0, 2.0));
     }
 
     #[test]

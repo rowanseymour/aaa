@@ -730,6 +730,13 @@ impl Recruits {
             .unwrap_or_default()
     }
 
+    /// The soft shape of each organization template.
+    pub fn organization_soft(&self) -> HashMap<Id, Shape> {
+        (self.components.keys())
+            .filter_map(|t| Some((t.clone(), self.bodies.get(t)?.soft)))
+            .collect()
+    }
+
     /// Seconds commissioning or recruiting one of `template` takes.
     pub fn recruit_time(&self, template: &str) -> f32 {
         self.recruit_times
