@@ -787,6 +787,9 @@ pub struct Brief {
     pub teams: Vec<Team>,
     /// The world rules it stores, which a lobby starts from.
     pub rules: StoredRules,
+    /// The player the header names as the one played here, by id: the
+    /// side a campaign mission is played as.
+    pub local: Option<u32>,
 }
 
 impl Brief {
@@ -797,7 +800,12 @@ impl Brief {
         let err = |e: tgck::Error| format!("{name}: {e}");
         let header = map.header().map_err(err)?;
         let (players, teams) = read_sides(game, &mut map).map_err(err)?;
+        let local = (header.players.iter())
+            .find(|p| p.local == Some(true))
+            .and_then(|l| players.iter().find(|p| p.name == l.kingdom))
+            .map(|p| p.id);
         Ok(Brief {
+            local,
             name: map
                 .string(&header.name)
                 .map_err(err)?

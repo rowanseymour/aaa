@@ -42,10 +42,10 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
 |---------------------|---------|
 | Data files          | ✅ Maps and models read in full |
 | Rendering           | ✅ Ground, units, animations, effects |
-| UI                  | 🟡 Menus, lobby and in-match interface for custom games, and basic options |
+| UI                  | 🟡 Menus, lobby, campaign screen, in-match interface and debriefing, and basic options |
 | Movement and combat | ✅ Regiments move, fight, rout and take buildings and cities |
 | Economy and supply  | 🟡 Income, upkeep, supply, building, recruiting and research |
-| Campaign mode       | ⬜ Not started |
+| Campaign mode       | 🟡 Missions played in order from the campaign screen, but not yet their scripts |
 | Multiplayer         | 🟡 LAN games created, found and joined from the menus, and a standalone server |
 | Map editor          | 🟡 Basic viewing of maps and placed objects |
 | Loading and saving  | ⬜ Not started |

@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use tgsim::{Objective, Outcome, Standing};
 
+use crate::campaigns::{Campaigns, Playing, Progress};
 use crate::ui::{Font, Ink, Surface, button, called, label, panel};
 use crate::{Loaded, Local, Screen, Sim, confirm};
 
@@ -19,7 +20,12 @@ impl Plugin for LeavingPlugin {
         app.add_systems(OnExit(Screen::Match), put_away)
             .add_systems(OnEnter(Screen::Debriefing), spawn);
         // A match can also be left, or fail to load, before it's begun.
-        for entered in [Screen::MainMenu, Screen::Lobby, Screen::Lan] {
+        for entered in [
+            Screen::MainMenu,
+            Screen::Lobby,
+            Screen::Lan,
+            Screen::Campaign,
+        ] {
             let left = OnTransition {
                 exited: Screen::Loading,
                 entered,
@@ -46,6 +52,19 @@ pub(crate) struct Debrief {
     objectives: Vec<Objective>,
     /// The boxes a completed objective and any other are drawn behind.
     icons: [Option<String>; 2],
+    /// The campaign mission it was, if one.
+    campaign: Option<Debriefed>,
+}
+
+/// What the debriefing of a campaign mission adds.
+#[derive(Clone, Debug)]
+struct Debriefed {
+    playing: Playing,
+    /// What the campaign says of it, won or not.
+    said: String,
+    /// Whether there's a mission after it to go on to: there is once it's
+    /// complete, unless it's the campaign's last.
+    next: bool,
 }
 
 /// The entities that were there before the match began loading, which
@@ -66,8 +85,16 @@ pub(crate) fn note_kept(world: &mut World) {
     world.insert_resource(Kept(kept));
 }
 
+/// The campaign mission being played, if one, and the campaigns' state.
+type InCampaign<'w> = (
+    Option<Res<'w, Playing>>,
+    Option<Res<'w, Campaigns>>,
+    Option<ResMut<'w, Progress>>,
+);
+
 /// Leaves the match for its debriefing, or for the menus with none if
-/// it hasn't begun.
+/// it hasn't begun. A campaign mission won is complete from here.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn end_mission(
     _: On<Activate>,
     mut commands: Commands,
@@ -75,6 +102,7 @@ pub(crate) fn end_mission(
     local: Res<Local>,
     loaded: Option<Res<Loaded>>,
     mission: Option<Res<Mission>>,
+    campaign: InCampaign<'_>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let (Some(sim), Some(loaded)) = (sim, loaded) else {
@@ -85,13 +113,41 @@ pub(crate) fn end_mission(
     let won = side.is_some_and(|s| sim.0.outcome(s) == Outcome::Won);
     let held = side.and_then(|s| sim.0.objectives.get(&s));
     let looks = loaded.game.objective_looks();
+    let debriefed = match campaign {
+        (Some(playing), Some(campaigns), Some(mut progress)) => {
+            debrief(&playing, &campaigns, &mut progress, won)
+        }
+        _ => None,
+    };
     commands.insert_resource(Debrief {
         title: mission.map_or_else(|| loaded.map.title.clone(), |m| m.title.clone()),
         won,
         objectives: held.map(|h| h.0.clone()).unwrap_or_default(),
         icons: [looks.completed.icon, looks.failed.icon],
+        campaign: debriefed,
     });
     next.set(Screen::Debriefing);
+}
+
+/// What the debriefing of a campaign mission says, marking it complete
+/// if it was `won`.
+fn debrief(
+    playing: &Playing,
+    campaigns: &Campaigns,
+    progress: &mut Progress,
+    won: bool,
+) -> Option<Debriefed> {
+    let c = campaigns.list.get(playing.campaign)?;
+    let m = c.missions.get(playing.mission)?;
+    if won {
+        progress.completed(&c.id, playing.mission);
+    }
+    let complete = playing.mission < progress.complete(&c.id);
+    Some(Debriefed {
+        said: if won { &m.success } else { &m.failure }.clone(),
+        next: complete && playing.mission + 1 < c.missions.len(),
+        playing: playing.clone(),
+    })
 }
 
 /// Asks whether to end the mission, and leaves for the debriefing if so.
@@ -217,6 +273,14 @@ fn spawn(
         label(result.clone(), Font::Body, Ink::Body),
         ChildOf(status),
     ));
+    if let Some(debriefed) = &debrief.campaign
+        && !debriefed.said.is_empty()
+    {
+        commands.spawn((
+            label(debriefed.said.clone(), Font::Body, Ink::Body),
+            ChildOf(status),
+        ));
+    }
     let headings = [
         (said("debriefing_Label_text_2", "Primary Objectives"), true),
         (
@@ -264,13 +328,48 @@ fn spawn(
             },
         ))
         .id();
+    let mut exit = Screen::MainMenu;
+    if let Some(Debriefed { playing, next, .. }) = &debrief.campaign {
+        exit = Screen::Campaign;
+        let Playing { campaign, mission } = *playing;
+        if *next {
+            commands
+                .spawn((
+                    button(
+                        said("debriefing_Client_View_text_4", "Next Mission"),
+                        Font::Large,
+                    ),
+                    called("debriefing.next"),
+                    ChildOf(right),
+                ))
+                .observe(move |_: On<Activate>, mut commands: Commands| {
+                    commands.queue(move |world: &mut World| {
+                        crate::campaigns::play(world, campaign, mission + 1, false)
+                    });
+                });
+        }
+        commands
+            .spawn((
+                button(
+                    said("debriefing_Client_View_text_3", "Replay Mission"),
+                    Font::Large,
+                ),
+                called("debriefing.replay"),
+                ChildOf(right),
+            ))
+            .observe(move |_: On<Activate>, mut commands: Commands| {
+                commands.queue(move |world: &mut World| {
+                    crate::campaigns::play(world, campaign, mission, true)
+                });
+            });
+    }
     commands
         .spawn((
             button(said("debriefing_Client_View_text_5", "Exit"), Font::Large),
             called("debriefing.exit"),
             ChildOf(right),
         ))
-        .observe(crate::menu::go(Screen::MainMenu));
+        .observe(crate::menu::go(exit));
 }
 
 #[cfg(test)]

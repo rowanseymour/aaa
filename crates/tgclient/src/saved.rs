@@ -122,6 +122,11 @@ impl Saved {
         }
     }
 
+    /// Where the options are kept, if anywhere.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     /// Nothing chosen, and nowhere to keep what is.
     pub fn none() -> Saved {
         Saved {

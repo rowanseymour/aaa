@@ -8,6 +8,7 @@
 //! share what it keeps: a table read on one is there for the others.
 
 mod audio;
+mod campaigns;
 
 mod combat;
 mod combat_value;
@@ -50,6 +51,7 @@ pub use audio::{
     AnimationAudio, Audio, AudioCategory, AudioControl, AudioPriority, AudioWho, AudioWorld, Cue,
     MusicSettings, ObjectAudio, SoundSwitches, Volumes,
 };
+pub use campaigns::{Campaign, Mission, MissionKind};
 pub use combat::{
     AimHeights, Body, Choice, Damage, Does, Fighter, Flight, FlightKind, PropertyTypes, Ratings,
     Repair, Shape, Targets, Turret, Weapon, WeaponHit, WeaponShown,
