@@ -136,6 +136,7 @@ impl World {
                 building.template
             );
             self.buildings[b].unpacked_from = Some(r);
+            self.empty_hangar(b);
             let ticks = (unpacks.seconds / TICK).round() as u64;
             self.buildings[b].unpacking = Some((self.ticks, self.ticks + ticks));
         }
@@ -237,6 +238,8 @@ impl World {
             }
         }
         self.buildings[b].state = State::Packed(self.ticks, r);
+        // A truck keeps no stock.
+        self.empty_hangar(b);
     }
 
     /// Puts the members of an organization that unpacked back on the map, in

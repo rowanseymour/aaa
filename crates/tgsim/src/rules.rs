@@ -175,6 +175,14 @@ pub struct Rules {
     /// The aircraft that flies in each organization template that's
     /// delivered, by template.
     pub airlifts: HashMap<Id, tgmap::Airlift>,
+    /// What each building with a stock of aircraft keeps and sends out,
+    /// by template.
+    pub airfields: HashMap<Id, tgmap::Airfield>,
+    /// How each template that flies flies, by template.
+    pub aircraft: HashMap<Id, tgmap::Aircraft>,
+    /// What a building's aircraft are rebuilt and repaired at while it's
+    /// under siege, as a share of the usual.
+    pub denizen_siege_rate: f32,
     /// How each template falls when it's dropped, by template.
     pub falls: HashMap<Id, tgmap::Fall>,
     /// World units a second each second that what falls gains.
@@ -280,6 +288,9 @@ impl Default for Rules {
             faction_groups: HashMap::new(),
             raisable: HashMap::new(),
             airlifts: HashMap::new(),
+            airfields: HashMap::new(),
+            aircraft: HashMap::new(),
+            denizen_siege_rate: 0.25,
             falls: HashMap::new(),
             gravity: 49.05,
             plane_fall_tweak: 0.005,

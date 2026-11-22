@@ -76,6 +76,11 @@ const RESEARCH: &str = "research";
 const PACK: &str = "pack";
 /// The command that sells a building.
 const SELL: &str = "sell";
+/// The command that sends out an airfield's air attack.
+pub const AIR_ATTACK: &str = "air_attack";
+/// The commands that switch an airfield's escort on and off.
+const ESCORT_ON: &str = "escort_on";
+const ESCORT_OFF: &str = "escort_off";
 /// The command that sets where what a building commissions moves on to.
 pub const RALLY: &str = "set_rally_point";
 
@@ -167,6 +172,9 @@ pub enum Page {
     /// Waiting for a click on the map to set the selected building's
     /// rally point there.
     Rally,
+    /// Waiting for a click on the map, or a thing on it, to send the
+    /// selected airfield's air attack there.
+    AirAttack,
     /// Waiting for a click on the map to have the selected building
     /// deliver there the entry at this index into its menu.
     Delivering(usize),
@@ -229,6 +237,10 @@ pub enum Entry {
     Sell,
     /// Waits for a place to set the selected building's rally point.
     Rally,
+    /// Waits for a target for the selected airfield's air attack.
+    AirAttack,
+    /// Switches the selected airfield's escort on or off.
+    Escort,
     /// Selects the organizations attached to the selected HQ.
     CommandAll,
     /// Index into what the selection can build.
@@ -273,7 +285,7 @@ pub struct Refusal(Option<(usize, tgsim::Refused)>);
 pub fn aiming(page: Res<Page>) -> bool {
     matches!(
         *page,
-        Page::Aiming(_) | Page::Rally | Page::Delivering(_) | Page::Placing(_)
+        Page::Aiming(_) | Page::Rally | Page::AirAttack | Page::Delivering(_) | Page::Placing(_)
     )
 }
 
@@ -299,7 +311,7 @@ pub fn back_out(
         Page::Placing(_) | Page::Menu(Menu::Build) => builder.is_none() || rebuilt,
         Page::Aiming(_) => selected.0.is_empty(),
         Page::Menu(_) => chosen.0.is_none() || switched,
-        Page::Rally => chosen.0.is_none(),
+        Page::Rally | Page::AirAttack => chosen.0.is_none(),
         Page::Delivering(_) => chosen.0.is_none() || switched,
     };
     // Escape closes a display panel that's up, not the page under it.

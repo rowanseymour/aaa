@@ -290,7 +290,8 @@ impl Effects {
             weapon: Some(landing.weapon),
             landed: Some(landing.at),
         };
-        let target = Some(landing.target);
+        // A shot at the ground names its shooter as its target.
+        let target = Some(landing.target).filter(|&t| t != landing.from);
         let landed = (weapon.projectile.as_ref())
             .and_then(|p| self.objects.get(p))
             .map(|o| o.destroyed.clone())
@@ -301,7 +302,9 @@ impl Effects {
             landed: None,
             ..when
         };
-        self.queue(when, &per_target, Source::Thing(landing.from), target);
+        if target.is_some() {
+            self.queue(when, &per_target, Source::Thing(landing.from), target);
+        }
     }
 
     /// Queues what plays as a special operation is used, on the ground at
@@ -828,6 +831,7 @@ mod tests {
             range: 10.0,
             min_range: 0.0,
             recharge: 1.0,
+            mana_cost: 0.0,
             area: 0.0,
             max_targets: 0,
             full_within: 0.0,

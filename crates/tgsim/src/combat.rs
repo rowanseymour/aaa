@@ -386,6 +386,7 @@ impl World {
     pub(crate) fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
         let mut launched = Vec::new();
+        self.air_shots(&mut hits, &mut launched);
         // Buildings that defend themselves sit idle until woken, and once
         // woken fire even while disabled.
         let defends = |b: usize| self.buildings[b].fighter.notice.is_some();
@@ -472,7 +473,7 @@ impl World {
                 fired_ago[w] = 0.0;
                 self.use_on_user(weapon, (s, by), &mut hits);
                 match weapon.flight {
-                    Some(flight) => launched.push(self.launch(s, by, w, weapon, flight, t)),
+                    Some(flight) => launched.push(self.launch(s, by, w, weapon, flight, t, None)),
                     None => {
                         let bombard = self.bombards(s, weapon);
                         let at = self.impact(s, weapon, self.position(t));
@@ -542,6 +543,10 @@ impl World {
     /// the weapon, hold until it's ready or for [`WAIT_SECONDS`] if that's
     /// sooner, or go after its target.
     fn act(&mut self, u: usize, hits: &mut Vec<Hit>, launched: &mut Vec<Projectile>) {
+        // What flies fires as its sortie has it, in [`World::air_shots`].
+        if self.units[u].aloft {
+            return;
+        }
         let unit = &mut self.units[u];
         for ago in unit.fired_ago.iter_mut().chain(&mut unit.mended_ago) {
             *ago += TICK;
@@ -588,20 +593,37 @@ impl World {
         }
         let fighter = unit.fighter.as_ref().expect("units that pick can fight");
         let weapon = fighter.weapons[pick.weapon].clone();
-        unit.shot = Some((self.ticks, pick.weapon));
-        unit.fired_ago[pick.weapon] = 0.0;
+        self.use_weapon(u, pick.weapon, &weapon, t, None, hits, launched);
+    }
+
+    /// Has the unit at `u` use its weapon `w`, `weapon`, on `t` now, or at
+    /// the ground at `place`, `t` then standing for nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn use_weapon(
+        &mut self,
+        u: usize,
+        w: usize,
+        weapon: &Weapon,
+        t: Target,
+        place: Option<[f32; 2]>,
+        hits: &mut Vec<Hit>,
+        launched: &mut Vec<Projectile>,
+    ) {
+        let unit = &mut self.units[u];
+        unit.shot = Some((self.ticks, w));
+        unit.fired_ago[w] = 0.0;
         unit.busy = self.ticks + (weapon.choice.lasts / TICK).round() as u64;
         self.play_once(u, weapon.animation.as_deref());
         self.units[u].fired_in_fight = true;
         let s = Target::Unit(u);
         let by = self.owner(s);
-        self.use_on_user(&weapon, (s, by), hits);
+        self.use_on_user(weapon, (s, by), hits);
         match weapon.flight {
-            Some(flight) => launched.push(self.launch(s, by, pick.weapon, &weapon, flight, t)),
+            Some(flight) => launched.push(self.launch(s, by, w, weapon, flight, t, place)),
             None => {
-                let bombard = self.bombards(s, &weapon);
-                let at = self.impact(s, &weapon, self.position(t));
-                self.strike(&weapon, at, t, (s, by), bombard, hits)
+                let bombard = self.bombards(s, weapon);
+                let at = self.impact(s, weapon, place.unwrap_or_else(|| self.position(t)));
+                self.strike(weapon, at, t, (s, by), bombard, hits)
             }
         }
     }
@@ -616,10 +638,11 @@ impl World {
     }
 
     /// The projectile `s`, of player `by`, fires with its weapon `w` at
-    /// `t`: flying for its life if it has one, else from `s` to where it
-    /// aims at its speed, and aimed ahead of a moving target by as far as
-    /// it moves in that time. Heights aren't simulated, so distances are
-    /// across the ground.
+    /// `t`, or at the ground at `place`: flying for its life if it has
+    /// one, else from `s` to where it aims at its speed, and aimed ahead of
+    /// a moving target by as far as it moves in that time. Heights aren't
+    /// simulated, so distances are across the ground.
+    #[allow(clippy::too_many_arguments)]
     fn launch(
         &self,
         s: Target,
@@ -628,19 +651,20 @@ impl World {
         weapon: &Weapon,
         flight: tgmap::Flight,
         t: Target,
+        place: Option<[f32; 2]>,
     ) -> Projectile {
-        let aim = self.position(t);
+        let aim = place.unwrap_or_else(|| self.position(t));
         let seconds = match (flight.life > 0.0, flight.speed > 0.0) {
             (true, _) => flight.life,
             (false, true) => distance(self.position(s), aim) / flight.speed,
             (false, false) => 0.0,
         };
-        let velocity = match t {
-            Target::Unit(u) => {
+        let velocity = match (t, place) {
+            (Target::Unit(u), None) => {
                 let u = &self.units[u];
                 [0, 1].map(|i| (u.position[i] - u.previous[i]) / TICK)
             }
-            Target::Building(_) => [0.0; 2],
+            _ => [0.0; 2],
         };
         Projectile {
             from: s,

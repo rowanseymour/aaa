@@ -17,7 +17,22 @@ use super::log::{About, Fill, Look, MessageLog, Place, Words, fill_all};
 #[derive(Message)]
 pub struct Refused {
     pub about: About,
-    pub by: Option<Aim>,
+    pub by: Option<By>,
+}
+
+/// An order that refuses what it's aimed at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum By {
+    /// One of the organizations' orders.
+    Aim(Aim),
+    /// The selected airfield's air attack.
+    AirAttack,
+}
+
+impl From<Aim> for By {
+    fn from(aim: Aim) -> By {
+        By::Aim(aim)
+    }
 }
 
 /// An order the sim refused, as the player's told.
@@ -44,12 +59,16 @@ pub fn refuse(
             About::Building(b) => log.look.building(&sim.0, b),
         };
         let text = match by {
-            Some(aim) => {
+            Some(by) => {
                 let said = log.look.said(
                     "ui_error_command_target_actor|ss",
                     "%s is an invalid target for %s",
                 );
-                fill(&said, &[&name, looks.order(*aim)])
+                let order = match by {
+                    By::Aim(aim) => looks.order(*aim),
+                    By::AirAttack => &looks.air_attack.1.name,
+                };
+                fill(&said, &[&name, order])
             }
             None => {
                 let said = log
@@ -418,6 +437,19 @@ pub(crate) fn told(
             let cost = sim.site_cost(&template).ceil().to_string();
             let text = fill(&said, &[&look.name(template.as_str()), &cost]);
             Told::Line("GENERIC_ERROR", text, at(About::Organization(organization)))
+        }
+        Notice::AirAttackUnaffordable {
+            player,
+            building,
+            cost,
+        } if ours(player) => {
+            let said = look.said(
+                "denizen_error_affording|ss",
+                "Insufficient funds for %s. Requires %s.",
+            );
+            let job = look.said("denizen_air_attack", "Air Attack");
+            let text = fill(&said, &[&job, &cost.ceil().to_string()]);
+            Told::Line("GENERIC_ERROR", text, at(About::Building(building)))
         }
         Notice::NotBuilt {
             player,

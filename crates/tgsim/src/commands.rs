@@ -118,6 +118,8 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.may_cancel_construction(player, building)
             }
+            Command::AirAttack { building, on, .. } => self.may_air_attack(player, building, on),
+            Command::Escort { building, .. } => self.may_set_escort(player, building),
             Command::Heard { ref command } => self.may_hear(command),
             Command::Select { ref pieces } => self.may_select(pieces),
         }
@@ -256,6 +258,10 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.cancel_construction(player, building)?
             }
+            Command::AirAttack { building, at, on } => {
+                self.order_air_attack(player, building, at, on)?
+            }
+            Command::Escort { building, on } => self.set_escort(player, building, on)?,
             Command::Group { orders } => self.order_group(player, orders)?,
             Command::Heard { command } => self.hear(&command)?,
             Command::Select { pieces } => {

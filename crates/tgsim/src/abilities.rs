@@ -41,7 +41,7 @@ impl World {
     /// Whether the unit at `u` has `weapon` to use: it holds all the
     /// properties it needs, its organization's level is within its limits,
     /// and it's a bombarding one while its organization bombards.
-    fn has(&self, u: usize, weapon: &Weapon) -> bool {
+    pub(crate) fn has(&self, u: usize, weapon: &Weapon) -> bool {
         let organization = &self.organizations[self.units[u].organization];
         let [lowest, highest] = weapon.choice.levels;
         let level = organization.level;

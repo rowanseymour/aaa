@@ -91,6 +91,14 @@ pub enum Notice {
         organization: usize,
         template: Id,
     },
+    /// An airfield of its, by index into [`World::buildings`], was
+    /// ordered to send out an air attack, which costs `cost` in money, that
+    /// it couldn't pay for.
+    AirAttackUnaffordable {
+        player: u32,
+        building: usize,
+        cost: f32,
+    },
     /// The building of `template` an organization of its was to put up
     /// couldn't be made.
     NotBuilt {

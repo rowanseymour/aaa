@@ -28,15 +28,15 @@ pub mod triggers {
     pub use tgck::map::{Element, Parameter, Trigger, Triggers, Value};
 }
 pub use tgdata::{
-    ANY_DAMAGE, Affliction, Airlift, Amounts, AnimationSet, BLEEDING, CHASING, Choice,
-    CombatAbility, CombatEffect, CombatProfile, CombatValueRules, Damage, Death, DeployPoints,
-    Does, ENGAGED, ENTRENCHED, EXHAUSTED, Economy, EconomyEffect, EconomyRules, Efficiency,
-    Enchantment, Entrenchment, EntrenchmentRate, ExperienceGains, Fall, Fighter, Flight,
-    FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Level, Levels, Logistics, Lookout,
-    MoraleEffect, MoraleRules, Operation, PropertyTypes, REFORMING, RESTING, ROUTING, Ratings,
-    Repair, Requires, Research, ResourceKind, RoutRules, Shape, Sight, Stance, Strike, Summon,
-    Supply, SupplyEffect, SupplyRules, TARGETED, Targets, TerrainEffect, TerrainRules, Turret,
-    Weapon, WeaponHit,
+    ANY_DAMAGE, Affliction, AirGroup, AirJob, Aircraft, Airfield, Airlift, Amounts, AnimationSet,
+    BLEEDING, CHASING, Choice, CombatAbility, CombatEffect, CombatProfile, CombatValueRules,
+    Damage, Death, DeployPoints, Does, ENGAGED, ENTRENCHED, EXHAUSTED, Economy, EconomyEffect,
+    EconomyRules, Efficiency, Enchantment, Entrenchment, EntrenchmentRate, ExperienceGains, Fall,
+    Fighter, Flight, FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Level, Levels,
+    Logistics, Lookout, MoraleEffect, MoraleRules, Operation, PropertyTypes, REFORMING, RESTING,
+    ROUTING, Ratings, Repair, Requires, Research, ResourceKind, RoutRules, Runway, Shape, Sight,
+    Stance, Strike, Summon, Supply, SupplyEffect, SupplyRules, TARGETED, Targets, TerrainEffect,
+    TerrainRules, Turret, Weapon, WeaponHit,
 };
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};

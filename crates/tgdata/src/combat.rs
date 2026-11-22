@@ -80,6 +80,9 @@ pub struct Fighter {
     pub notice: Option<f32>,
     /// The parts that turn to aim its weapons.
     pub turrets: Vec<Turret>,
+    /// The mana it starts with and holds at most, which its weapons'
+    /// [`Weapon::mana_cost`] is paid from.
+    pub mana: f32,
     /// Its soft shape: area shots reach as far as the circle round it.
     pub soft: Shape,
     /// The outline weapons' ranges run to and from.
@@ -114,6 +117,8 @@ pub struct Weapon {
     pub min_range: f32,
     /// Seconds between shots.
     pub recharge: f32,
+    /// The mana each shot takes from its fighter's [`Fighter::mana`].
+    pub mana_cost: f32,
     /// Radius of the area a shot hits, 0 for only its target.
     pub area: f32,
     /// The most an area shot hits, the nearest where it lands; 0 for all
@@ -692,6 +697,7 @@ pub(crate) fn fighter(
     fighter.turrets = turrets.iter().map(|(_, t)| t.clone()).collect();
     if let Some(p) = &thing.performer_component {
         fighter.check_resistance = p.check_damage_resistance;
+        fighter.mana = p.mana_max.unwrap_or(0.0);
         fighter.bonus = Ratings {
             move_into_range: p.move_bonus.unwrap_or(0.0),
             use_now: p.use_bonus.unwrap_or(0.0),
@@ -711,6 +717,7 @@ pub(crate) fn fighter(
             range,
             min_range: d.min_range,
             recharge: d.recharge_time,
+            mana_cost: d.mana_cost,
             area: d.area,
             max_targets: d.max_targets.unwrap_or(0),
             full_within: d.attenuation_range_min.unwrap_or(1.0),
