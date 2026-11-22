@@ -3,7 +3,7 @@
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
-use super::displays::{Glyph, Lighting, Rim, RimLook, light, rim_button};
+use super::displays::{Glyph, Lighting, Quadrant, RimLook, light, rim_button};
 use crate::Loaded;
 use crate::clock::{PAUSE, PAUSE_BUTTON, PauseState, Pauses};
 use crate::displays;
@@ -35,7 +35,7 @@ pub fn spawn(
         formats.0,
     );
     commands.spawn((
-        rim_button(Rim::BottomRight, glyph, Click::TOGGLE),
+        rim_button(Quadrant::BottomRight.at(0), glyph, Click::TOGGLE),
         Named::new(&bindings, PAUSE, name),
         (Asks::new(PAUSE), Hint(help)),
         crate::ui::called(PAUSE_BUTTON),

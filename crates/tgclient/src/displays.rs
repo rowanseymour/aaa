@@ -1,6 +1,7 @@
 //! The display panels: windows over the match, each opened by a button
 //! of either interface's or by its key, one at a time. The match
-//! holds still while one's up, unless it was already.
+//! holds still while one's up, unless it was already. A panel opens only
+//! while the interface has spawned its window.
 
 use std::collections::HashMap;
 
@@ -20,7 +21,12 @@ use tgsim::Action;
 /// What the key that closes whichever panel is up is bound to.
 pub(crate) const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
 
-pub(crate) const PANELS: [Panel; 3] = [Panel::Objectives, Panel::Technologies, Panel::MessageLog];
+pub(crate) const PANELS: [Panel; 4] = [
+    Panel::Objectives,
+    Panel::Technologies,
+    Panel::MessageLog,
+    Panel::Politics,
+];
 
 /// The layout the windows' places and sizes are given on.
 const LAYOUT: Vec2 = Vec2::new(1024.0, 768.0);
@@ -30,6 +36,7 @@ pub enum Panel {
     Objectives,
     Technologies,
     MessageLog,
+    Politics,
 }
 
 impl Panel {
@@ -40,6 +47,8 @@ impl Panel {
             Panel::Objectives => ("ButtonObjectives", "ObjectivesDisplayClose"),
             Panel::Technologies => ("ButtonTechnology", "TechnologyDisplayClose"),
             Panel::MessageLog => ("ButtonMessageLog", "MessageLogToggle"),
+            // Its button's all the hotkey files have to close it.
+            Panel::Politics => (crate::politics::BUTTON, crate::politics::BUTTON),
         }
     }
 
@@ -50,6 +59,7 @@ impl Panel {
             Panel::Objectives => "panel.objectives",
             Panel::Technologies => "panel.technologies",
             Panel::MessageLog => "panel.messages",
+            Panel::Politics => crate::politics::CALLED,
         }
     }
 
@@ -60,6 +70,7 @@ impl Panel {
             Panel::Objectives => "ObjectivesDisplay",
             Panel::Technologies => "TechnologyDisplay",
             Panel::MessageLog => "SideMessageLogPanel",
+            Panel::Politics => crate::politics::WIDGET,
         }
     }
 }
@@ -85,9 +96,7 @@ impl Displays {
     /// Whether a key pressing `widget` is heard while a panel's up: only
     /// the panels' own buttons, which put another in its place.
     pub fn passes(&self, widget: &str) -> bool {
-        // The politics panel isn't one of them, and stays up beside them.
-        let politics = widget.eq_ignore_ascii_case(crate::politics::BUTTON);
-        politics || (PANELS.iter()).any(|p| p.keys().0.eq_ignore_ascii_case(widget))
+        (PANELS.iter()).any(|p| p.keys().0.eq_ignore_ascii_case(widget))
     }
 
     /// Keeps the match paused when the panel closes, as a pause asked for
@@ -104,7 +113,13 @@ pub fn closed(displays: Option<Res<Displays>>) -> bool {
 
 /// A panel's window.
 #[derive(Component)]
-struct PanelWindow(Panel);
+pub struct PanelWindow(Panel);
+
+/// Whether the interface has a window for `panel`, so it's one of these
+/// panels rather than drawn some other way.
+pub fn windowed(panel: Panel) -> impl Fn(Query<&PanelWindow>) -> bool {
+    move |windows| windows.iter().any(|w| w.0 == panel)
+}
 
 /// The box a panel's window shows its contents in.
 #[derive(Component)]
@@ -154,12 +169,12 @@ fn reset(mut displays: ResMut<Displays>) {
 }
 
 /// Spawns a panel's window, hidden: its title, the box it shows its
-/// contents in, and a Close button. Returns the box.
-pub fn spawn_window(commands: &mut Commands, window: Window) -> Entity {
+/// contents in, and a Close button. Returns the window and the box.
+pub fn spawn_window(commands: &mut Commands, window: Window) -> (Entity, Entity) {
     let at = |v: f32, of: f32| percent(100.0 * v / of);
     let panel = window.panel;
     let mut contents = Entity::PLACEHOLDER;
-    commands
+    let spawned = commands
         .spawn((
             PanelWindow(panel),
             Blocks,
@@ -219,8 +234,9 @@ pub fn spawn_window(commands: &mut Commands, window: Window) -> Entity {
                         Asks::new(panel.keys().1),
                     ));
                 });
-        });
-    contents
+        })
+        .id();
+    (spawned, contents)
 }
 
 /// A darker pane in a window, for a list to go in.
@@ -266,6 +282,13 @@ impl Toggling<'_, '_> {
         self.show();
     }
 
+    /// Closes `panel` if it's up.
+    pub fn close_panel(&mut self, panel: Panel) {
+        if self.displays.is_open(panel) {
+            self.close();
+        }
+    }
+
     /// Closes whichever panel's up, letting the match go on if opening it
     /// held it.
     pub fn close(&mut self) {
@@ -291,6 +314,7 @@ impl Toggling<'_, '_> {
 /// it.
 fn keys(mut intents: MessageReader<Intent>, mut toggling: Toggling) {
     let asked = Asked::read(&mut intents);
+    let windowed = |panel: Panel| (toggling.windows.iter()).any(|(w, _)| w.0 == panel);
     let wants = |name: &str| asked.wants(name);
     if let Some(open) = toggling.displays.open
         && (wants(open.keys().1) || wants(CLOSE_ALL))
@@ -298,7 +322,8 @@ fn keys(mut intents: MessageReader<Intent>, mut toggling: Toggling) {
         toggling.close();
         return;
     }
-    if let Some(&panel) = PANELS.iter().find(|p| wants(p.keys().0)) {
+    let panel = (PANELS.iter()).find(|&&p| wants(p.keys().0) && windowed(p));
+    if let Some(&panel) = panel {
         toggling.toggle(panel);
     }
 }
@@ -456,6 +481,32 @@ mod tests {
             .trigger(bevy::ui_widgets::Activate { entity: button });
         app.update();
         assert!(open(&app) == Some(Panel::Technologies));
+    }
+
+    #[test]
+    fn politics_is_a_panel_only_where_it_has_a_window() {
+        let mut app = app();
+        let press = |app: &mut App| {
+            let button = app.world_mut().spawn(Asks::new(crate::politics::BUTTON));
+            let entity = button.id();
+            app.world_mut()
+                .trigger(bevy::ui_widgets::Activate { entity });
+            app.update();
+        };
+        press(&mut app);
+        assert!(open(&app).is_none());
+        let window = (PanelWindow(Panel::Politics), Node::default());
+        app.world_mut().spawn(window);
+        press(&mut app);
+        assert!(open(&app) == Some(Panel::Politics) && paused(&app));
+        press(&mut app);
+        assert!(open(&app).is_none() && !paused(&app));
+        // Esc closes it though the hotkey files give it no key.
+        press(&mut app);
+        super::tests::press(&mut app, KeyCode::Escape);
+        assert!(open(&app).is_none() && !paused(&app));
+        let menu = app.world_mut().run_system_cached(pause::closed);
+        assert!(menu.unwrap());
     }
 
     fn paused(app: &App) -> bool {

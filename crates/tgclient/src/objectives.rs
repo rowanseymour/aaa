@@ -74,7 +74,7 @@ fn spawn(
             image.map(|i| images.add(i)).unwrap_or_default(),
         )
     });
-    let contents = displays::spawn_window(
+    let (_, contents) = displays::spawn_window(
         &mut commands,
         Window {
             panel: Panel::Objectives,

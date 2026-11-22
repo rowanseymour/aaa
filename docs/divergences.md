@@ -22,6 +22,10 @@ differences in what you can see or do are.
   panel is open. The original's flips with each press whatever closed the panel, so
   closing it with Backspace leaves the button lit. See
   [politics.rs](../crates/tgclient/src/politics.rs).
+- **Politics window.** Politics opens in a window like the objectives', which holds
+  the match still and takes another's place, rather than a panel left open
+  beside the others, to keep it off the screen while playing. See
+  [hud/modern/politics.rs](../crates/tgclient/src/hud/modern/politics.rs).
 
 The original's own in-match interface can be chosen instead (see [New options](#new-options)),
 drawn from its layouts and its nations' skins. It and the view under it are kept at

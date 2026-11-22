@@ -1,12 +1,14 @@
 //! The politics panel, as either interface shows it: a row for each side
 //! played in the match, in side order, with how the player here stands to
-//! it, as the politics spec has it. Unlike the display panels it's no
-//! window: it doesn't hold the match still or close them.
+//! it, as the politics spec has it. Where the interface gives it a window
+//! it's one of the [display panels](crate::displays); otherwise it's no
+//! window, and doesn't hold the match still or close them.
 
 use bevy::prelude::*;
 use tgdata::GameData;
 use tgmap::Relation;
 
+use crate::displays::Panel;
 use crate::intent::{Asked, Intent};
 use crate::messages::MessageLog;
 use crate::{Leaders, Loaded, Local, Screen, Sim};
@@ -166,7 +168,8 @@ impl Plugin for PoliticsPlugin {
             .add_systems(
                 Update,
                 (
-                    keys.after(crate::keys::send).before(crate::displays::Keys),
+                    (keys.after(crate::keys::send).before(crate::displays::Keys))
+                        .run_if(not(crate::displays::windowed(Panel::Politics))),
                     rows,
                 )
                     .before(crate::hud::Draw)

@@ -1,8 +1,7 @@
 //! Our resource bar in the window's upper right corner: the shared
 //! [cells](crate::resource_bar::Cell) in a bar, and a second bar under it
 //! previewing what the order under the cursor would make of them, with
-//! the [times](super::times) beside it, and the
-//! [politics](super::politics) button after it and panel under it.
+//! the [times](super::times) beside it.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
@@ -35,36 +34,10 @@ pub fn spawn(
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     mut cache: ResMut<crate::ui::ImageCache>,
-    (mut icons, formats): (
-        ResMut<crate::displays::Icons>,
-        Res<bevy::image::CompressedImageFormatSupport>,
-    ),
-    bindings: Res<crate::keys::Bindings>,
 ) {
     let game = &loaded.game;
     let strings = game.strings();
     let said = crate::ui::said(&strings);
-    let politics_glyph = icons.get(
-        game,
-        &crate::displays::icon("politics"),
-        &mut images,
-        formats.0,
-    );
-    let politics_words = (
-        said("control_panel_ButtonPolitics_ToolTip", "Display Politics"),
-        said(
-            "control_panel_ButtonPolitics_tooltip_2",
-            "Shows all sides and their relation to your side.",
-        ),
-    );
-    let look = crate::politics::Look::new(game);
-    let mut markers = |name: &str| {
-        let path = format!("{}/{name}.png", crate::ui::GLYPH_DIR);
-        cache.get(game, &mut images, &path)
-    };
-    let markers: Vec<_> = (look.glyphs.iter())
-        .map(|g| g.as_deref().and_then(&mut markers))
-        .collect();
     let shortage = cache.get(game, &mut images, SHORTAGE_ICON);
     let shortage_tip = said(
         "game_interface_UpkeepShortageIcon_ToolTip",
@@ -160,16 +133,8 @@ pub fn spawn(
                     ));
                 }
                 bar(row, false);
-                super::politics::spawn_button(
-                    row,
-                    HEIGHT,
-                    politics_glyph,
-                    &bindings,
-                    politics_words,
-                );
             });
             bar(root, true);
-            super::politics::spawn_panel(root, markers);
         });
 }
 

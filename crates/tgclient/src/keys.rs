@@ -384,13 +384,18 @@ pub fn send(
     let beside = politics
         .is_some_and(|p| p.open)
         .then_some(crate::politics::WIDGET);
-    let heard = (bindings.just_pressed(&keys))
+    let heard: Vec<_> = (bindings.just_pressed(&keys))
         .filter(|(_, scope)| {
             scope.heard(window, |w| displays.passes(w))
                 || beside.is_some_and(|place| scope.given_in(place))
         })
-        .map(|(action, _)| Intent::from(action));
-    intents.write_batch(heard);
+        .map(|(action, _)| Intent::from(action))
+        .collect();
+    // Esc closes a panel the hotkey files give no key of its own to, as
+    // they do for most.
+    let unbound = heard.is_empty() && keys.just_pressed(KeyCode::Escape);
+    let close = (window.is_some() && unbound).then(|| Intent::from(crate::displays::CLOSE_ALL));
+    intents.write_batch(heard.into_iter().chain(close));
 }
 
 /// Reads the hotkeys chosen in the options, and how the game marks them.
