@@ -351,7 +351,7 @@ mod tests {
         };
         let size = crate::shot::SIZE.as_vec2();
         let original = crate::hud::original::layout_scale(size);
-        let setting = crate::ui_scale::fitted(1.0, size);
+        let setting = crate::ui_scale::fitted(1.0, size, None);
         assert_ne!(original, setting);
         assert_eq!(scale(&mut app, false), original);
         assert_eq!(scale(&mut app, true), setting);

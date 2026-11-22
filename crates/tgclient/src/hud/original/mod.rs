@@ -23,6 +23,7 @@ use bevy::ui_widgets::Button;
 mod abilities;
 mod bars;
 mod experience;
+mod groups;
 pub(crate) mod lettering;
 mod object;
 mod politics;
@@ -83,6 +84,7 @@ impl Plugin for OriginalHudPlugin {
                     (select_toggles, show_pressables).chain(),
                     (abilities::refresh, abilities::show).chain(),
                     abilities::fill,
+                    (groups::open, groups::show),
                     experience::refresh,
                     shortage::show,
                     times::show,
@@ -99,7 +101,7 @@ impl Plugin for OriginalHudPlugin {
 
 /// The floaters the message log goes beside and under.
 const LOG_LEFT_OF: &str = "FactionAbilitiesFloater";
-const LOG_UNDER: &str = "GroupFloater";
+const LOG_UNDER: &str = groups::FLOATER;
 
 /// Where on the layouts' screen the message log goes.
 #[derive(Resource)]
@@ -275,7 +277,7 @@ const ON_GAME: &str = "ControlPanelTop";
 const GAME: &str = "Game";
 type Flag = fn(&InterfaceFlags) -> bool;
 const ON_SCREEN: [(&str, Option<Flag>); 4] = [
-    ("GroupFloater", None),
+    (groups::FLOATER, None),
     ("FactionAbilitiesFloater", None),
     ("FactionExperience", Some(|f| f.faction_experience)),
     ("RecruitItemFloater", Some(|f| f.recruit_item_floater)),
@@ -382,6 +384,8 @@ pub enum Follows {
     Chat,
     /// The politics panel is open.
     Politics,
+    /// The group strip is open.
+    GroupStrip,
 }
 
 /// The widgets the interface repeats once for each entry a panel lists,
@@ -430,6 +434,7 @@ pub fn spawn(
     let widgets = game.game_widgets();
     let named = |name: &str| (widgets.iter()).find(|w| w.name.eq_ignore_ascii_case(name));
     let mut abilities = Vec::new();
+    let mut strip = None;
     let mut experience = None;
     let mut drawer = Drawer {
         pictures: Pictures {
@@ -502,6 +507,10 @@ pub fn spawn(
         let Some(within) = drawer.own(widget, &Vec::from_iter(offset)) else {
             continue;
         };
+        if name == groups::FLOATER {
+            strip = Some(groups::build(widget, &within, &mut drawer));
+            continue;
+        }
         for child in &widget.children {
             drawer.widget(child, &within);
         }
@@ -583,6 +592,9 @@ pub fn spawn(
             }
             for ability in abilities {
                 ability.spawn(screen);
+            }
+            if let Some(strip) = strip {
+                strip.spawn(screen);
             }
             if let Some(experience) = experience {
                 experience.spawn(screen, &letters);
@@ -1048,6 +1060,7 @@ pub fn select_toggles(
     border: Res<crate::supply::Border>,
     chat: Res<crate::chat::Chat>,
     politics: Res<crate::politics::Politics>,
+    strip: Option<Res<crate::control_groups::StripOpen>>,
     mut buttons: Query<(&Follows, &mut Pressable)>,
 ) {
     for (follows, mut button) in &mut buttons {
@@ -1056,6 +1069,7 @@ pub fn select_toggles(
             Follows::Border => border.0,
             Follows::Chat => chat.is_open(),
             Follows::Politics => politics.open,
+            Follows::GroupStrip => strip.as_ref().is_some_and(|s| s.0),
         };
         if button.selected != on {
             button.selected = on;

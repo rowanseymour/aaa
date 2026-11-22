@@ -66,6 +66,11 @@ impl Widget {
             .map(|(_, v)| v.as_str())
     }
 
+    /// One of its fields naming an image, as an archive path.
+    pub fn image(&self, key: &str) -> Option<String> {
+        self.value(key).and_then(ui_path)
+    }
+
     /// What a tooltip says of it: its name, and what it does.
     pub fn tooltip(&self, strings: &crate::Strings) -> (Option<String>, Option<String>) {
         let said = |key| crate::strings::localized(strings, self.value(key));
@@ -280,6 +285,8 @@ pub struct InterfaceFlags {
     pub pause_button: bool,
     /// The commander's experience, beside the abilities.
     pub faction_experience: bool,
+    /// A cap at the end of each floater, shown while it's open.
+    pub floater_end_cap: bool,
 }
 
 /// The lists, under `UI/`, of the files whose templates the in-match
@@ -302,6 +309,7 @@ impl GameData {
             recruit_item_floater: flag(|v| v.ui_use_recruit_item_floater),
             pause_button: flag(|v| v.ui_use_pause_button),
             faction_experience: flag(|v| v.ui_show_faction_experience),
+            floater_end_cap: flag(|v| v.ui_floaters_display_end_cap),
         }
     }
 

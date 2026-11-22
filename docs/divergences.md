@@ -18,6 +18,9 @@ differences in what you can see or do are.
 
 - **Formation keys.** Alt with a digit puts the selection in that formation. The digits
   alone save and select control groups, as in the original.
+- **Group strip.** Ours is always open, with no button to close it, and an empty
+  group's slot shows the key that selects it. See
+  [groups.rs](../crates/tgclient/src/hud/modern/groups.rs).
 - **Politics button.** In both interfaces the button is lit exactly while the politics
   panel is open. The original's flips with each press whatever closed the panel, so
   closing it with Backspace leaves the button lit. See

@@ -84,6 +84,16 @@ pub struct KeyName {
 }
 
 impl KeyName {
+    /// What the key's called, with the keys held with it.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The key's name in brackets, as a tooltip's lines put it.
+    pub fn bracketed(&self) -> String {
+        format!("({})", self.name)
+    }
+
     /// `name` with the key marked: its character where the name has it,
     /// as it's written before in either case, else the key's own name in
     /// brackets ahead of it.

@@ -15,6 +15,11 @@ pub struct Pill(bool);
 #[derive(Component)]
 pub struct Said;
 
+/// The narrowest a pill is, which leaves room for the time it says, so the
+/// top row is as wide with them as [`TopRow`](crate::ui_scale::TopRow)
+/// allows for.
+pub const PILL: f32 = 80.0;
+
 /// Spawns the pills in `row`, the countdown first, as it's the larger.
 pub fn spawn(row: &mut ChildSpawnerCommands, height: f32) {
     for (counter, font) in [(true, Font::HudTitle), (false, Font::Hud)] {
@@ -25,6 +30,8 @@ pub fn spawn(row: &mut ChildSpawnerCommands, height: f32) {
                 Node {
                     display: Display::None,
                     height: px(height),
+                    min_width: px(PILL),
+                    justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     padding: UiRect::horizontal(px(8)),
                     border_radius: BorderRadius::all(px(6)),

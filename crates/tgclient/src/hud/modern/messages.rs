@@ -7,7 +7,7 @@ use crate::messages::LogBox;
 use crate::{Leaders, Local};
 
 /// Places the log in the top left corner, clear of the special operations
-/// panel.
+/// panel and under the group strip.
 pub fn place(local: Res<Local>, leaders: Res<Leaders>, mut logs: Query<&mut Node, With<LogBox>>) {
     let corner = corner(&local, &leaders);
     for mut node in &mut logs {

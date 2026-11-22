@@ -9,6 +9,7 @@ use super::{Hud, InMatch};
 pub mod actions;
 pub mod clock;
 pub mod displays;
+pub mod groups;
 pub mod messages;
 pub mod minimap;
 pub mod object_display;
@@ -46,6 +47,7 @@ impl Plugin for ModernHudPlugin {
                 resource_bar::spawn,
                 supply::spawn,
                 special_ops::spawn,
+                groups::spawn,
                 messages::place,
                 crate::hud::original::load_cards,
                 crate::object_display::redraw,
@@ -58,6 +60,9 @@ impl Plugin for ModernHudPlugin {
                 crate::hud::original::unload_cards,
                 // Switching interfaces, rather than leaving the match.
                 politics::close.run_if(in_state(crate::Screen::Match)),
+                |mut commands: Commands| {
+                    commands.remove_resource::<crate::ui_scale::TopRow>();
+                },
             ),
         )
         .add_systems(
@@ -80,6 +85,7 @@ impl Plugin for ModernHudPlugin {
                     resource_bar::show,
                     times::show,
                     politics::show,
+                    groups::show,
                 )
                     .in_set(super::Draw),
                 (special_ops::refresh, special_ops::tips)

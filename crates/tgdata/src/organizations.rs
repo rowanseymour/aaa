@@ -38,6 +38,8 @@ pub struct Layout {
     pub combat: Option<usize>,
     /// The slot whose member the organization's position follows.
     pub primary: Option<usize>,
+    /// Which slots are locked, whose members stand for the organization.
+    pub locked: Vec<bool>,
     /// Each slot's property, e.g. `front`, which the object display groups
     /// members' cards by.
     pub kinds: Vec<Id>,
@@ -246,6 +248,7 @@ fn layout(l: &defs::OrganizationLayout, known: Known) -> Option<Layout> {
         default,
         combat,
         primary: l.slot.iter().position(|s| s.primary),
+        locked: l.slot.iter().map(|s| s.locked).collect(),
         kinds: (l.slot.iter())
             .map(|s| Id::from(s.property_ids.as_deref().unwrap_or_default()))
             .collect(),
@@ -296,7 +299,7 @@ mod tests {
              \t\t[Modifier]\n\t\t{\n\t\t\ttype = MULTIPLY\n\
              \t\t\tattribute = SPEED_MAX\n\t\t\tamount = .25\n\t\t}\n\
              \t\tenabled_target_flags = scattered\n\t}\n\
-             \t[Slot]\n\tproperty_IDS = front\n\tnumber = 2\n\
+             \t[Slot]\n\tproperty_IDS = front\n\tlocked = true\n\tnumber = 2\n\
              \t[Slot]\n\tproperty_IDS = captain\n\tprimary = true\n\
              \t[Formation]\n\t{\n\t\tformation_IDS = line\n\
              \t\t[Position]\n\t\tproperty_IDS = captain\n\t\toffset = 0,0\n\
@@ -333,6 +336,7 @@ mod tests {
         assert_eq!(layout.default, 0);
         assert_eq!(layout.combat, Some(0));
         assert_eq!(layout.primary, Some(1));
+        assert_eq!(layout.locked, [true, false]);
         assert_eq!(layout.formations[0].id, Id::from("line"));
         assert_eq!(
             layout.formations[0].slots,

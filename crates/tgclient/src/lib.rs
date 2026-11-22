@@ -513,12 +513,21 @@ pub fn run(program: Program) -> ExitCode {
         .add_observer(formations::on_activate)
         .add_observer(actions::hold_card_button)
         .add_observer(actions::press_card_button)
+        .add_observer(control_groups::press)
         .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
         .add_message::<messages::Failed>()
         .init_resource::<Selected>()
         .init_resource::<SelectedBuilding>()
         .init_resource::<control_groups::ControlGroups>()
+        .init_resource::<control_groups::Strip>()
+        .add_systems(OnEnter(Screen::Match), control_groups::open_strip)
+        .add_systems(
+            Update,
+            (control_groups::picture, control_groups::tips)
+                .chain()
+                .run_if(in_state(Screen::Match)),
+        )
         .init_resource::<Focus>()
         .init_resource::<ghost::Ghost>()
         .init_resource::<placing::Anchor>()
@@ -713,6 +722,7 @@ pub fn run(program: Program) -> ExitCode {
                 )
                     .chain(),
                 control_groups::recall,
+                control_groups::toggle_strip,
                 choose_formation.run_if(keys_free),
             )
                 .run_if(in_state(Screen::Match))
