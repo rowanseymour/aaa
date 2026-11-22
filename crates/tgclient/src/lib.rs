@@ -125,10 +125,12 @@ pub struct Program {
     pub tag: &'static str,
     /// A map of the game's to name in the usage.
     pub example_map: &'static str,
+    /// The program's version, shown on the main menu.
+    pub version: &'static str,
 }
 
 /// How our interface looks for the game, from this project's own data
-/// ([`GameData::modern_interface`]).
+/// ([`GameData::modern_interface`]) and the [`Program`].
 #[derive(Resource, Clone)]
 pub(crate) struct Look {
     /// What the game is called on its window, and on the main menu
@@ -138,6 +140,7 @@ pub(crate) struct Look {
     pub(crate) logo: Option<String>,
     /// What the main menu stands over, if anything.
     pub(crate) backdrop: Option<backdrop::View>,
+    pub(crate) version: &'static str,
 }
 
 impl Look {
@@ -153,6 +156,7 @@ impl Look {
             title: (look.title.clone()).unwrap_or_else(|| program.name.to_string()),
             logo: look.logo.clone(),
             backdrop,
+            version: program.version,
         }
     }
 }
