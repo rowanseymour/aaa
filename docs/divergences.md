@@ -16,6 +16,10 @@ original's, laid out much the same, but drawn in its own style rather than with 
 original's bitmaps and window chrome. Differences in look alone aren't listed here;
 differences in what you can see or do are.
 
+- **Experience.** Ours shows the side's experience without its ceiling, which is the
+  same for every shipped general, and blinks it once it's reached, since what's
+  earned past it is lost. See
+  [special_ops.rs](../crates/tgclient/src/hud/modern/special_ops.rs).
 - **Formation keys.** Alt with a digit puts the selection in that formation. The digits
   alone save and select control groups, as in the original.
 - **Group strip.** Ours is always open, with no button to close it, and an empty

@@ -1,5 +1,5 @@
-//! Our special operations panel in the window's upper left corner: the
-//! side's experience, and a tray of the faction's operations, each with a
+//! Our special operations panel on the window's left edge, at the top: the
+//! side's experience over a tray of the faction's operations, each with a
 //! tooltip beside the tray and a bar showing how far it's recharged.
 
 use bevy::picking::hover::Hovered;
@@ -29,7 +29,7 @@ const MEDAL: f32 = 16.0;
 
 /// How far right of the left edge the panel leaves clear for what's
 /// beside it.
-pub const CLEAR: f32 = crate::ui_scale::MARGIN + TRAY + 2.0 * GAP;
+pub const CLEAR: f32 = TRAY + 2.0 * GAP;
 
 /// How far from the left edge what's beside the panel starts, such as the
 /// group strip: clear of the panel, which only a side with a faction has.
@@ -75,8 +75,8 @@ pub struct OperationIcon;
 #[derive(Component)]
 pub struct RechargeBar;
 
-/// Spawns our interface's experience and operations, in the window's upper
-/// left corner.
+/// Spawns our interface's experience and operations, in one pane on the
+/// window's left edge, as the action palette sits on its lower edge.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
@@ -100,128 +100,107 @@ pub fn spawn(
         .collect();
     commands
         .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(crate::ui_scale::MARGIN),
-                left: px(crate::ui_scale::MARGIN),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Start,
-                row_gap: px(GAP),
-                ..default()
-            },
-            Pickable::IGNORE,
+            Blocks,
+            ui::ledge(
+                Surface::Hud,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(crate::ui_scale::MARGIN),
+                    left: px(0),
+                    width: px(TRAY),
+                    padding: UiRect::all(px(PAD)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(GAP),
+                    ..default()
+                },
+            ),
             GlobalZIndex(crate::ui::layer::HUD_TOP),
             DespawnOnExit(super::DRAWN),
         ))
-        .with_children(|corner| {
-            corner
-                .spawn((
-                    ExperienceBox,
-                    Blocks,
-                    Marked::plain(shared.words.title.clone()),
-                    Hint(String::new()),
-                    panel(
-                        Surface::Hud,
+        .with_children(|tray| {
+            tray.spawn((
+                ExperienceBox,
+                Marked::plain(shared.words.title.clone()),
+                Hint(String::new()),
+                Node {
+                    height: px(ROW),
+                    column_gap: px(GAP),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                if let Some(medal) = medal {
+                    row.spawn((
+                        ImageNode::new(medal),
                         Node {
-                            height: px(ROW),
-                            padding: UiRect::horizontal(px(GAP)),
-                            column_gap: px(GAP),
+                            width: px(MEDAL),
+                            height: px(MEDAL),
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ));
+                }
+                row.spawn((ExperienceText::default(), label("", Font::Hud, Ink::Body)));
+            });
+            for (op, icon, name) in buttons {
+                let index = op.index;
+                let (tip, recharge_line) = pane(tray, &name, op);
+                tray.spawn((
+                    OperationButton {
+                        index,
+                        tip,
+                        recharge_line,
+                    },
+                    Button,
+                    ui::called(format!("special_op.{}", index + 1)),
+                    Asks::new(action(index)),
+                    Click::COMMAND,
+                    Hovered::default(),
+                    Pickable::default(),
+                    panel(
+                        Surface::Slot,
+                        Node {
+                            width: px(BUTTON),
+                            height: px(BUTTON),
+                            border: UiRect::all(px(2)),
+                            flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
+                            justify_content: JustifyContent::SpaceEvenly,
                             ..default()
                         },
                     ),
                     Edge::Border,
                 ))
-                .with_children(|row| {
-                    if let Some(medal) = medal {
-                        row.spawn((
-                            ImageNode::new(medal),
-                            Node {
-                                width: px(MEDAL),
-                                height: px(MEDAL),
-                                ..default()
-                            },
-                            Pickable::IGNORE,
-                        ));
+                .with_children(|button| {
+                    let size = Node {
+                        width: px(ICON.x),
+                        height: px(ICON.y),
+                        ..default()
+                    };
+                    match icon {
+                        Some(icon) => {
+                            button.spawn((
+                                OperationIcon,
+                                ImageNode::new(icon),
+                                Shade::Dimmed,
+                                size,
+                                Pickable::IGNORE,
+                            ));
+                        }
+                        None => {
+                            button.spawn((size, Pickable::IGNORE));
+                        }
                     }
-                    row.spawn((ExperienceText::default(), label("", Font::Hud, Ink::Body)));
+                    let bar = Node {
+                        width: px(ICON.x),
+                        height: px(BAR),
+                        ..default()
+                    };
+                    button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
                 });
-            if buttons.is_empty() {
-                return;
             }
-            corner
-                .spawn((
-                    Blocks,
-                    panel(
-                        Surface::Hud,
-                        Node {
-                            width: px(TRAY),
-                            padding: UiRect::all(px(PAD)),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: px(GAP),
-                            ..default()
-                        },
-                    ),
-                ))
-                .with_children(|tray| {
-                    for (op, icon, name) in buttons {
-                        let index = op.index;
-                        let (tip, recharge_line) = pane(tray, &name, op);
-                        tray.spawn((
-                            OperationButton {
-                                index,
-                                tip,
-                                recharge_line,
-                            },
-                            Button,
-                            ui::called(format!("special_op.{}", index + 1)),
-                            Asks::new(action(index)),
-                            Click::COMMAND,
-                            Hovered::default(),
-                            Pickable::default(),
-                            panel(
-                                Surface::Slot,
-                                Node {
-                                    width: px(BUTTON),
-                                    height: px(BUTTON),
-                                    border: UiRect::all(px(2)),
-                                    flex_direction: FlexDirection::Column,
-                                    align_items: AlignItems::Center,
-                                    justify_content: JustifyContent::SpaceEvenly,
-                                    ..default()
-                                },
-                            ),
-                            Edge::Border,
-                        ))
-                        .with_children(|button| {
-                            let size = Node {
-                                width: px(ICON.x),
-                                height: px(ICON.y),
-                                ..default()
-                            };
-                            match icon {
-                                Some(icon) => {
-                                    button.spawn((
-                                        OperationIcon,
-                                        ImageNode::new(icon),
-                                        Shade::Dimmed,
-                                        size,
-                                        Pickable::IGNORE,
-                                    ));
-                                }
-                                None => {
-                                    button.spawn((size, Pickable::IGNORE));
-                                }
-                            }
-                            let bar = Node {
-                                width: px(ICON.x),
-                                height: px(BAR),
-                                ..default()
-                            };
-                            button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
-                        });
-                    }
-                });
         });
 }
 
@@ -311,7 +290,8 @@ pub fn tips(buttons: Query<(&OperationButton, &Hovered)>, mut nodes: Query<&mut 
 pub fn refresh(
     panel: Res<Panel>,
     sim: Res<Sim>,
-    mut text: Query<(&mut Text, &mut ExperienceText)>,
+    time: Res<Time<Real>>,
+    mut text: Query<(&mut Text, &mut ExperienceText, &mut Ink)>,
     mut boxes: Query<&mut Hint, With<ExperienceBox>>,
     buttons: Query<(&OperationButton, &Children)>,
     mut icons: Query<&mut Shade, With<OperationIcon>>,
@@ -349,11 +329,13 @@ pub fn refresh(
         }
     }
     let rounded = experience.round() as i64;
+    let want = ink(experience, panel.max, time.elapsed_secs());
     let mut changed = false;
-    for (mut t, mut shown) in &mut text {
+    for (mut t, mut shown, mut colour) in &mut text {
+        colour.set_if_neq(want);
         if shown.0 != Some(rounded) {
             shown.0 = Some(rounded);
-            t.0 = panel.experience(rounded);
+            t.0 = rounded.to_string();
             changed = true;
         }
     }
@@ -363,6 +345,19 @@ pub fn refresh(
     let hint = panel.experience_tip(rounded);
     for mut h in &mut boxes {
         h.set_if_neq(Hint(hint.clone()));
+    }
+}
+
+/// Seconds the experience spends in each colour while it blinks.
+const BLINK: f32 = 0.5;
+
+/// The experience's colour: blinking once it shows the ceiling, as what
+/// it earns from then on is lost.
+fn ink(experience: f32, max: Option<f32>, seconds: f32) -> Ink {
+    let full = max.is_some_and(|m| experience.round() >= m.round());
+    match full && seconds % (2.0 * BLINK) < BLINK {
+        true => Ink::Warn,
+        false => Ink::Body,
     }
 }
 
@@ -383,6 +378,7 @@ mod tests {
     fn buttons_light_once_experience_reaches_their_cost_however_it_shows() {
         let mut app = App::new();
         app.insert_resource(Sim(operating(199.5)))
+            .init_resource::<Time<Real>>()
             .add_systems(Update, refresh);
         app.insert_resource(panel());
         let icon = app.world_mut().spawn((OperationIcon, Shade::Dimmed)).id();
@@ -424,6 +420,32 @@ mod tests {
         assert_eq!(display(&app), Some(Display::Flex));
         let said = app.world().get::<Text>(line).map(|t| t.0.clone());
         assert_eq!(said.as_deref(), Some("Recharging (0:10 left)"));
+    }
+
+    #[test]
+    fn experience_shows_alone_and_blinks_at_its_ceiling() {
+        let mut app = App::new();
+        app.insert_resource(Sim(operating(450.0)))
+            .init_resource::<Time<Real>>()
+            .insert_resource(panel())
+            .add_systems(Update, refresh);
+        let text = app
+            .world_mut()
+            .spawn((ExperienceText::default(), label("", Font::Hud, Ink::Body)))
+            .id();
+        app.update();
+        let said = app.world().get::<Text>(text).map(|t| t.0.clone());
+        assert_eq!(said.as_deref(), Some("450"));
+        let colour = |app: &App| app.world().get::<Ink>(text).copied();
+        assert_eq!(colour(&app), Some(Ink::Body));
+        app.world_mut().resource_mut::<Sim>().0 = operating(5000.0);
+        app.update();
+        assert_eq!(colour(&app), Some(Ink::Warn));
+        assert_eq!(ink(4999.6, Some(5000.0), 0.0), Ink::Warn);
+        assert_eq!(ink(450.0, Some(5000.0), 0.0), Ink::Body);
+        assert_eq!(ink(5000.0, Some(5000.0), 0.0), Ink::Warn);
+        assert_eq!(ink(5000.0, Some(5000.0), BLINK), Ink::Body);
+        assert_eq!(ink(5000.0, None, 0.0), Ink::Body);
     }
 
     #[test]
