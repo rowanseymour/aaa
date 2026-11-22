@@ -10,13 +10,13 @@ pub mod actions;
 pub mod clock;
 pub mod displays;
 pub mod groups;
+pub mod idle;
 pub mod messages;
 pub mod minimap;
 pub mod object_display;
 pub mod politics;
 pub mod resource_bar;
 pub mod special_ops;
-pub mod supply;
 pub mod times;
 
 /// While a match is played with our interface.
@@ -45,7 +45,7 @@ impl Plugin for ModernHudPlugin {
                 actions::spawn,
                 object_display::spawn,
                 resource_bar::spawn,
-                supply::spawn,
+                idle::spawn,
                 special_ops::spawn,
                 groups::spawn,
                 messages::place,
@@ -70,7 +70,7 @@ impl Plugin for ModernHudPlugin {
             (
                 minimap::tint,
                 object_display::emblem,
-                supply::show_cycle_button,
+                crate::idle::show,
                 (
                     object_display::lay_out.in_set(super::LayOut),
                     (object_display::economy, crate::hud::original::fill_bars),

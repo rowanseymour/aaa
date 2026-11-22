@@ -52,6 +52,7 @@ mod terrain;
 mod testing;
 mod triggers;
 mod value;
+mod workers;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::{PI, TAU};

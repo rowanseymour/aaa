@@ -1,22 +1,18 @@
 //! Supply as the map shows it: a border along the edge of the ground the
 //! player's side is supplied over, and a tint on buildings going without.
-//! Its key shows and hides the border, as the options do. Another steps
-//! through the player's organizations that have no HQ.
+//! Its key shows and hides the border, as the options do.
 
-use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use tgmap::Tile;
-use tgrender::camera::RtsCamera;
-use tgrender::space::world;
 use tgrender::{Tint, overlay};
 
 use crate::effects::Effects;
 use crate::intent::{Intent, asked};
 use crate::keys;
 use crate::views::BuildingView;
-use crate::{Loaded, Local, Screen, Selected, SelectedBuilding, Sim};
+use crate::{Loaded, Local, Screen, Sim};
 
 /// The tint a building out of supply is drawn in.
 const OUT_OF_SUPPLY: &str = "out_of_supply_vfx";
@@ -187,49 +183,6 @@ pub fn setup(
         block: border.block,
         material,
     });
-}
-
-/// What stepping through the detached organizations reads and changes.
-#[derive(SystemParam)]
-pub struct CycleParts<'w, 's> {
-    sim: Res<'w, Sim>,
-    local: Res<'w, Local>,
-    loaded: Res<'w, Loaded>,
-    selected: ResMut<'w, Selected>,
-    chosen: ResMut<'w, SelectedBuilding>,
-    scenery: Res<'w, crate::banners::Scenery>,
-    cameras: Query<'w, 's, &'static mut RtsCamera>,
-}
-
-impl CycleParts<'_, '_> {
-    /// Selects the player's next detached organization after the one selected,
-    /// round to the first again, and looks at it.
-    fn step(&mut self) {
-        let Some(player) = self.local.0 else {
-            return;
-        };
-        // Those that can't be selected are passed over.
-        let mut detached = self.sim.0.detached(player);
-        detached.retain(|&r| !self.scenery.has(&self.sim.0, r));
-        let after = self.selected.0.first().map_or(0, |&now| now + 1);
-        let next = detached.iter().find(|&&r| r >= after).or(detached.first());
-        let Some(&r) = next.filter(|&&r| self.selected.0 != [r]) else {
-            return;
-        };
-        self.selected.0 = vec![r];
-        self.chosen.0 = None;
-        let [x, y] = self.sim.0.leader_position(r);
-        for mut camera in &mut self.cameras {
-            camera.focus = world(x, y, self.loaded.map.ground.height_at([x, y]));
-        }
-    }
-}
-
-/// Steps through the detached organizations when asked.
-pub fn cycle_detached(mut intents: MessageReader<Intent>, mut cycle: CycleParts) {
-    if asked(&mut intents, keys::CYCLE_DETACHED) {
-        cycle.step();
-    }
 }
 
 /// Shows or hides the border when asked.

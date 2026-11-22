@@ -21,6 +21,9 @@ differences in what you can see or do are.
 - **Group strip.** Ours is always open, with no button to close it, and an empty
   group's slot shows the key that selects it. See
   [groups.rs](../crates/tgclient/src/hud/modern/groups.rs).
+- **Idle buttons.** In both interfaces they show or hide as soon as there's something
+  for them to step through, rather than up to a second late. See
+  [idle.rs](../crates/tgclient/src/idle.rs).
 - **Politics button.** In both interfaces the button is lit exactly while the politics
   panel is open. The original's flips with each press whatever closed the panel, so
   closing it with Backspace leaves the button lit. See

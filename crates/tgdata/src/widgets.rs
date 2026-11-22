@@ -82,6 +82,27 @@ impl Widget {
         (self.view.as_ref()).map_or(parent, |v| v.bounds.place(parent))
     }
 
+    /// The images it and its widgets draw at rest, in the order drawn.
+    pub fn resting(&self) -> Vec<&str> {
+        fn element<'a>(e: &'a ViewElement, out: &mut Vec<&'a str>) {
+            if !e.shown(&RESTING) {
+                return;
+            }
+            out.extend(e.texture.as_deref());
+            for child in &e.children {
+                element(child, out);
+            }
+        }
+        let mut out = Vec::new();
+        for e in self.view.iter().chain(&self.parts) {
+            element(e, &mut out);
+        }
+        for child in self.children.iter().filter(|c| c.visible) {
+            out.extend(child.resting());
+        }
+        out
+    }
+
     /// The widget among its descendants, at any depth, named `name`.
     pub fn find(&self, name: &str) -> Option<&Widget> {
         (self.children.iter()).find_map(|c| match c.name.eq_ignore_ascii_case(name) {
@@ -593,5 +614,21 @@ mod tests {
         assert_eq!(top.parts.len(), 1);
         assert_eq!(top.parts[0].bounds.left, Edge::Start(101.0));
         assert_eq!(top.parts[0].bounds.right, Edge::Past(64.0));
+    }
+
+    #[test]
+    fn a_widget_rests_on_the_pictures_drawn_at_rest() {
+        let read = widgets(
+            "[Button Inherit=Widget]\n{\n\
+             \t[View Template=GroupVE]\n\t{\n\
+             \t\t[Child Template=DecalVE]\n\t\twhen = UNFOCUSED\n\t\ttexture = border.png\n\
+             \t\t[Child Template=DecalVE]\n\t\twhen = FOCUSED\n\t\ttexture = lit.png\n\t}\n\
+             \t[Client Template=DecalWidget]\n\t{\n\
+             \t\t[View Template=GroupVE]\n\t\t{\n\
+             \t\t\t[Child Template=DecalVE]\n\t\t\ttexture = icon.png\n\t\t}\n\t}\n\
+             \t[Hidden Template=DecalWidget]\n\t{\n\t\tvisible = false\n\
+             \t\t[Decal Template=DecalVE]\n\t\ttexture = no.png\n\t}\n}\n",
+        );
+        assert_eq!(read[0].resting(), ["border.png", "icon.png"]);
     }
 }
