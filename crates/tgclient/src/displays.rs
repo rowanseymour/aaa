@@ -18,7 +18,7 @@ use crate::{Orders, Screen};
 use tgsim::Action;
 
 /// What the key that closes whichever panel is up is bound to.
-const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
+pub(crate) const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
 
 pub(crate) const PANELS: [Panel; 3] = [Panel::Objectives, Panel::Technologies, Panel::MessageLog];
 
@@ -85,9 +85,9 @@ impl Displays {
     /// Whether a key pressing `widget` is heard while a panel's up: only
     /// the panels' own buttons, which put another in its place.
     pub fn passes(&self, widget: &str) -> bool {
-        PANELS
-            .iter()
-            .any(|p| p.keys().0.eq_ignore_ascii_case(widget))
+        // The politics panel isn't one of them, and stays up beside them.
+        let politics = widget.eq_ignore_ascii_case(crate::politics::BUTTON);
+        politics || (PANELS.iter()).any(|p| p.keys().0.eq_ignore_ascii_case(widget))
     }
 
     /// Keeps the match paused when the panel closes, as a pause asked for
@@ -215,7 +215,8 @@ pub fn spawn_window(commands: &mut Commands, window: Window) -> Entity {
                     row.spawn((
                         ui::button("Close", Font::Hud),
                         ui::called("panel.close"),
-                        Asks::new(CLOSE_ALL),
+                        // Its own close, which leaves the politics panel up.
+                        Asks::new(panel.keys().1),
                     ));
                 });
         });

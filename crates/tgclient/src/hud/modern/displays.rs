@@ -149,12 +149,18 @@ fn spawn_button(
 /// A round button at `rim` drawn with `glyph`, sounding `click` when
 /// pressed.
 pub fn rim_button(rim: Rim, glyph: Handle<Image>, click: Click) -> impl Bundle {
+    round_button(rim.node(), glyph, GLYPH_SIZE, click)
+}
+
+/// A round button laid out as `node`, drawn with `glyph` `size` across,
+/// sounding `click` when pressed.
+pub fn round_button(node: Node, glyph: Handle<Image>, size: f32, click: Click) -> impl Bundle {
     (
         Blocks,
         Button,
         click,
         RelativeCursorPosition::default(),
-        rim.node(),
+        node,
         Surface::Clear,
         Edge::Border,
         GlobalZIndex(crate::ui::layer::HUD_TOP),
@@ -163,8 +169,8 @@ pub fn rim_button(rim: Rim, glyph: Handle<Image>, click: Click) -> impl Bundle {
             Glyph,
             ImageNode::new(glyph),
             Node {
-                width: px(GLYPH_SIZE),
-                height: px(GLYPH_SIZE),
+                width: px(size),
+                height: px(size),
                 ..default()
             },
             Pickable::IGNORE,

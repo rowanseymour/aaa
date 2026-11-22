@@ -140,7 +140,7 @@ impl Built {
 /// quarters at the corners, the edge of each border's image that's
 /// outermost along its side, and the center's in the middle, each a
 /// quarter of the corners' image across.
-fn framed(pictures: &mut Pictures, tiles: &Tiles) -> Option<(Handle<Image>, f32)> {
+pub(super) fn framed(pictures: &mut Pictures, tiles: &Tiles) -> Option<(Handle<Image>, f32)> {
     let mut rgba = |path: &str| pictures.rgba(path);
     let corners = rgba(&tiles.corners)?;
     let (left, right, top, bottom, center) = (
