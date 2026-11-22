@@ -117,6 +117,9 @@ pub struct Rules {
     pub economy_effects: HashMap<Id, tgmap::EconomyEffect>,
     /// Each property's enchantment type, for those that have one.
     pub enchantment_types: HashMap<Id, Id>,
+    /// The properties a thing's kind needs for each property to be on it,
+    /// for those that need any, by its id.
+    pub property_requires: HashMap<Id, Vec<Id>>,
     /// What each template's things are, by template, for the technologies
     /// and operations that work only on some.
     pub kinds: HashMap<Id, tgmap::Kind>,
@@ -129,6 +132,9 @@ pub struct Rules {
     pub drops: HashMap<Id, tgmap::Building>,
     /// What each template that can be built puts up, as its site starts.
     pub buildable: HashMap<Id, tgmap::Building>,
+    /// The templates whose buildings face the default way when they're
+    /// built, however they were aimed.
+    pub axis_locked: HashSet<Id>,
     /// How far beyond its footprint a building being built needs clear
     /// ground.
     pub building_padding: f32,
@@ -238,11 +244,13 @@ impl Default for Rules {
             supply_effects: HashMap::new(),
             economy_effects: HashMap::new(),
             enchantment_types: HashMap::new(),
+            property_requires: HashMap::new(),
             kinds: HashMap::new(),
             sort_objectives: true,
             operations: HashMap::new(),
             drops: HashMap::new(),
             buildable: HashMap::new(),
+            axis_locked: HashSet::new(),
             building_padding: tgmap::BUILDING_PADDING,
             decays: HashMap::new(),
             logistics: HashMap::new(),

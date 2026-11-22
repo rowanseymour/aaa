@@ -156,10 +156,7 @@ impl World {
         held: &'a [crate::Held],
     ) -> impl Iterator<Item = &'a MoraleEffect> {
         let table = &self.rules.morale_effects;
-        let kind = self.rules.kinds.get(template);
-        let own = kind.into_iter().flat_map(|k| &k.properties);
-        let bearing = self.bearing(table, |e| &e.requires, owner, template, held);
-        own.filter_map(|p| table.get(p)).chain(bearing)
+        self.bearing_with_own(table, |e| &e.requires, owner, template, held)
     }
 
     /// The most morale the organization at `r` can have: what every slot

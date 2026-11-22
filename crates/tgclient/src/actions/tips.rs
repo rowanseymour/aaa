@@ -157,7 +157,7 @@ pub fn tell(
                 };
                 tip.of(slot, entry)
             });
-            prompted(hovered, *page, &sim.0, local.0, *focus)
+            prompted(hovered, *page, &sim.0, &selected.0, local.0, *focus)
         }
         false => None,
     };
@@ -297,6 +297,7 @@ fn prompted(
     hovered: Option<Tip>,
     page: Page,
     sim: &tgsim::World,
+    selected: &[usize],
     local: Option<u32>,
     focus: crate::Focus,
 ) -> Option<Tip> {
@@ -321,7 +322,15 @@ fn prompted(
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
         (None, Page::Delivering(_)) => prompt("Left click where to deploy"),
-        (None, Page::Placing(_)) => prompt("Left click where to build, or drag to turn it"),
+        (None, Page::Placing(i)) => {
+            let built = builds(sim, selected).into_iter().nth(i);
+            prompt(
+                match built.is_some_and(|t| sim.rules().axis_locked.contains(&t)) {
+                    true => "Left click where to build",
+                    false => "Left click where to build, or drag to turn it",
+                },
+            )
+        }
         (None, _) => None,
     }
 }

@@ -1,6 +1,7 @@
 //! Our resource bar in the window's upper right corner: the shared
 //! [cells](crate::resource_bar::Cell) in a bar, and a second bar under it
-//! previewing what the order under the cursor would make of them.
+//! previewing what the order under the cursor would make of them, with
+//! the [times](super::times) beside it.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
@@ -117,6 +118,7 @@ pub fn spawn(
                 ..default()
             })
             .with_children(|row| {
+                super::times::spawn(row, HEIGHT);
                 if let Some(icon) = shortage {
                     row.spawn((
                         ShortageIcon,

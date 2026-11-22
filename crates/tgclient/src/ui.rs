@@ -123,9 +123,9 @@ impl Theme {
         let lit = |by: f32| mix(self.tint, self.light, by);
         match surface {
             Surface::Solid => self.tint,
-            Surface::Hud => see_through(0.85),
+            Surface::Hud => see_through(0.92),
             Surface::Popup => see_through(0.7),
-            Surface::Slot => see_through(0.6),
+            Surface::Slot => see_through(0.75),
             Surface::Scrim => see_through(0.7),
             Surface::Panel => lit(0.07),
             Surface::Track => lit(0.1),
@@ -1409,7 +1409,7 @@ mod tests {
         let grey = |s| theme.surface(s).to_srgba();
         assert!((grey(Surface::Panel).red - 0.07).abs() < 1e-5);
         assert!((grey(Surface::Hovered).green - 0.3).abs() < 1e-5);
-        assert_eq!(grey(Surface::Hud).alpha, 0.85);
+        assert_eq!(grey(Surface::Hud).alpha, 0.92);
     }
 
     #[test]

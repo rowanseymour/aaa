@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use tgmap::{Grant, Id, Research};
 
+use crate::properties::KEPT;
 use crate::{Building, Held, Notice, Refused, State, World};
 
 /// What a recruiter would need to raise an organization but hasn't, and so
@@ -59,9 +60,6 @@ pub enum Source {
     /// as the side holds it.
     Building(usize),
 }
-
-/// For good, as a researched property never runs out.
-const KEPT: u64 = u64::MAX;
 
 impl World {
     /// Whether the map bars `player` from a technology or template.
@@ -603,6 +601,11 @@ mod tests {
                 .any(|n| matches!(n, Notice::Researched { .. }))
         );
         assert!(!w.notices.iter().any(|n| matches!(n, Notice::Gained { .. })));
+        // Taking it away offers it again.
+        let heavy = w.rules.research_lists[&Id::from("house")][0].clone();
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Taken);
+        assert!(w.lose_own(crate::targets::Thing::Building(0), &Id::from("tech_heavy")));
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Ready);
     }
 
     #[test]
