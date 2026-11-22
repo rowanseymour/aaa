@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Three figures, heads and shoulders, the middle one in front. -->
+  <g fill="#fff">
+    <circle cx="14.4" cy="22.4" r="6.4"/>
+    <circle cx="49.6" cy="22.4" r="6.4"/>
+    <path d="M2.4,49.6 C2.4,38.4 7.2,32 14.4,32 C19.2,32 22.4,34.4 24,38.4 L19.2,49.6 Z"/>
+    <path d="M61.6,49.6 C61.6,38.4 56.8,32 49.6,32 C44.8,32 41.6,34.4 40,38.4 L44.8,49.6 Z"/>
+    <circle cx="32" cy="19.2" r="8"/>
+    <path d="M17.6,57.6 C17.6,43.2 23.2,32 32,32 C40.8,32 46.4,43.2 46.4,57.6 Z"/>
+  </g>
+</svg>

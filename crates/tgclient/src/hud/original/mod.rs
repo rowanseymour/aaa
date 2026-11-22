@@ -25,6 +25,7 @@ mod bars;
 mod experience;
 pub(crate) mod lettering;
 mod object;
+mod politics;
 mod shortage;
 mod times;
 mod tips;
@@ -85,6 +86,7 @@ impl Plugin for OriginalHudPlugin {
                     experience::refresh,
                     shortage::show,
                     times::show,
+                    politics::show,
                     (show_grid, tips::show).chain(),
                     bars::slide,
                 )
@@ -332,7 +334,7 @@ impl Press {
     }
 }
 
-static PRESSABLE: [Press; 9] = [
+static PRESSABLE: [Press; 10] = [
     Press::push("ButtonMenu", crate::pause::MENU, "control.menu"),
     Press::toggle(
         "ButtonPause",
@@ -361,6 +363,12 @@ static PRESSABLE: [Press; 9] = [
     Press::panel(crate::displays::Panel::Objectives),
     Press::panel(crate::displays::Panel::Technologies),
     Press::panel(crate::displays::Panel::MessageLog),
+    Press::toggle(
+        crate::politics::BUTTON,
+        crate::politics::BUTTON,
+        crate::politics::CALLED,
+        Follows::Politics,
+    ),
 ];
 
 /// What a [`Pressable`] that stays on or off is switched on while.
@@ -372,6 +380,8 @@ pub enum Follows {
     Border,
     /// The chat bar is open.
     Chat,
+    /// The politics panel is open.
+    Politics,
 }
 
 /// The widgets the interface repeats once for each entry a panel lists,
@@ -520,6 +530,7 @@ pub fn spawn(
     let short = colour(game.invalid_colour(), Color::srgb(1.0, 0.0, 0.0));
     let key = colour(game.highlight_colour(), Color::srgb(1.0, 1.0, 0.0));
     let shortage = named(shortage::WIDGET).map(|w| shortage::build(w, &mut drawer));
+    let politics = politics::build(&widgets, &mut drawer, (&mut letters, &mut *faces));
     let times: Vec<_> = (times::WIDGETS.iter())
         .filter_map(|&(name, which)| {
             let fonts = (&mut letters, &mut *faces);
@@ -581,6 +592,9 @@ pub fn spawn(
             }
             for label in times {
                 label.spawn(screen, &letters);
+            }
+            if let Some(politics) = politics {
+                politics.spawn(screen);
             }
             if let Some((within, over)) = minimap_at {
                 screen.spawn((placed(&within), minimap.view()));
@@ -1033,6 +1047,7 @@ pub fn select_toggles(
     pause: Res<crate::clock::PauseState>,
     border: Res<crate::supply::Border>,
     chat: Res<crate::chat::Chat>,
+    politics: Res<crate::politics::Politics>,
     mut buttons: Query<(&Follows, &mut Pressable)>,
 ) {
     for (follows, mut button) in &mut buttons {
@@ -1040,6 +1055,7 @@ pub fn select_toggles(
             Follows::Pause => pause.paused,
             Follows::Border => border.0,
             Follows::Chat => chat.is_open(),
+            Follows::Politics => politics.open,
         };
         if button.selected != on {
             button.selected = on;
@@ -1352,6 +1368,7 @@ mod tests {
         app.init_resource::<PauseState>()
             .init_resource::<crate::supply::Border>()
             .init_resource::<crate::chat::Chat>()
+            .init_resource::<crate::politics::Politics>()
             .add_systems(Update, (disable_buttons, select_toggles));
         let button = (Pauses, Follows::Pause, Pressable::default());
         let button = app.world_mut().spawn(button).id();
@@ -1373,6 +1390,7 @@ mod tests {
         app.init_resource::<PauseState>()
             .insert_resource(crate::supply::Border(true))
             .init_resource::<crate::chat::Chat>()
+            .init_resource::<crate::politics::Politics>()
             .add_systems(Update, select_toggles);
         let border = (Follows::Border, Pressable::default());
         let border = app.world_mut().spawn(border).id();

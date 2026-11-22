@@ -64,6 +64,7 @@ mod pause;
 mod paused;
 mod placing;
 mod pointing;
+mod politics;
 mod random;
 mod ticking;
 mod ui_scale;
@@ -551,6 +552,7 @@ pub fn run(program: Program) -> ExitCode {
             staging::StagingPlugin,
             leaving::LeavingPlugin,
             times::TimesPlugin,
+            politics::PoliticsPlugin,
             campaigns::CampaignsPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)

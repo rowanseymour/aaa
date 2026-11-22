@@ -18,6 +18,10 @@ differences in what you can see or do are.
 
 - **Formation keys.** Alt with a digit puts the selection in that formation. The digits
   alone save and select control groups, as in the original.
+- **Politics button.** In both interfaces the button is lit exactly while the politics
+  panel is open. The original's flips with each press whatever closed the panel, so
+  closing it with Backspace leaves the button lit. See
+  [politics.rs](../crates/tgclient/src/politics.rs).
 
 The original's own in-match interface can be chosen instead (see [New options](#new-options)),
 drawn from its layouts and its nations' skins. It and the view under it are kept at

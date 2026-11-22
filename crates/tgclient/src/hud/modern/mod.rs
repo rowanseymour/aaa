@@ -12,6 +12,7 @@ pub mod displays;
 pub mod messages;
 pub mod minimap;
 pub mod object_display;
+pub mod politics;
 pub mod resource_bar;
 pub mod special_ops;
 pub mod supply;
@@ -60,6 +61,8 @@ impl Plugin for ModernHudPlugin {
                     crate::hud::original::show_pressables,
                     resource_bar::show,
                     times::show,
+                    politics::show,
+                    politics::light_button,
                 )
                     .in_set(super::Draw),
                 (special_ops::refresh, special_ops::tips)

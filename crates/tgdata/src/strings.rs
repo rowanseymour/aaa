@@ -76,6 +76,12 @@ impl GameData {
         glyph_image(&self.glyphs(), &id)
     }
 
+    /// What the font's image of the glyph `id` names is called, e.g.
+    /// `ALLY` for `ch_ally`.
+    pub fn glyph_named(&self, id: &str) -> Option<String> {
+        glyph_image(&self.glyphs(), &Id::from(id))
+    }
+
     /// What the font's image of the glyph drawn before a side's experience
     /// is called, e.g. `FactionExperience`.
     pub fn experience_glyph(&self) -> Option<String> {

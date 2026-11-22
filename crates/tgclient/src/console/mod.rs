@@ -465,7 +465,7 @@ mod tests {
         );
         let tick = |on: bool| if on { "✓" } else { "" };
         let dev = DEV_ONLY.trim_start_matches("; ");
-        for (heading, dev_only) in [("Playing", false), ("Developing", true)] {
+        for (heading, dev_only) in [("Playing", false), ("Developer Only", true)] {
             page += &format!("\n## {heading}\n\n");
             if dev_only {
                 page += &format!("These run {dev}.\n\n");

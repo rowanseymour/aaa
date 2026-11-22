@@ -238,6 +238,12 @@ impl Scope {
             (Scope::Widget(widget), Some(_)) => passes(widget),
         }
     }
+
+    /// Whether it gives its command in `place`, such as a panel that's up
+    /// beside the match rather than over it.
+    fn given_in(&self, place: &str) -> bool {
+        matches!(self, Scope::In(places) if places.iter().any(|p| p.eq_ignore_ascii_case(place)))
+    }
 }
 
 /// The places a match hears commands in while no panel's up.
@@ -368,14 +374,21 @@ pub fn send(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     displays: Res<crate::displays::Displays>,
+    politics: Option<Res<crate::politics::Politics>>,
     mut intents: MessageWriter<Intent>,
 ) {
     if keys.get_just_pressed().next().is_none() {
         return;
     }
     let window = displays.window();
+    let beside = politics
+        .is_some_and(|p| p.open)
+        .then_some(crate::politics::WIDGET);
     let heard = (bindings.just_pressed(&keys))
-        .filter(|(_, scope)| scope.heard(window, |w| displays.passes(w)))
+        .filter(|(_, scope)| {
+            scope.heard(window, |w| displays.passes(w))
+                || beside.is_some_and(|place| scope.given_in(place))
+        })
         .map(|(action, _)| Intent::from(action));
     intents.write_batch(heard);
 }
