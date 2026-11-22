@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tgmap::triggers::{Element, Parameter, Trigger, Value};
 use tgmap::{Id, Shape};
 
+use crate::scripted::Aim;
 use crate::targets::Thing;
 use crate::{Notice, Piece, Refused, SECOND, Standing, State, TICK, World};
 
@@ -64,6 +65,10 @@ pub struct Triggers {
     /// last picked, while it's tested.
     event_thing: Option<Thing>,
     condition_thing: Option<Thing>,
+    /// What computer control triggers have switched off.
+    pub(crate) computer: crate::scripted::ComputerControl,
+    /// What `actors_lock` has locked.
+    pub(crate) locks: crate::scripted::Locks,
 }
 
 /// Something events hear of that the world keeps nothing of.
@@ -162,6 +167,8 @@ impl Triggers {
                 .any(|c| SELECTION.contains(&c.name.as_str())),
             event_thing: None,
             condition_thing: None,
+            computer: Default::default(),
+            locks: Default::default(),
         }
     }
 }
@@ -179,6 +186,8 @@ impl crate::hash::Digest for Triggers {
         self.listening.digest(h);
         self.selected.digest(h);
         self.inside.digest(h);
+        self.computer.digest(h);
+        self.locks.digest(h);
     }
 }
 
@@ -250,6 +259,16 @@ const HANDLED: &[&str] = &[
     "global_set_sun_colors",
     "game_counter_show",
     "game_counter_hide",
+    "actor_moves_to_location",
+    "actor_performs_command_on_actor",
+    "actor_performs_command_at_location",
+    "kingdom_actors_in_area_move_to_location",
+    "sai_disabled_for_kingdom",
+    "sai_enabled_for_kingdom",
+    "sai_disabled_for_actor",
+    "sai_enabled_for_actor",
+    "actors_lock",
+    "actors_unlock",
 ];
 
 /// How two numbers are compared, by the game's numbering.
@@ -952,6 +971,72 @@ impl World {
                     _ => false,
                 }
             }
+            "actor_moves_to_location" => {
+                let pace = self.number(p.get(2)).unwrap_or(0.0);
+                match (self.thing(p.first()), crate::making::location(p.get(1))) {
+                    (Some(t), Some(to)) => self.move_by_trigger(t, to, pace),
+                    _ => false,
+                }
+            }
+            // Carried out or refused, the order's been given.
+            "actor_performs_command_on_actor" => {
+                match (self.thing(p.first()), name(p.get(1)), self.thing(p.get(2))) {
+                    (Some(t), Some(c), Some(on)) => {
+                        self.order_by_trigger(t, c, Aim::On(on));
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            "actor_performs_command_at_location" => {
+                let at = crate::making::location(p.get(2));
+                match (self.thing(p.first()), name(p.get(1)), at) {
+                    (Some(t), Some(c), Some(at)) => {
+                        self.order_by_trigger(t, c, Aim::At(at));
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            "kingdom_actors_in_area_move_to_location" => {
+                let area = p.get(1).and_then(|p| match p.value {
+                    Value::Int(id) => self.area(id),
+                    _ => None,
+                });
+                let to = crate::making::location(p.get(2));
+                match (self.kingdom(p.first()), area, to) {
+                    (Some(k), Some(area), Some(to)) => {
+                        let inside = self.triggers.inside.get(area).cloned().unwrap_or_default();
+                        self.move_all_by_trigger(k, &inside, to);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            "actors_lock" => {
+                self.lock_all();
+                true
+            }
+            "actors_unlock" => {
+                self.triggers.locks.things.clear();
+                true
+            }
+            "sai_disabled_for_kingdom" | "sai_enabled_for_kingdom" => {
+                match self.kingdom(p.first()) {
+                    Some(k) => {
+                        self.set_side_computer_control(k, e.name == "sai_enabled_for_kingdom");
+                        true
+                    }
+                    None => false,
+                }
+            }
+            "sai_disabled_for_actor" | "sai_enabled_for_actor" => match self.thing(p.first()) {
+                Some(t) => {
+                    self.set_thing_computer_control(t, e.name == "sai_enabled_for_actor");
+                    true
+                }
+                None => false,
+            },
             _ => false,
         }
     }
@@ -2603,5 +2688,316 @@ mod tests {
             pieces: vec![crate::Piece::Building(9)],
         };
         assert!(w.apply(1, nowhere).is_err());
+    }
+
+    fn place(at: [f32; 2]) -> Parameter {
+        parameter(
+            "ma_location",
+            "mi_location",
+            Value::Location([at[0], at[1], 0.0]),
+        )
+    }
+
+    fn order(id: &str) -> Parameter {
+        parameter("ma_command", "mi_command", Value::String(id.into()))
+    }
+
+    /// Two regiments at war, 1 (player 1's) and 3 (player 2's), out of
+    /// each other's range, with no triggers.
+    fn foes() -> World {
+        let rifle = || crate::testing::rifle(5.0, 10.0);
+        let fighters = vec![soldier(vec![rifle()]), soldier(vec![rifle()])];
+        let mut w = with(battle(&[1, 2], fighters, at_war()), vec![], &[]);
+        w.units[1].position = [30.0, 30.0];
+        w.organizations[1].position = [30.0, 30.0];
+        w
+    }
+
+    #[test]
+    fn a_trigger_moves_a_regiment_to_a_place() {
+        let mut w = foes();
+        let moves = element(
+            "actor_moves_to_location",
+            vec![actor_id(1), place([10.0, 20.0]), int(0)],
+        );
+        assert!(w.carry_out(&moves));
+        run(&mut w, 10.0);
+        assert!(crate::testing::near(w.centre(0), [10.0, 20.0]));
+        // What isn't there can't be moved.
+        let nobody = element(
+            "actor_moves_to_location",
+            vec![actor_id(99), place([10.0, 20.0]), int(0)],
+        );
+        assert!(!w.carry_out(&nobody));
+    }
+
+    #[test]
+    fn a_trigger_orders_an_attack_on_an_enemy_as_a_player_would() {
+        let mut w = foes();
+        let kill = |by, on| {
+            element(
+                "actor_performs_command_on_actor",
+                vec![actor_id(by), order("kill"), actor_id(on)],
+            )
+        };
+        assert!(w.carry_out(&kill(1, 3)));
+        assert_eq!(w.organizations[0].order, crate::Order::Pursue(1));
+        // Named by one of its units, the enemy is its regiment.
+        assert!(w.carry_out(&kill(1, 4)));
+        assert_eq!(w.organizations[0].order, crate::Order::Pursue(1));
+        // Any side's thing takes a trigger's orders.
+        assert!(w.carry_out(&kill(3, 1)));
+        assert_eq!(w.organizations[1].order, crate::Order::Pursue(0));
+        // Nothing to attack, it moves onto the thing instead: a refusal
+        // would leave it pursuing.
+        w.organizations[1].owner = 1;
+        assert!(w.carry_out(&kill(3, 1)));
+        assert_eq!(w.organizations[1].order, crate::Order::Move);
+        assert!(w.organizations[1].follow.is_some());
+        // Given to nothing, or on nothing, it fails.
+        assert!(!w.carry_out(&kill(99, 1)));
+        assert!(!w.carry_out(&kill(1, 99)));
+    }
+
+    #[test]
+    fn a_trigger_orders_commands_at_a_place() {
+        let mut w = foes();
+        let at = |c: &str| {
+            element(
+                "actor_performs_command_at_location",
+                vec![actor_id(3), order(c), place([30.0, 10.0])],
+            )
+        };
+        assert!(w.carry_out(&at("kill")));
+        assert_eq!(w.organizations[1].order, crate::Order::Attack);
+        assert!(w.carry_out(&at("guard")));
+        assert!(w.organizations[1].guard.is_some());
+        assert!(w.carry_out(&at("move")));
+        assert_eq!(w.organizations[1].order, crate::Order::Move);
+        assert!(w.organizations[1].guard.is_none());
+        // One it doesn't offer it refuses, carrying on as it was, though
+        // the order's been given.
+        assert!(w.carry_out(&at("unpack")));
+        assert!(w.carry_out(&at("dance")));
+        assert_eq!(w.organizations[1].order, crate::Order::Move);
+    }
+
+    #[test]
+    fn a_trigger_can_move_a_regiment_slower_until_it_arrives() {
+        let mut w = foes();
+        let top = w.regiment_speed(0);
+        let moves = |pace: Parameter| {
+            element(
+                "actor_moves_to_location",
+                vec![actor_id(1), place([10.0, 30.0]), pace],
+            )
+        };
+        assert!(w.carry_out(&moves(fixed(0.5))));
+        assert_eq!(w.regiment_speed(0), top / 2.0);
+        let at = |w: &World| w.units[0].position[1];
+        run(&mut w, 1.0);
+        let slow = at(&w) - 10.0;
+        // Another order goes at top speed.
+        assert!(w.carry_out(&moves(int(0))));
+        assert_eq!(w.regiment_speed(0), top);
+        let from = at(&w);
+        run(&mut w, 1.0);
+        assert!(at(&w) - from > slow * 1.5);
+        assert!(w.carry_out(&moves(fixed(0.5))));
+        run(&mut w, 30.0);
+        assert_eq!(w.regiment_speed(0), top);
+    }
+
+    #[test]
+    fn locking_stops_everything_until_unlocked_or_ordered() {
+        let mut w = foes();
+        w.apply(
+            2,
+            crate::Command::Move {
+                organization: 1,
+                to: [30.0, 0.0],
+            },
+        )
+        .unwrap();
+        assert!(w.carry_out(&element("actors_lock", vec![])));
+        assert!(w.locked(1) && w.locked(2) && w.locked(3) && w.locked(4));
+        run(&mut w, 5.0);
+        assert!(crate::testing::near(w.centre(1), [30.0, 30.0]));
+        // An order to a regiment unlocks it and its units.
+        let moves = element(
+            "actor_moves_to_location",
+            vec![actor_id(1), place([10.0, 20.0]), int(0)],
+        );
+        assert!(w.carry_out(&moves));
+        assert!(!w.locked(1) && !w.locked(2) && w.locked(3));
+        assert!(w.carry_out(&element("actors_unlock", vec![])));
+        assert!(!w.locked(3) && !w.locked(4));
+    }
+
+    #[test]
+    fn a_trigger_moves_a_sides_things_in_an_area() {
+        let mut w = among(vec![circle(7, [10.0, 10.0], 3.0)], vec![], &[]);
+        w.units[1].position = [10.0, 12.0];
+        w.organizations[1].position = [10.0, 12.0];
+        w.organizations[1].owner = 2;
+        w.triggers.inside = vec![vec![
+            Thing::Organization(0),
+            Thing::Unit(0),
+            Thing::Organization(1),
+            Thing::Unit(1),
+        ]];
+        let moves = |k| {
+            element(
+                "kingdom_actors_in_area_move_to_location",
+                vec![kingdom(k), area(7), place([30.0, 30.0])],
+            )
+        };
+        assert!(w.carry_out(&moves(1)));
+        assert_eq!(w.organizations[0].position, [30.0, 30.0]);
+        assert_eq!(w.organizations[1].position, [10.0, 12.0]);
+        // Nobody of the side there is still success.
+        assert!(w.carry_out(&moves(3)));
+        let nowhere = element(
+            "kingdom_actors_in_area_move_to_location",
+            vec![kingdom(1), area(8), place([30.0, 30.0])],
+        );
+        assert!(!w.carry_out(&nowhere));
+    }
+
+    #[test]
+    fn switching_off_a_sides_computer_control_stops_its_things() {
+        let mut w = foes();
+        w.apply(
+            2,
+            crate::Command::Move {
+                organization: 1,
+                to: [30.0, 0.0],
+            },
+        )
+        .unwrap();
+        let off = element("sai_disabled_for_kingdom", vec![kingdom(2)]);
+        assert!(w.carry_out(&off));
+        assert!(!w.computer_may_play(2) && !w.computer_may_order(1));
+        assert!(w.computer_may_play(1));
+        run(&mut w, 5.0);
+        assert!(crate::testing::near(w.centre(1), [30.0, 30.0]));
+        let on = element("sai_enabled_for_kingdom", vec![kingdom(2)]);
+        assert!(w.carry_out(&on));
+        assert!(w.computer_may_play(2) && w.computer_may_order(1));
+    }
+
+    #[test]
+    fn switching_off_a_things_computer_control_leaves_the_rest() {
+        let mut w = foes();
+        let set = |on: bool, id| {
+            let name = if on {
+                "sai_enabled_for_actor"
+            } else {
+                "sai_disabled_for_actor"
+            };
+            element(name, vec![actor_id(id)])
+        };
+        assert!(w.carry_out(&set(false, 3)));
+        assert!(w.computer_may_play(2) && !w.computer_may_order(1));
+        assert!(w.computer_may_order(0));
+        assert!(!w.carry_out(&set(false, 99)));
+        assert!(w.carry_out(&set(true, 3)));
+        assert!(w.computer_may_order(1));
+    }
+
+    #[test]
+    fn a_trigger_orders_a_bombardment_and_artillery_bombards_what_it_attacks() {
+        let mortar = tgmap::Weapon {
+            bombard: true,
+            area: 2.0,
+            ..crate::testing::rifle(30.0, 10.0)
+        };
+        let fighters = vec![soldier(vec![mortar]), soldier(vec![])];
+        let mut w = with(battle(&[1, 2], fighters, at_war()), vec![], &[]);
+        w.organizations[1].formations[0].aggressive = false;
+        w.units[1].position = [10.0, 35.0];
+        w.organizations[1].position = [10.0, 35.0];
+        let shelled = |w: &World| w.organizations[0].bombard.map(|b| b.target);
+        let at = element(
+            "actor_performs_command_at_location",
+            vec![actor_id(1), order("bombard"), place([20.0, 20.0])],
+        );
+        assert!(w.carry_out(&at));
+        assert_eq!(shelled(&w), Some(crate::Shelled::Place([20.0, 20.0])));
+        let enemy = crate::Shelled::Thing(crate::Piece::Organization(1));
+        let on = |c: &str| {
+            element(
+                "actor_performs_command_on_actor",
+                vec![actor_id(1), order(c), actor_id(3)],
+            )
+        };
+        assert!(w.carry_out(&on("move")));
+        assert_eq!(shelled(&w), None);
+        assert!(w.carry_out(&on("kill")));
+        assert_eq!(shelled(&w), Some(enemy));
+        // What can't bombard refuses it.
+        assert!(w.carry_out(&element(
+            "actor_performs_command_on_actor",
+            vec![actor_id(3), order("bombard"), actor_id(1)],
+        )));
+        assert_eq!(w.organizations[1].bombard, None);
+    }
+
+    #[test]
+    fn a_trigger_sends_an_airfields_air_attack() {
+        let mut w = crate::airfields::tests::field();
+        let money = w.stockpile(1);
+        let attack = |by| {
+            element(
+                "actor_performs_command_on_actor",
+                vec![actor_id(by), order("air_attack"), actor_id(7)],
+            )
+        };
+        assert!(w.carry_out(&attack(6)));
+        assert_eq!(w.stockpile(1), money - 150.0);
+        // Anything but an airfield refuses it, though it's been given.
+        let money = w.stockpile(2);
+        assert!(w.carry_out(&attack(7)));
+        assert_eq!(w.stockpile(2), money);
+    }
+
+    #[test]
+    fn a_triggers_slower_move_holds_through_a_fight_on_the_way() {
+        let rifle = crate::testing::rifle(8.0, 50.0);
+        let fighters = vec![soldier(vec![rifle]), soldier(vec![])];
+        let mut w = with(battle(&[1, 2], fighters, at_war()), vec![], &[]);
+        w.organizations[1].formations[0].aggressive = false;
+        let top = w.regiment_speed(0);
+        let moves = element(
+            "actor_moves_to_location",
+            vec![actor_id(1), place([10.0, 38.0]), fixed(0.5)],
+        );
+        assert!(w.carry_out(&moves));
+        let mut fought = false;
+        for _ in 0..(60.0 / crate::TICK) as usize {
+            w.tick();
+            fought |= !w.organizations[0].engaged.is_empty();
+            if fought && w.organizations[0].engaged.is_empty() && w.underway(0) {
+                break;
+            }
+        }
+        assert!(fought, "never fought");
+        assert!(w.underway(0), "never set off again");
+        assert_eq!(w.regiment_speed(0), top / 2.0);
+    }
+
+    #[test]
+    fn a_lone_unit_switched_off_by_its_own_id_is_left_alone() {
+        let mut truck = crate::testing::truck();
+        (truck.id, truck.owner, truck.members[0].id) = (5, 1, 6);
+        let mut w = World::from_organizations(
+            at_war(),
+            tgmap::Pathing::uniform(40, tgmap::Domain::Land),
+            &[truck],
+        );
+        assert!(w.carry_out(&element("sai_disabled_for_actor", vec![actor_id(6)])));
+        assert!(!w.computer_may_order(0));
+        assert!(w.carry_out(&element("sai_enabled_for_actor", vec![actor_id(6)])));
+        assert!(w.computer_may_order(0));
     }
 }
