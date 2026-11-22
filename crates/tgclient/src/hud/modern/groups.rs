@@ -1,7 +1,7 @@
-//! Our group strip, along the top beside the special operations panel: a
-//! slot for each control group showing its picture, or the key that
-//! selects it while there's no such group, with the tooltip under the
-//! strip. What each shows and does is
+//! Our group strip, hung from the top edge beside the special operations
+//! panel: a slot for each control group showing its picture, or the key
+//! that selects it while there's no such group, with the tooltip under
+//! the strip. What each shows and does is
 //! [`control_groups`](crate::control_groups)', shared with the original's.
 
 use bevy::picking::hover::Hovered;
@@ -12,7 +12,7 @@ use super::actions::GAP;
 use crate::Loaded;
 use crate::control_groups::{GROUPS, GroupButton, Shown, Strip, select_group};
 use crate::keys::Bindings;
-use crate::ui::{self, Blocks, Click, Edge, Font, ImageCache, Ink, Surface, label, panel};
+use crate::ui::{self, Blocks, Click, Edge, Font, ImageCache, Ink, Surface, label};
 
 /// A slot's side, and how far in its picture is drawn.
 const SLOT: f32 = 36.0;
@@ -36,7 +36,7 @@ pub struct Picture;
 #[derive(Component)]
 pub struct KeyLabel;
 
-/// Spawns the strip at the top of the window, `left` of its left edge.
+/// Spawns the strip on the window's top edge, `left` of its left edge.
 pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crate::Leaders>) {
     let left = super::special_ops::beside(&local, &leaders);
     let said = commands
@@ -50,7 +50,7 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
         .spawn((
             Blocks,
             ui::Docks(said),
-            panel(
+            ui::hanging(
                 Surface::Hud,
                 Node {
                     padding: UiRect::all(px(GAP)),
@@ -58,7 +58,6 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                     ..default()
                 },
             ),
-            Edge::Border,
         ))
         .with_children(|strip| {
             for n in 0..GROUPS {
@@ -108,7 +107,7 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: px(crate::ui_scale::MARGIN),
+                top: px(0),
                 left: px(left),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Start,

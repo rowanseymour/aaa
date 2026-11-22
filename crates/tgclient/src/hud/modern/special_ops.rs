@@ -44,7 +44,7 @@ pub fn beside(local: &Local, leaders: &Leaders) -> f32 {
 /// Where what shares the top left corner starts: beside the panel, under
 /// the group strip.
 pub fn corner(local: &Local, leaders: &Leaders) -> Vec2 {
-    let top = crate::ui_scale::MARGIN + super::groups::HEIGHT + 2.0 * GAP;
+    let top = super::groups::HEIGHT + 2.0 * GAP;
     Vec2::new(beside(local, leaders), top)
 }
 
@@ -365,6 +365,14 @@ fn ink(experience: f32, max: Option<f32>, seconds: f32) -> Ink {
 mod tests {
     use super::*;
     use crate::special_ops::tests::{operating, panel};
+
+    #[test]
+    fn what_shares_the_corner_starts_clear_under_the_strip() {
+        let corner = corner(&Local(None), &Leaders(Default::default(), None));
+        // The strip hangs from the top edge, so its bottom is its height.
+        assert!(corner.y >= super::super::groups::HEIGHT + GAP);
+        assert_eq!(corner.x, crate::ui_scale::MARGIN);
+    }
 
     fn button(index: usize, tip: Entity, recharge_line: Entity) -> OperationButton {
         OperationButton {

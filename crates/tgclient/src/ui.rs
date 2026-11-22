@@ -563,6 +563,18 @@ pub fn ledge(surface: Surface, node: Node) -> impl Bundle {
     )
 }
 
+/// A [`panel`] hung from the window's top edge, so rounded only at the
+/// bottom.
+pub fn hanging(surface: Surface, node: Node) -> impl Bundle {
+    backed(
+        surface,
+        Node {
+            border_radius: BorderRadius::bottom(px(CORNER)),
+            ..node
+        },
+    )
+}
+
 /// A [`panel`] of text over the map, which the pointer passes through.
 pub fn tooltip(node: Node) -> impl Bundle {
     (
