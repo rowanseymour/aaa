@@ -9,7 +9,7 @@ mod told;
 
 pub(crate) use draw::{LogBox, WholeLog, cycle, list, relist, show, spawn};
 pub(crate) use log::{About, MessageLog, filled, start};
-pub(crate) use told::{Failed, Refused, refuse, tell, tell_leaving};
+pub(crate) use told::{By, Failed, Refused, refuse, tell, tell_leaving};
 
 use bevy::prelude::*;
 

@@ -48,6 +48,10 @@ impl World {
             Command::Run { organization, .. } => self.may_run(player, organization),
             Command::Rout { organization } => self.may_rout(player, organization),
             Command::Explore { organization, .. } => self.may_explore(player, organization),
+            Command::Bombard {
+                organization,
+                target,
+            } => self.may_bombard(player, organization, target),
             Command::Move { organization, .. }
             | Command::Guard { organization, .. }
             | Command::Attack { organization, .. }
@@ -119,6 +123,8 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.may_cancel_construction(player, building)
             }
+            Command::AirAttack { building, on, .. } => self.may_air_attack(player, building, on),
+            Command::Escort { building, .. } => self.may_set_escort(player, building),
             Command::Heard { ref command } => self.may_hear(command),
             Command::Select { ref pieces } => self.may_select(pieces),
         }
@@ -140,6 +146,7 @@ impl World {
         self.playable(player)?;
         self.heeded(&command)?;
         let steering = steered(&command);
+        let bombard = matches!(command, Command::Bombard { .. });
         match command {
             Command::Move { organization, to } => self.order_move(player, organization, to)?,
             Command::Attack { organization, to } => self.order_attack(player, organization, to)?,
@@ -157,6 +164,10 @@ impl World {
                 enemy,
             } => self.order_pursue(player, organization, enemy)?,
             Command::Stop { organization } => self.order_stop(player, organization)?,
+            Command::Bombard {
+                organization,
+                target,
+            } => self.order_bombard(player, organization, target)?,
             Command::Guard { organization, to } => self.order_guard(player, organization, to)?,
             Command::Explore { organization, to } => {
                 self.order_explore(player, organization, to)?
@@ -260,6 +271,10 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.cancel_construction(player, building)?
             }
+            Command::AirAttack { building, at, on } => {
+                self.order_air_attack(player, building, at, on)?
+            }
+            Command::Escort { building, on } => self.set_escort(player, building, on)?,
             Command::Group { orders } => self.order_group(player, orders)?,
             Command::Heard { command } => self.hear(&command)?,
             Command::Select { pieces } => {
@@ -269,6 +284,13 @@ impl World {
         }
         if let (Some(r), false) = (steering, grouped) {
             self.leave_group(r);
+        }
+        // Any other order is a new one for its members, which bombarding
+        // gives way to, whether or not it sends them anywhere.
+        if let (Some(r), false) = (steering, bombard) {
+            for u in self.organizations[r].units.clone() {
+                self.units[u].shelling = None;
+            }
         }
         // An order cuts a reform short.
         if let Some(r) = steering {
@@ -645,6 +667,7 @@ pub(crate) fn steered(command: &Command) -> Option<usize> {
         | Command::Attack { organization, .. }
         | Command::Run { organization, .. }
         | Command::Pursue { organization, .. }
+        | Command::Bombard { organization, .. }
         | Command::Guard { organization, .. }
         | Command::Explore { organization, .. }
         | Command::GuardPiece { organization, .. }

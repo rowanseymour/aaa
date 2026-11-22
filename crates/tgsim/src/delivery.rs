@@ -124,11 +124,28 @@ pub struct Delivery {
 
 /// An aircraft shot down, falling out of its flight.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Plunge {
+pub(crate) struct Plunge {
     /// Its speed along the ground, which never changes, and how fast it
     /// sinks.
     across: f32,
     sinking: f32,
+}
+
+impl Plunge {
+    /// A fall starting level at `across` along the ground.
+    pub(crate) fn new(across: f32) -> Plunge {
+        Plunge {
+            across,
+            sinking: 0.0,
+        }
+    }
+
+    /// Sinks it faster by `pull` times its whole speed, returning its speed
+    /// along the ground and how fast it now sinks.
+    pub(crate) fn step(&mut self, pull: f32) -> (f32, f32) {
+        self.sinking += pull * libm::hypotf(self.across, self.sinking);
+        (self.across, self.sinking)
+    }
 }
 
 impl Delivery {
@@ -512,11 +529,7 @@ impl World {
     fn shot_down(&mut self, d: usize) {
         let delivery = &mut self.deliveries[d];
         delivery.cargo = None;
-        let across = delivery.ramp.speed();
-        delivery.plunge = Some(Plunge {
-            across,
-            sinking: 0.0,
-        });
+        delivery.plunge = Some(Plunge::new(delivery.ramp.speed()));
         log::debug!("{} {} shot down", delivery.template, delivery.id);
     }
 
@@ -531,7 +544,7 @@ impl World {
         let Some(mut p) = delivery.plunge else {
             return;
         };
-        p.sinking += pull * libm::hypotf(p.across, p.sinking);
+        p.step(pull);
         delivery.plunge = Some(p);
         delivery.previous = delivery.position;
         let [fx, fy] = delivery.facing;

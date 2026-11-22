@@ -33,6 +33,7 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `outcome` | says whether the match is over, and how it's come out for each kingdom |  | ✓ |
 | `move organization (x y \| other)` | sends an organization, by its id, to x y, or to keep near another organization, by its id | ✓ | ✓ |
 | `attack organization (x y \| enemy)` | sends an organization, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy organization, by its id | ✓ | ✓ |
+| `bombard organization (x y \| enemy)` | has an organization, by its id, shell x y or an enemy organization, by its id, with its bombarding weapons | ✓ | ✓ |
 | `guard organization (x y \| other)` | posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight | ✓ | ✓ |
 | `explore organization x y` | has an organization, by its id, explore around x y | ✓ | ✓ |
 | `heroes [kingdom]` | lists the heroes a kingdom, by name or id, holds, and what each is doing; without one, the kingdom played |  | ✓ |
@@ -42,6 +43,8 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `research technology` | asks the selected building to research a technology it lists |  | ✓ |
 | `usefactionability n x y` | uses the nth of the faction's special operations, from 0 as the panel lists them, on the ground at x y | ✓ | ✓ |
 | `pack` | packs up the selected building |  | ✓ |
+| `airattack (x y \| id)` | sends the selected airfield's air attack at x y, or on a building or organization by its id |  | ✓ |
+| `escort on \| off` | switches the selected airfield's escort for its air attacks on or off |  | ✓ |
 | `sell` | sells the selected building |  | ✓ |
 | `disband organization` | disbands an organization, by its id |  | ✓ |
 | `attach organization` | attaches an organization, by its id, to an HQ with a place for it, or moves it on to the next |  | ✓ |

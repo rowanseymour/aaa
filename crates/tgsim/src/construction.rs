@@ -344,6 +344,7 @@ impl World {
         let b = self.buildings.len();
         self.push_buildings(std::slice::from_ref(&site), true);
         self.buildings[b].constructing = true;
+        self.empty_hangar(b);
         self.happen(Happening::Begun {
             player,
             template: template.clone(),

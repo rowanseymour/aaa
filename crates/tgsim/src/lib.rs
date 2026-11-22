@@ -6,8 +6,10 @@
 //! in it, controlled by a person or an AI.
 
 mod abilities;
+mod airfields;
 mod areas;
 mod attach;
+mod bombard;
 mod capture;
 mod combat;
 mod commands;
@@ -44,6 +46,7 @@ mod remains;
 mod research;
 mod rules;
 mod schedule;
+mod scripted;
 mod setup;
 mod stances;
 mod strikes;
@@ -65,7 +68,9 @@ use tgmap::{
     Unpacks, Weapon,
 };
 
+pub use airfields::{AirAim, Berth, Job, Sortie, Stage};
 pub use attach::Hq;
+pub use bombard::{Bombardment, Shelled};
 pub use combat::Struck;
 pub use computer::{ComputerPlayer, Idle};
 pub use delivery::{Delivery, Descent};
@@ -116,7 +121,8 @@ pub struct Projectile {
     pub weapon: usize,
     /// The weapon, which outlives its firer once fired.
     shot: Weapon,
-    pub target: Target,
+    /// What it was fired at; none for a spot on the ground.
+    pub target: Option<Target>,
     /// Where it lands.
     pub at: [f32; 2],
     /// The tick it lands on.
@@ -131,7 +137,8 @@ pub struct Landing {
     pub tick: u64,
     pub from: Target,
     pub weapon: usize,
-    pub target: Target,
+    /// What it was fired at; none for a spot on the ground.
+    pub target: Option<Target>,
     pub at: [f32; 2],
 }
 
@@ -175,6 +182,11 @@ pub struct World {
     pub buildings: Vec<Building>,
     /// The aircraft bringing organizations in, and those that have gone.
     pub deliveries: Vec<Delivery>,
+    /// The aircraft airfields have sent out, and those that are back or
+    /// gone.
+    pub sorties: Vec<Sortie>,
+    /// The wave the next planes sent out together share.
+    next_wave: u32,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
     /// The sight-givers and markers placed and made, those gone included.
@@ -268,6 +280,9 @@ pub struct Organization {
     pub group: Option<u32>,
     /// The speed its group hands it to arrive with the rest, while it does.
     group_speed: Option<f32>,
+    /// The speed a trigger's move order set it going at, below its top
+    /// speed, until that move's over.
+    ordered_speed: Option<f32>,
     /// Whether it was inside its group's zone when its group last looked,
     /// and so takes part in its timing.
     taking_part: bool,
@@ -317,6 +332,8 @@ pub struct Organization {
     /// Whether it's carrying out an order to bombard, which makes its
     /// shots bombardment.
     pub bombarding: bool,
+    /// The bombard order it's carrying out, while it is.
+    pub bombard: Option<Bombardment>,
     /// What has bombarded it lately, which keeps it out of supply.
     pub bombarded: Vec<Bombarder>,
     /// The last hit an enemy dealt any of its members.
@@ -425,6 +442,7 @@ impl Organization {
     /// it forgets. What it's engaged with it stays engaged with.
     pub(crate) fn take_order(&mut self, order: Order) {
         self.order = order;
+        self.ordered_speed = None;
         self.follow = None;
         self.guard = None;
         self.explore = None;
@@ -434,6 +452,8 @@ impl Organization {
         self.unpack_at = None;
         self.unpack_again = None;
         self.rally = None;
+        self.bombard = None;
+        self.bombarding = false;
     }
 
     /// Whether it's chasing the enemy it's pursuing, out of formation.
@@ -456,10 +476,11 @@ impl Organization {
     }
 
     /// Index into `formations` of the one it's in: its combat formation
-    /// while engaged or attacking.
+    /// while engaged, attacking or bombarding.
     pub fn current_formation(&self) -> usize {
-        let fighting =
-            !self.engaged.is_empty() || matches!(self.order, Order::Attack | Order::Pursue(_));
+        let fighting = !self.engaged.is_empty()
+            || self.bombard.is_some()
+            || matches!(self.order, Order::Attack | Order::Pursue(_));
         match fighting || self.guarding() {
             true => self.combat.unwrap_or(self.formation),
             false => self.formation,
@@ -479,6 +500,7 @@ impl Organization {
             Order::Attack | Order::Pursue(_) => true,
             Order::Move => {
                 !self.engaged.is_empty()
+                    || self.bombard.is_some()
                     || self.guarding()
                     || self.formations[self.formation].aggressive
             }
@@ -616,6 +638,9 @@ pub struct Unit {
     fired_ago: Vec<f32>,
     /// What it last fired on.
     pub target: Option<Target>,
+    /// What its organization last had it bombard, which it goes on
+    /// bombarding until it's sent somewhere.
+    pub shelling: Option<Bombardment>,
     /// The tick it last fired on, and the index of the weapon it fired.
     pub shot: Option<(u64, usize)>,
     /// Seconds since each of its fighter's repairs was last used; infinite
@@ -799,6 +824,10 @@ pub struct Building {
     /// Whether it's a site still going up, which does nothing a finished
     /// building does until its health is full.
     pub constructing: bool,
+    /// For an airfield, the places in its stock of aircraft.
+    pub hangar: Vec<Berth>,
+    /// For an airfield, whether its air attacks take an escort.
+    pub escort: bool,
 }
 
 /// How a building stands.
@@ -974,6 +1003,15 @@ pub enum Command {
     /// is done with. Refused for the organization itself, or what's
     /// already gone.
     MoveOnto { organization: usize, piece: Piece },
+    /// Has an organization shell `target` with its members' bombarding
+    /// weapons, the organization staying put and each member out of reach
+    /// driving towards it, until `target` dies, a moving one is lost in
+    /// fog, or it's given another order. Refused where none of its members
+    /// can shell it.
+    Bombard {
+        organization: usize,
+        target: Shelled,
+    },
     /// Has an organization rout at once, as if its morale had broken.
     /// Refused for one with no morale, that isn't fighting or can't move.
     Rout { organization: usize },
@@ -1094,6 +1132,18 @@ pub enum Command {
         at: [f32; 2],
         on: Option<Piece>,
     },
+    /// Sends an air attack from an airfield on `on`, or at `at` for none:
+    /// its attack group's planes that are ready, and its escort if that's
+    /// on, paid for as they go. One its side can't afford sends nothing
+    /// and tells it so. Refused for a building with no planes for one, and
+    /// while too few are ready.
+    AirAttack {
+        building: usize,
+        at: [f32; 2],
+        on: Option<Piece>,
+    },
+    /// Sets whether an airfield's air attacks take an escort.
+    Escort { building: usize, on: bool },
     /// Tells the map's triggers the player ran this interface command,
     /// such as `ActorCommand move`, which they're listening for.
     Heard { command: String },
@@ -1283,6 +1333,7 @@ impl World {
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
+        self.keep_bombarding();
         self.keep_exploring();
         self.keep_idling();
         self.keep_stances();
@@ -1300,6 +1351,8 @@ impl World {
         self.tend_heroes();
         self.produce();
         self.deliver();
+        self.fly_sorties();
+        self.rebuild_planes();
         self.rally();
         self.unpack();
         self.grant_from_buildings();
@@ -1384,7 +1437,7 @@ impl Sides {
 }
 
 digest!(World {
-    organizations, units, buildings, props, deliveries, cleared, technologies, objectives, fates, over,
+    organizations, units, buildings, props, deliveries, sorties, next_wave, cleared, technologies, objectives, fates, over,
     groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng, sides,
 } skip {
@@ -1403,10 +1456,10 @@ digest!(Sides { names, computers } skip {
 });
 
 digest!(Organization {
-    group, group_speed, taking_part,
+    group, group_speed, ordered_speed, taking_part,
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
-    unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
+    unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
     guard, arriving, terrain_properties, settled, travelling, route_end, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
     chased, follow, build, mending, explore,
@@ -1441,7 +1494,7 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
-    fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
+    fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
     aloft, landed, properties,
 } skip {
@@ -1466,6 +1519,7 @@ digest!(Building {
     noticed, awake,
     inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
     captured, unpacked_from, zone, members, supply, properties, created, remembered, constructing,
+    hangar, escort,
 } skip {
     // Its template's, or as the map has it.
     fighter, deploy, organization, obstacle,

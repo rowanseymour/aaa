@@ -12,9 +12,9 @@ use super::interface::{
 };
 use super::parse::commands;
 use super::play::{
-    advance, attach, attach_hero, build, building_order, commission, create, decide,
-    destroy_selected, detach_hero, disband, heroes, objects, order, outcome, placement_kingdom,
-    player_kingdom, record, repair, research, select, settlements, sun, unpack,
+    advance, air_attack, attach, attach_hero, build, building_order, commission, create, decide,
+    destroy_selected, detach_hero, disband, escort, heroes, objects, order, outcome,
+    placement_kingdom, player_kingdom, record, repair, research, select, settlements, sun, unpack,
     use_faction_ability,
 };
 use super::{Console, MAX_DEPTH, Step};
@@ -281,6 +281,14 @@ pub(crate) const VERBS: &[Verb] = &[
     .original()
     .in_match(),
     verb(
+        "bombard",
+        "organization (x y | enemy)",
+        "has an organization, by its id, shell x y or an enemy organization, by its id, with its bombarding weapons",
+        |world, args, _| order(world, args, Aim::Bombard),
+    )
+    .original()
+    .in_match(),
+    verb(
         "guard",
         "organization (x y | other)",
         "posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight",
@@ -354,6 +362,20 @@ pub(crate) const VERBS: &[Verb] = &[
         |world, args, _| {
             building_order(world, args, |building| tgsim::Command::Pack { building })
         },
+    )
+    .in_match(),
+    verb(
+        "airattack",
+        "(x y | id)",
+        "sends the selected airfield's air attack at x y, or on a building or organization by its id",
+        |world, args, _| air_attack(world, args),
+    )
+    .in_match(),
+    verb(
+        "escort",
+        "on | off",
+        "switches the selected airfield's escort for its air attacks on or off",
+        |world, args, _| escort(world, args),
     )
     .in_match(),
     verb(

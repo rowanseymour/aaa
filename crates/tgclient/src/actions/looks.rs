@@ -12,9 +12,9 @@ use crate::{Loaded, Raising, Sim};
 use super::layout::{GameHas, Place};
 use super::tips::{Row, Said};
 use super::{
-    Aim, CANCEL_LOOK, COMMAND_ALL_HELP, COMMAND_ALL_ICON, COMMAND_ALL_NAME, DEPLOY,
-    DEPLOY_TO_LOCATION, Entry, Give, Menu, ORDERS, PACK, Page, RALLY, RESEARCH, Refusal, SELL,
-    Shown,
+    AIR_ATTACK, Aim, CANCEL_LOOK, COMMAND_ALL_HELP, COMMAND_ALL_ICON, COMMAND_ALL_NAME, DEPLOY,
+    DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON, Entry, Give, Menu, ORDERS, PACK, Page, RALLY,
+    RESEARCH, Refusal, SELL, Shown,
 };
 
 /// How a button shows.
@@ -72,6 +72,9 @@ pub struct Looks {
     pub(crate) rally: (Option<Place>, Look),
     pub(crate) pack: (Option<Place>, Look),
     pub(crate) sell: (Option<Place>, Look),
+    pub(crate) air_attack: (Option<Place>, Look),
+    escort_on: (Option<Place>, Look),
+    escort_off: (Option<Place>, Look),
     cancel: Look,
     /// Where a site's Cancel goes.
     pub(crate) site: Option<Place>,
@@ -93,6 +96,8 @@ pub struct Looks {
     /// What an order given only on things says given on the ground, with
     /// the order's name.
     pub(crate) no_target: String,
+    /// For a place none of the selection can bombard.
+    pub(crate) no_bombard: String,
     pub(crate) has: GameHas,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
@@ -110,6 +115,15 @@ pub struct Looks {
 }
 
 impl Looks {
+    /// The escort switch an airfield whose escort is `on` shows: the one
+    /// that changes it.
+    pub(crate) fn escort(&self, on: bool) -> &(Option<Place>, Look) {
+        match on {
+            true => &self.escort_off,
+            false => &self.escort_on,
+        }
+    }
+
     /// The menu of what the selected building commissions.
     pub(crate) fn menu(&self, sim: &tgsim::World, building: Option<usize>) -> &[Recruit] {
         building
@@ -184,6 +198,9 @@ impl Looks {
             &self.rally,
             &self.pack,
             &self.sell,
+            &self.air_attack,
+            &self.escort_on,
+            &self.escort_off,
         ];
         let looks = (self.orders.iter().chain(places))
             .map(|(_, look)| look)
@@ -264,6 +281,9 @@ pub fn setup(
     let rally = look_of(game, RALLY);
     let pack = look_of(game, PACK);
     let sell = look_of(game, SELL);
+    let air_attack = look_of(game, AIR_ATTACK);
+    let escort_on = look_of(game, ESCORT_ON);
+    let escort_off = look_of(game, ESCORT_OFF);
     let (site, cancel) = look_of(game, CANCEL_LOOK);
     let strings = game.strings();
     let title = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
@@ -289,6 +309,7 @@ pub fn setup(
     let research_requires = title("research_error_missing_requirements|ss", "%s required: %s");
     let research_refused = title("research_error_generic|s", "Could not research %s");
     let no_target = title("ui_error_command_target|s", "Invalid target for %s");
+    let no_bombard = title("bombard_error_location", "Invalid bombard target");
     let choose_hero = title(
         "ui_error_missing_single_recruit_item",
         "Must select a hero to attach",
@@ -458,6 +479,9 @@ pub fn setup(
         rally,
         pack,
         sell,
+        air_attack,
+        escort_on,
+        escort_off,
         cancel,
         site,
         command_all,
@@ -467,6 +491,7 @@ pub fn setup(
         research_refused,
         choose_hero,
         no_target,
+        no_bombard,
         has,
         research_requires,
         menus,
@@ -507,6 +532,11 @@ pub(crate) fn look_of<'a>(
         Entry::Open(Menu::Research) => &looks.research.1,
         Entry::Research(i) => &looks.topics(sim, building)[i].look,
         Entry::Rally => &looks.rally.1,
+        Entry::AirAttack => &looks.air_attack.1,
+        Entry::Escort => {
+            let on = building.is_some_and(|b| sim.buildings[b].escort);
+            &looks.escort(on).1
+        }
         Entry::CommandAll => &looks.command_all,
         Entry::Pack => &looks.pack.1,
         Entry::Sell => &looks.sell.1,

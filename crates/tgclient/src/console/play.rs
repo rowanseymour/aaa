@@ -316,13 +316,14 @@ pub(crate) fn create(world: &mut World, args: &[&str]) -> Reply {
 /// Gives an organization an order at a place, marked as if clicked there.
 pub(crate) fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     match (aim, args) {
-        (Aim::Attack, [id, enemy]) => return after(world, id, enemy, aim),
+        (Aim::Attack | Aim::Bombard, [id, enemy]) => return after(world, id, enemy, aim),
         (Aim::Guard | Aim::Move, [id, other]) => return after(world, id, other, aim),
         _ => {}
     }
     let [id, x, y] = args else {
         return Err(usage(match aim {
             Aim::Attack => "attack",
+            Aim::Bombard => "bombard",
             Aim::Guard => "guard",
             Aim::Explore => "explore",
             _ => "move",
@@ -336,6 +337,10 @@ pub(crate) fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     let command = match aim {
         Aim::Move => tgsim::Command::Move { organization, to },
         Aim::Attack => tgsim::Command::Attack { organization, to },
+        Aim::Bombard => tgsim::Command::Bombard {
+            organization,
+            target: tgsim::Shelled::Place(to),
+        },
         Aim::Run => tgsim::Command::Run { organization, to },
         Aim::Guard => tgsim::Command::Guard { organization, to },
         Aim::Explore => tgsim::Command::Explore { organization, to },
@@ -358,8 +363,8 @@ pub(crate) fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     Ok(String::new())
 }
 
-/// Sends an organization after an enemy organization, or to guard or keep
-/// near another, both by their ids.
+/// Sends an organization after an enemy organization, to bombard it, or to
+/// guard or keep near another, both by their ids.
 pub(crate) fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let sim = &world.resource::<Sim>().0;
     let find = |id: &str| {
@@ -379,6 +384,10 @@ pub(crate) fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply
         Aim::Move => tgsim::Command::MoveOnto {
             organization: r,
             piece: tgsim::Piece::Organization(e),
+        },
+        Aim::Bombard => tgsim::Command::Bombard {
+            organization: r,
+            target: tgsim::Shelled::Thing(tgsim::Piece::Organization(e)),
         },
         _ => tgsim::Command::Pursue {
             organization: r,
@@ -580,6 +589,49 @@ pub(super) fn building_order(
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
     let b = selected_building(world)?;
     give(world, player, order(b))?;
+    Ok(String::new())
+}
+
+pub(super) fn air_attack(world: &mut World, args: &[&str]) -> Reply {
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let b = selected_building(world)?;
+    let (at, on) = match args {
+        [x, y] => (place(&world.resource::<Loaded>().map.ground, x, y)?, None),
+        [id] => {
+            let sim = &world.resource::<Sim>().0;
+            let piece = match organization_by_id(sim, id) {
+                Ok(r) => tgsim::Piece::Organization(r),
+                Err(_) => (sim.buildings.iter())
+                    .position(|b| b.id.to_string() == *id && !b.gone())
+                    .map(tgsim::Piece::Building)
+                    .ok_or_else(|| format!("nothing {id}"))?,
+            };
+            let at = match piece {
+                tgsim::Piece::Organization(r) => sim.centre(r),
+                tgsim::Piece::Building(b) => sim.buildings[b].position,
+            };
+            (at, Some(piece))
+        }
+        _ => return Err(usage("airattack")),
+    };
+    let attack = tgsim::Command::AirAttack {
+        building: b,
+        at,
+        on,
+    };
+    give(world, player, attack)?;
+    Ok(String::new())
+}
+
+pub(super) fn escort(world: &mut World, args: &[&str]) -> Reply {
+    let on = match args {
+        ["on"] => true,
+        ["off"] => false,
+        _ => return Err(usage("escort")),
+    };
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let building = selected_building(world)?;
+    give(world, player, tgsim::Command::Escort { building, on })?;
     Ok(String::new())
 }
 

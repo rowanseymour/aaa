@@ -8,6 +8,7 @@
 //! share what it keeps: a table read on one is there for the others.
 
 mod actor_states;
+mod airfields;
 mod audio;
 mod campaigns;
 
@@ -49,6 +50,7 @@ mod views;
 pub mod widgets;
 mod world_rules;
 
+pub use airfields::{AirGroup, AirJob, Aircraft, Airfield, Runway};
 pub use audio::{
     AnimationAudio, Audio, AudioCategory, AudioControl, AudioPriority, AudioWho, AudioWorld, Cue,
     MusicSettings, ObjectAudio, SoundSwitches, Volumes,
@@ -714,6 +716,15 @@ impl GameData {
         svars
             .iter()
             .find_map(|v| v.under_siege_recently_damaged_seconds)
+    }
+
+    /// What a building's aircraft are rebuilt and repaired at while it's
+    /// under siege, as a share of their usual rate.
+    pub fn denizen_siege_rate(&self) -> Option<f32> {
+        let svars = self.svars();
+        svars
+            .iter()
+            .find_map(|v| v.denizen_resupply_rate_under_siege)
     }
 
     /// `KillCreditTimeout`, in seconds.

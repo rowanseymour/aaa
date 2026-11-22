@@ -119,6 +119,8 @@ impl World {
             units: Vec::new(),
             buildings: Vec::new(),
             deliveries: Vec::new(),
+            sorties: Vec::new(),
+            next_wave: 0,
             scenery: Vec::new(),
             props: Vec::new(),
             clearable: Vec::new(),
@@ -251,6 +253,7 @@ impl World {
                 .map(|m| m.lost.unwrap_or(0.0))
                 .collect(),
             bombarding: false,
+            bombard: None,
             bombarded: Vec::new(),
             properties: Vec::new(),
             guard: None,
@@ -265,6 +268,7 @@ impl World {
             turn_to: None,
             group: None,
             group_speed: None,
+            ordered_speed: None,
             taking_part: false,
             entrenched: None,
             morale: 0.0,
@@ -388,6 +392,7 @@ impl World {
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
             closing: None,
+            shelling: None,
             busy: 0,
             decided: 0,
             met: None,
@@ -411,6 +416,7 @@ impl World {
     pub(crate) fn push_buildings(&mut self, buildings: &[tgmap::Building], numbered: bool) {
         for b in buildings {
             let health = b.fighter.health * b.health;
+            let hangar = self.hangar(&b.template, true);
             self.buildings.push(Building {
                 id: b.id,
                 template: b.template.clone(),
@@ -457,6 +463,8 @@ impl World {
                 created: self.ticks,
                 remembered: Vec::new(),
                 constructing: false,
+                hangar,
+                escort: false,
             });
             self.next_id = self.next_id.max(b.id + 1);
             if numbered {

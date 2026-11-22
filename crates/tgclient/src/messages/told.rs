@@ -17,7 +17,22 @@ use super::log::{About, Fill, Look, MessageLog, Place, Words, fill_all};
 #[derive(Message)]
 pub struct Refused {
     pub about: About,
-    pub by: Option<Aim>,
+    pub by: Option<By>,
+}
+
+/// An order that refuses what it's aimed at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum By {
+    /// One of the organizations' orders.
+    Aim(Aim),
+    /// The selected airfield's air attack.
+    AirAttack,
+}
+
+impl From<Aim> for By {
+    fn from(aim: Aim) -> By {
+        By::Aim(aim)
+    }
 }
 
 /// An order the sim refused, as the player's told.
@@ -26,6 +41,8 @@ pub struct Failed {
     pub text: String,
     /// What it was given to, where the message points, if anything.
     pub about: Option<About>,
+    /// Otherwise, the spot it points at, if any.
+    pub at: Option<[f32; 2]>,
 }
 
 /// Tells the player of each order just [`Refused`] or [`Failed`].
@@ -44,12 +61,16 @@ pub fn refuse(
             About::Building(b) => log.look.building(&sim.0, b),
         };
         let text = match by {
-            Some(aim) => {
+            Some(by) => {
                 let said = log.look.said(
                     "ui_error_command_target_actor|ss",
                     "%s is an invalid target for %s",
                 );
-                fill(&said, &[&name, looks.order(*aim)])
+                let order = match by {
+                    By::Aim(aim) => looks.order(*aim),
+                    By::AirAttack => &looks.air_attack.1.name,
+                };
+                fill(&said, &[&name, order])
             }
             None => {
                 let said = log
@@ -61,8 +82,12 @@ pub fn refuse(
         let place = Some(Place::of(&sim.0, *about));
         log.say("GENERIC_ERROR", text, place, &time, &mut sounds);
     }
-    for Failed { text, about } in failed.read() {
-        let place = about.map(|a| Place::of(&sim.0, a));
+    for Failed { text, about, at } in failed.read() {
+        let place = match (about, at) {
+            (Some(a), _) => Some(Place::of(&sim.0, *a)),
+            (None, &Some(at)) => Some(Place { about: None, at }),
+            (None, None) => None,
+        };
         log.say("GENERIC_ERROR", text.clone(), place, &time, &mut sounds);
     }
 }
@@ -419,6 +444,19 @@ pub(crate) fn told(
             let text = fill(&said, &[&look.name(template.as_str()), &cost]);
             Told::Line("GENERIC_ERROR", text, at(About::Organization(organization)))
         }
+        Notice::AirAttackUnaffordable {
+            player,
+            building,
+            cost,
+        } if ours(player) => {
+            let said = look.said(
+                "denizen_error_affording|ss",
+                "Insufficient funds for %s. Requires %s.",
+            );
+            let job = look.said("denizen_air_attack", "Air Attack");
+            let text = fill(&said, &[&job, &cost.ceil().to_string()]);
+            Told::Line("GENERIC_ERROR", text, at(About::Building(building)))
+        }
         Notice::NotBuilt {
             player,
             organization,
@@ -592,6 +630,14 @@ pub(crate) fn told(
             ..
         } if ours(player) => Told::Event(
             "company_experience_gained_level",
+            vec![look.organization(sim, organization).into()],
+            at(About::Organization(organization)),
+        ),
+        Notice::BombardTargetLost {
+            player,
+            organization,
+        } if ours(player) => Told::Event(
+            "bombard_target_lost_in_fog",
             vec![look.organization(sim, organization).into()],
             at(About::Organization(organization)),
         ),

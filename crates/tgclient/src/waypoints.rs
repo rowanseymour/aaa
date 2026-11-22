@@ -84,6 +84,7 @@ fn command(aim: Aim) -> &'static str {
     match aim {
         Aim::Move => "move",
         Aim::Attack => "kill",
+        Aim::Bombard => "bombard",
         Aim::Run => "retreat",
         Aim::Guard => "guard",
         Aim::Unpack => "unpack",
@@ -171,6 +172,7 @@ pub fn cursor(
     let frames = match *page {
         Page::Aiming(aim) if over_map => looks.cursors.get(&aim),
         Page::Rally if over_map => looks.rally_cursor.as_ref(),
+        Page::AirAttack if over_map => looks.cursors.get(&Aim::Attack),
         Page::Delivering(_) if over_map => looks.cursors.get(&Aim::Move),
         _ if over_map && armed.0.is_some() => looks.cursors.get(&Aim::Attack),
         _ => None,
