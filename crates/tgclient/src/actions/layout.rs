@@ -127,6 +127,9 @@ pub(crate) fn offered(
     let rout = selected.iter().any(|&r| can(sim, player, Give::Rout, r));
     let builds = builder(sim, selected).is_some();
     let repairs = selected.iter().any(|&r| repairs(sim, r));
+    let bombards = selected.iter().any(|&r| sim.bombards_at_all(r));
+    // What has only bombarding weapons has no Attack.
+    let attacks = selected.iter().any(|&r| !sim.only_bombards(r));
     let mut out = ORDERS.map(|(ids, _)| match ids {
         control_groups::ENABLE => behavior == Some(false),
         control_groups::DISABLE => behavior == Some(true),
@@ -135,7 +138,8 @@ pub(crate) fn offered(
         "repair" => repairs,
         "unpack" => all_packed && one,
         "rout" => rout,
-        "kill" => !all_packed,
+        "kill" => !all_packed && attacks,
+        "bombard" => bombards,
         "hq_attach" => attachable,
         "hq_detach" => any(&|r| r.hq.is_some()),
         "retreat" | "guard" => !all_packed || !lone,
@@ -469,6 +473,7 @@ mod tests {
     /// The slots the game's data gives [`ORDERS`].
     const GAME: [Option<Place>; ORDERS.len()] = [
         at(1),
+        at(9),
         at(6),
         at(5),
         at(4),

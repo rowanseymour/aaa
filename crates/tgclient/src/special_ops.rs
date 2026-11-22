@@ -313,7 +313,11 @@ impl User<'_> {
             }
         };
         let text = fill(said, &[name, summons]);
-        self.failed.write(Failed { text, about: None });
+        self.failed.write(Failed {
+            text,
+            about: None,
+            at: None,
+        });
     }
 }
 

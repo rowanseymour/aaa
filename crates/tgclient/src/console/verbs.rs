@@ -261,6 +261,14 @@ pub(crate) const VERBS: &[Verb] = &[
     .original()
     .in_match(),
     verb(
+        "bombard",
+        "organization (x y | enemy)",
+        "has an organization, by its id, shell x y or an enemy organization, by its id, with its bombarding weapons",
+        |world, args, _| order(world, args, Aim::Bombard),
+    )
+    .original()
+    .in_match(),
+    verb(
         "guard",
         "organization (x y | other)",
         "posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight",

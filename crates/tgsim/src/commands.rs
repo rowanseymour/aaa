@@ -47,6 +47,10 @@ impl World {
             }
             Command::Run { organization, .. } => self.may_run(player, organization),
             Command::Rout { organization } => self.may_rout(player, organization),
+            Command::Bombard {
+                organization,
+                target,
+            } => self.may_bombard(player, organization, target),
             Command::Move { organization, .. }
             | Command::Guard { organization, .. }
             | Command::Attack { organization, .. }
@@ -156,6 +160,10 @@ impl World {
                 enemy,
             } => self.order_pursue(player, organization, enemy)?,
             Command::Stop { organization } => self.order_stop(player, organization)?,
+            Command::Bombard {
+                organization,
+                target,
+            } => self.order_bombard(player, organization, target)?,
             Command::Guard { organization, to } => self.order_guard(player, organization, to)?,
             Command::GuardPiece {
                 organization,
@@ -641,6 +649,7 @@ pub(crate) fn steered(command: &Command) -> Option<usize> {
         | Command::Attack { organization, .. }
         | Command::Run { organization, .. }
         | Command::Pursue { organization, .. }
+        | Command::Bombard { organization, .. }
         | Command::Guard { organization, .. }
         | Command::GuardPiece { organization, .. }
         | Command::MoveOnto { organization, .. }

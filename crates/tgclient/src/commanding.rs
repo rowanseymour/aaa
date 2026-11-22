@@ -441,6 +441,10 @@ pub(crate) fn send(
         let command = match aim {
             actions::Aim::Move => tgsim::Command::Move { organization, to },
             actions::Aim::Attack => tgsim::Command::Attack { organization, to },
+            actions::Aim::Bombard => tgsim::Command::Bombard {
+                organization,
+                target: tgsim::Shelled::Place(to),
+            },
             actions::Aim::Run => tgsim::Command::Run { organization, to },
             actions::Aim::Guard => tgsim::Command::Guard { organization, to },
             actions::Aim::Unpack => tgsim::Command::Unpack {

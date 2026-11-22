@@ -317,6 +317,7 @@ fn prompted(
                 _ => "Left click an enemy or where to attack",
             })
         }
+        (None, Page::Aiming(Aim::Bombard)) => prompt("Left click what or where to bombard"),
         (None, Page::Aiming(Aim::Guard)) => prompt("Left click what or where to guard"),
         (None, Page::Aiming(Aim::Repair)) => prompt("Left click what to repair"),
         (None, Page::Aiming(_)) => prompt("Left click where to go"),

@@ -8,6 +8,7 @@
 mod abilities;
 mod areas;
 mod attach;
+mod bombard;
 mod capture;
 mod combat;
 mod commands;
@@ -65,6 +66,7 @@ use tgmap::{
 };
 
 pub use attach::Hq;
+pub use bombard::{Bombardment, Shelled};
 pub use combat::Struck;
 pub use computer::{ComputerPlayer, Idle};
 pub use delivery::{Delivery, Descent};
@@ -114,7 +116,8 @@ pub struct Projectile {
     pub weapon: usize,
     /// The weapon, which outlives its firer once fired.
     shot: Weapon,
-    pub target: Target,
+    /// What it was fired at; none for a spot on the ground.
+    pub target: Option<Target>,
     /// Where it lands.
     pub at: [f32; 2],
     /// The tick it lands on.
@@ -129,7 +132,8 @@ pub struct Landing {
     pub tick: u64,
     pub from: Target,
     pub weapon: usize,
-    pub target: Target,
+    /// What it was fired at; none for a spot on the ground.
+    pub target: Option<Target>,
     pub at: [f32; 2],
 }
 
@@ -315,6 +319,8 @@ pub struct Organization {
     /// Whether it's carrying out an order to bombard, which makes its
     /// shots bombardment.
     pub bombarding: bool,
+    /// The bombard order it's carrying out, while it is.
+    pub bombard: Option<Bombardment>,
     /// What has bombarded it lately, which keeps it out of supply.
     pub bombarded: Vec<Bombarder>,
     /// The last hit an enemy dealt any of its members.
@@ -429,6 +435,8 @@ impl Organization {
         self.unpack_at = None;
         self.unpack_again = None;
         self.rally = None;
+        self.bombard = None;
+        self.bombarding = false;
     }
 
     /// Whether it's chasing the enemy it's pursuing, out of formation.
@@ -451,10 +459,11 @@ impl Organization {
     }
 
     /// Index into `formations` of the one it's in: its combat formation
-    /// while engaged or attacking.
+    /// while engaged, attacking or bombarding.
     pub fn current_formation(&self) -> usize {
-        let fighting =
-            !self.engaged.is_empty() || matches!(self.order, Order::Attack | Order::Pursue(_));
+        let fighting = !self.engaged.is_empty()
+            || self.bombard.is_some()
+            || matches!(self.order, Order::Attack | Order::Pursue(_));
         match fighting || self.guarding() {
             true => self.combat.unwrap_or(self.formation),
             false => self.formation,
@@ -474,6 +483,7 @@ impl Organization {
             Order::Attack | Order::Pursue(_) => true,
             Order::Move => {
                 !self.engaged.is_empty()
+                    || self.bombard.is_some()
                     || self.guarding()
                     || self.formations[self.formation].aggressive
             }
@@ -611,6 +621,9 @@ pub struct Unit {
     fired_ago: Vec<f32>,
     /// What it last fired on.
     pub target: Option<Target>,
+    /// What its organization last had it bombard, which it goes on
+    /// bombarding until it's sent somewhere.
+    pub shelling: Option<Bombardment>,
     /// The tick it last fired on, and the index of the weapon it fired.
     pub shot: Option<(u64, usize)>,
     /// Seconds since each of its fighter's repairs was last used; infinite
@@ -969,6 +982,15 @@ pub enum Command {
     /// is done with. Refused for the organization itself, or what's
     /// already gone.
     MoveOnto { organization: usize, piece: Piece },
+    /// Has an organization shell `target` with its members' bombarding
+    /// weapons, the organization staying put and each member out of reach
+    /// driving towards it, until `target` dies, a moving one is lost in
+    /// fog, or it's given another order. Refused where none of its members
+    /// can shell it.
+    Bombard {
+        organization: usize,
+        target: Shelled,
+    },
     /// Has an organization rout at once, as if its morale had broken.
     /// Refused for one with no morale, that isn't fighting or can't move.
     Rout { organization: usize },
@@ -1274,6 +1296,7 @@ impl World {
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
+        self.keep_bombarding();
         self.keep_idling();
         self.keep_stances();
         self.keep_entrenchment();
@@ -1396,7 +1419,7 @@ digest!(Organization {
     group, group_speed, taking_part,
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
-    unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
+    unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
     guard, arriving, terrain_properties, settled, travelling, route_end, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
     chased, follow, build, mending,
@@ -1431,7 +1454,7 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
-    fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
+    fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
     aloft, landed, properties,
 } skip {

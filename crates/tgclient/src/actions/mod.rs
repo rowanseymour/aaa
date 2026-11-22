@@ -46,8 +46,9 @@ pub const WIDGET: &str = "ActionButtonsButton";
 /// The game leaves the rest of the commands off an organization's grid.
 /// They're in the game's own order of commands, which decides who keeps a
 /// slot two want.
-const ORDERS: [(&str, Option<Give>); 16] = [
+const ORDERS: [(&str, Option<Give>); 17] = [
     ("kill", Some(Give::Aim(Aim::Attack))),
+    ("bombard", Some(Give::Aim(Aim::Bombard))),
     ("guard", Some(Give::Aim(Aim::Guard))),
     ("repair", Some(Give::Aim(Aim::Repair))),
     (CONSTRUCT, Some(Give::Build)),
@@ -139,6 +140,8 @@ pub const UNPACK_FACING: [f32; 2] = tgmap::UNPACKED_FACING;
 pub enum Aim {
     Move,
     Attack,
+    /// Given on a thing or a place.
+    Bombard,
     Run,
     Guard,
     Unpack,
@@ -147,9 +150,10 @@ pub enum Aim {
 }
 
 impl Aim {
-    pub const ALL: [Aim; 6] = [
+    pub const ALL: [Aim; 7] = [
         Aim::Move,
         Aim::Attack,
+        Aim::Bombard,
         Aim::Run,
         Aim::Guard,
         Aim::Unpack,

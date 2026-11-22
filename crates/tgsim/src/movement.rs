@@ -138,6 +138,8 @@ impl Unit {
 
     /// Sets it off along `path`, next waypoint last, to stop at its end.
     pub(crate) fn take(&mut self, path: Vec<[f32; 2]>, exact: bool) {
+        // Being sent somewhere is a new order, which bombarding gives way to.
+        self.shelling = None;
         self.goal = path.first().copied();
         self.path = path;
         self.from = self.position;
