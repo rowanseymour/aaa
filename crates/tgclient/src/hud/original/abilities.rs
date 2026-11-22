@@ -1,7 +1,8 @@
 //! The ability column: a button down the floater for each of the player's
 //! faction's special operations, in its list's order, with the
 //! operation's icon and a bar of how far it's recharged, greyed while it
-//! can't be used. What each shows and does is
+//! can't be used, with a toggle that opens and closes the column. What
+//! each shows and does is
 //! [`special_ops`](crate::special_ops)', shared with ours.
 
 use bevy::picking::hover::Hovered;
@@ -11,14 +12,17 @@ use bevy::ui_widgets::Button;
 use tgdata::widgets::{Rect, Widget};
 
 use super::object::Shaded;
-use super::{Drawer, Face, Step, holding, on_screen, reach};
+use super::{Drawer, Face, Press, Step, holding, on_screen, picture, reach};
 use crate::Sim;
 use crate::intent::Asks;
-use crate::special_ops::{Operation, Panel, action, probe};
+use crate::special_ops::{ColumnOpen, Operation, Panel, action, probe};
 use crate::ui::{Blocks, Hint, Marked};
 
 /// The floater the column is in.
 pub(super) const FLOATER: &str = "FactionAbilitiesFloater";
+/// Its toggle, and the cap drawn at its end while it's open.
+const TOGGLE: &str = "ShowButton";
+const END: &str = "EndDecal";
 /// The part of it the buttons are listed down.
 const LIST: &str = "Abilities";
 /// The widget repeated for each operation, and its parts.
@@ -27,6 +31,43 @@ const BUTTON: &str = "AbilityButton";
 const ICON: &str = "AbilityButtonDecal";
 const RECHARGE: &str = "Recharge";
 const BAR: &str = "StatusBar";
+
+/// The toggle that opens and closes the column.
+static TOGGLE_PRESS: Press = Press::toggle(
+    TOGGLE,
+    crate::special_ops::TOGGLE_COLUMN,
+    "special_ops.toggle",
+    super::Follows::AbilityColumn,
+);
+
+/// What's drawn only while the column's open.
+#[derive(Component)]
+pub struct WhileOpen;
+
+/// The column ready to spawn.
+pub(super) struct Column {
+    buttons: Vec<Built>,
+    /// The end cap's pictures.
+    cap: Vec<(Vec<Step>, Handle<Image>)>,
+}
+
+impl Column {
+    pub(super) fn spawn(self, screen: &mut ChildSpawnerCommands) {
+        for (chain, image) in self.cap {
+            screen.spawn((picture(&chain, image), WhileOpen));
+        }
+        for button in self.buttons {
+            button.spawn(screen);
+        }
+    }
+}
+
+/// Shows what's drawn only while the column's open while it is.
+pub fn open(open: Res<ColumnOpen>, mut shown: Query<&mut Visibility, With<WhileOpen>>) {
+    for mut visibility in &mut shown {
+        visibility.set_if_neq(crate::ui::visible(open.0));
+    }
+}
 
 /// An operation's button, by its place in the faction's list, and whether
 /// the side can use it now.
@@ -68,9 +109,40 @@ pub(super) struct Built {
     bar: Option<(Rect, Color, Shaded)>,
 }
 
-/// The column's buttons for `panel`'s operations, the floater being at
-/// the end of `within`: one [`ENTRY`] after another down its [`LIST`].
+/// The floater's toggle and end cap, and the column's buttons for
+/// `panel`'s operations, the floater being at the end of `within`: one
+/// [`ENTRY`] after another down its [`LIST`]. The rest of the floater is
+/// drawn as it is.
 pub(super) fn build(
+    floater: &Widget,
+    within: &[Step],
+    drawer: &mut Drawer,
+    panel: Option<&Panel>,
+    bindings: &crate::keys::Bindings,
+) -> Column {
+    let mut cap = Vec::new();
+    for child in &floater.children {
+        let name = child.name.as_str();
+        if name.eq_ignore_ascii_case(TOGGLE) {
+            drawer.pressable(&TOGGLE_PRESS, child, within);
+        } else if name.eq_ignore_ascii_case(END) {
+            if !drawer.flags.floater_end_cap {
+                continue;
+            }
+            let from = drawer.drawn.len();
+            drawer.widget(child, within);
+            cap = drawer.drawn.split_off(from);
+        } else {
+            drawer.widget(child, within);
+        }
+    }
+    Column {
+        buttons: buttons(floater, within, drawer, panel, bindings),
+        cap,
+    }
+}
+
+fn buttons(
     floater: &Widget,
     within: &[Step],
     drawer: &mut Drawer,
@@ -148,7 +220,7 @@ fn one(
 }
 
 impl Built {
-    pub(super) fn spawn(self, screen: &mut ChildSpawnerCommands) {
+    fn spawn(self, screen: &mut ChildSpawnerCommands) {
         let index = self.index;
         let at = self.at;
         // Placed within the button, as a share of its size.
@@ -180,6 +252,7 @@ impl Built {
                 Hovered::default(),
                 Blocks,
                 RelativeCursorPosition::default(),
+                WhileOpen,
             ))
             .with_children(|button| {
                 for face in self.frames {
