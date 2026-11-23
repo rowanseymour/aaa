@@ -13,7 +13,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 19;
+pub const PROTOCOL: u32 = 20;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +193,9 @@ pub struct Welcome {
     /// The players the client gives orders for; none for one that only
     /// watches.
     pub players: Vec<u32>,
+    /// The sides whose computer players the client's machine runs, giving
+    /// their orders as it does its person's.
+    pub computers: Vec<u32>,
     /// What the person at it goes by in the match, numbered if the name
     /// it asked with was taken.
     pub name: String,
@@ -260,6 +263,7 @@ mod tests {
                     ..Default::default()
                 },
                 players: vec![1, 2],
+                computers: vec![3],
                 name: "Bob (1)".into(),
             }),
             ToClient::Step(Bundle {

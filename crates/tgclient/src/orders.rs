@@ -3,12 +3,12 @@
 //! the host. The host is in the same program, with a copy of its own, or
 //! elsewhere, when the game has joined its match.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use bevy::prelude::*;
 use tgserver::protocol::{Gone, KickVote, Said, Status, Welcome};
 use tgserver::{Client, Event, Host, Link, Local, Setup};
-use tgsim::{Action, Command, Record, Refused, SPEEDS, World};
+use tgsim::{Action, Command, ComputerPlayer, Outcome, Record, Refused, SPEEDS, World};
 
 /// The most ticks a joined match plays as one falls due: more than one
 /// only to catch its host up, a part at a time so the window keeps
@@ -48,6 +48,19 @@ pub(crate) struct Orders {
     /// and what the person at it goes by, kept once it's gone, for what's
     /// said of it after.
     seen: HashMap<u32, (Vec<u32>, String)>,
+    computers: Computers,
+}
+
+/// The computer players the game runs for a match shared between
+/// machines: those its machine added to the game, whose orders it gives
+/// as it does its person's.
+#[derive(Default)]
+struct Computers {
+    /// Their sides, by player id.
+    sides: Vec<u32>,
+    profiles: tgserver::Profiles,
+    /// Each side's, once it's first thought for.
+    players: BTreeMap<u32, Box<dyn ComputerPlayer>>,
 }
 
 /// Where the match's host is.
@@ -91,7 +104,13 @@ impl Orders {
         // The game set the match up itself.
         let welcome = tgserver::welcome(&mut theirs);
         debug_assert!(matches!(welcome, Ok(Some(_))));
-        Orders::of(Hosted::Here(Box::new(host)), Box::new(theirs), setup, me)
+        Orders::of(
+            Hosted::Here(Box::new(host)),
+            Box::new(theirs),
+            setup,
+            me,
+            Vec::new(),
+        )
     }
 
     /// Those of a match whose host, at the other end of `link`, let the
@@ -103,7 +122,7 @@ impl Orders {
             at: Some(at),
             host: None,
         };
-        Orders::of(host, link, welcome.setup, me)
+        Orders::of(host, link, welcome.setup, me, welcome.computers)
     }
 
     /// Those of a match between machines that `host`, here, let the game
@@ -116,7 +135,7 @@ impl Orders {
             at: None,
             host: Some(Box::new(host)),
         };
-        Orders::of(host, link, welcome.setup, me)
+        Orders::of(host, link, welcome.setup, me, welcome.computers)
     }
 
     /// Gives a host here of a match between machines its copy of the
@@ -130,18 +149,20 @@ impl Orders {
         }
     }
 
-    /// Has a host here play the sides nobody else does by `profiles`.
+    /// Has the computer players the game runs, and those of a host here
+    /// for the sides nobody else plays, play by `profiles`.
     pub(crate) fn computers_from(&mut self, profiles: tgserver::Profiles) {
         match &mut self.host {
-            Hosted::Here(host) => host.computers_from(profiles),
+            Hosted::Here(host) => host.computers_from(profiles.clone()),
             Hosted::Shared {
                 host: Some(host), ..
-            } => host.computers_from(profiles),
+            } => host.computers_from(profiles.clone()),
             Hosted::Shared { host: None, .. } => {}
         }
+        self.computers.profiles = profiles;
     }
 
-    fn of(host: Hosted, link: Line, setup: Setup, me: u32) -> Orders {
+    fn of(host: Hosted, link: Line, setup: Setup, me: u32, computers: Vec<u32>) -> Orders {
         Orders {
             host,
             client: Client::new(link),
@@ -156,6 +177,10 @@ impl Orders {
             left: Vec::new(),
             kicked: false,
             seen: HashMap::new(),
+            computers: Computers {
+                sides: computers,
+                ..Default::default()
+            },
         }
     }
 
@@ -301,7 +326,9 @@ impl Orders {
     /// at all, as against just now.
     pub(crate) fn allowed(&self, action: &Action) -> bool {
         let allowed = |players| tgserver::allows(players, action);
-        self.players().is_none_or(allowed)
+        let computer = |player| self.computers.sides.contains(player);
+        let computer = matches!(action, Action::Order { player, .. } if computer(player));
+        computer || self.players().is_none_or(allowed)
     }
 
     /// Asks for `command` from `player`, unless `world`, the game's copy
@@ -445,7 +472,35 @@ impl Orders {
                 self.client.play(world, ticks)
             }
         };
-        self.played(played.is_err())
+        let refused = self.played(played.is_err());
+        self.think(world);
+        refused
+    }
+
+    /// Has the computer players the game runs think about `world`, the
+    /// game's copy of the match, as a host does for its own: for sides
+    /// still in it, while it goes on, asking the host for their orders.
+    fn think(&mut self, world: &World) {
+        let held = self.status().is_some_and(|s| s.held);
+        if self.computers.sides.is_empty() || held || self.paused() || self.waiting() {
+            return;
+        }
+        let Computers {
+            sides,
+            profiles,
+            players,
+        } = &mut self.computers;
+        let playing = |p: &u32| world.outcome(*p) == Outcome::Playing;
+        let mut orders = Vec::new();
+        for &player in sides.iter().filter(|p| playing(p)) {
+            let make = || profiles.player(&self.setup, world, player);
+            let computer = players.entry(player).or_insert_with(make);
+            let order = |command| Action::Order { player, command };
+            orders.extend(computer.think(world, player).into_iter().map(order));
+        }
+        for order in orders {
+            self.act(order);
+        }
     }
 
     /// Hears from a host elsewhere while the game's copy of the match is
@@ -688,6 +743,64 @@ mod tests {
     fn stop(player: u32, organization: usize) -> Action {
         let command = Command::Stop { organization };
         Action::Order { player, command }
+    }
+
+    /// A computer player that sends the second side's organization along
+    /// x, once.
+    #[derive(Default)]
+    struct Mover(bool);
+
+    impl ComputerPlayer for Mover {
+        fn think(&mut self, _: &World, _: u32) -> Vec<Command> {
+            let moved = std::mem::replace(&mut self.0, true);
+            let to = [30.0, 20.0];
+            let order = Command::Move {
+                organization: 1,
+                to,
+            };
+            (!moved).then_some(order).into_iter().collect()
+        }
+    }
+
+    #[test]
+    fn a_joined_game_gives_the_orders_of_the_computer_players_it_runs() {
+        let mut host = Host::new(Setup::default(), super::testing::fresh());
+        let (ours, mut theirs) = tgserver::pair();
+        host.admit_running(ours, vec![1], vec![2], "Bob").unwrap();
+        let welcome = tgserver::welcome(&mut theirs).unwrap().unwrap();
+        let mut orders = Orders::joined(Box::new(theirs), welcome, "host".into());
+        orders.computers.players.insert(2, Box::<Mover>::default());
+        let mut world = super::testing::fresh();
+        for _ in 0..3 {
+            host.turn();
+            orders.step(&mut world);
+        }
+        let moved = Action::Order {
+            player: 2,
+            command: Command::Move {
+                organization: 1,
+                to: [30.0, 20.0],
+            },
+        };
+        assert!(orders.may(&moved));
+        assert_eq!(super::testing::asked(host.schedule().record()), [moved]);
+        assert_eq!(world.hash(), host.world().hash());
+    }
+
+    #[test]
+    fn a_joined_game_makes_the_computer_players_it_runs_by_their_profiles() {
+        let mut host = Host::new(Setup::default(), super::testing::fresh());
+        let (ours, mut theirs) = tgserver::pair();
+        host.admit_running(ours, vec![1], vec![2], "Bob").unwrap();
+        let welcome = tgserver::welcome(&mut theirs).unwrap().unwrap();
+        let mut orders = Orders::joined(Box::new(theirs), welcome, "host".into());
+        orders.computers_from(tgserver::Profiles::default());
+        let mut world = super::testing::fresh();
+        host.turn();
+        orders.step(&mut world);
+        // One for the side its machine runs, and none for its person's.
+        let made: Vec<_> = orders.computers.players.keys().copied().collect();
+        assert_eq!(made, [2]);
     }
 
     #[test]

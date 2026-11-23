@@ -659,16 +659,29 @@ impl<L: Link> Lobby<L> {
 
     /// Launches the game as `setup`, between the sides `sides`: hands
     /// everyone on to the match's host, each to play the side they took or
-    /// watch, whoever ran this one trusted to run that one too. Everyone,
+    /// watch and to run the computer players their machine added, whoever
+    /// ran this one trusted to run that one too. Everyone,
     /// whoever runs it included, sets up their copy of the match from
     /// here, and the host is given its own with [`Host::build`].
     pub fn launch(self, setup: Setup, sides: tgsim::Sides) -> Host<L> {
         let mut host = Host::awaiting(setup, sides);
         host.name_by(self.naming);
         host.multiplayer();
-        for ((_, link), guest) in self.links.into_iter().zip(self.staging.guests) {
+        let staging = &self.staging;
+        for ((_, link), guest) in self.links.into_iter().zip(&staging.guests) {
             let players = guest.side.into_iter().collect();
-            let Ok(id) = host.admit(link, players, &guest.name) else {
+            // The host's own run with the host, as do those of no machine.
+            let theirs = |&(&p, &c): &(&u32, &u32)| c == guest.client && staging.owns(c, p);
+            let computers = match guest.host {
+                true => Vec::new(),
+                false => staging
+                    .owners
+                    .iter()
+                    .filter(theirs)
+                    .map(|(&p, _)| p)
+                    .collect(),
+            };
+            let Ok(id) = host.admit_running(link, players, computers, &guest.name) else {
                 continue;
             };
             if guest.host {
@@ -1254,6 +1267,7 @@ mod tests {
         let (mut lobby, mut host, _) = hosted();
         let mut bob = ask(&mut lobby, "Bob", "sesame").unwrap();
         bob.choose(Choice::Side(Some(2))).unwrap();
+        bob.choose(Choice::Computer(1, None)).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let sides = tgsim::Sides {
             players: (1..=2)
@@ -1275,8 +1289,10 @@ mod tests {
             (theirs.players.as_slice(), &theirs.setup),
             (&[2][..], &setup)
         );
+        // With the computer player Bob's machine added, to run there.
+        assert_eq!(theirs.computers, [1]);
         let ours = host.listen().unwrap().expect("launched");
-        assert!(ours.players.is_empty());
+        assert!(ours.players.is_empty() && ours.computers.is_empty());
         let mut client = Client::new(bob.into_link());
         client.ready().unwrap();
         let mut ours = Client::new(host.into_link());
