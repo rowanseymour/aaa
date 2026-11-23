@@ -1730,7 +1730,8 @@ mod tests {
     }
 
     /// A link on which, once, time passes after the last of what's come
-    /// has been taken: as it does while a client plays what it heard.
+    /// has been taken and before the client plays it: as long as playing
+    /// it would take.
     struct Slow {
         link: Local,
         clock: Clock,
