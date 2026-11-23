@@ -334,19 +334,27 @@ type Picks<'a> = (
 );
 
 /// The profile each computer player of the match's `players` plays by, by
-/// player id: the one `chosen` for it, else one at random by `draw` that
-/// fits its side, else any.
+/// player id: the one `chosen` for it, else the one the map names for its
+/// side, else one at random by `draw` that fits its side, else any.
 fn computers(
     players: &[Player],
     chosen: &BTreeMap<u32, Option<Id>>,
     (nations, factions, sais): Picks,
     draw: u64,
 ) -> BTreeMap<u32, Id> {
-    let playing = |p: &u32| players.iter().any(|player| player.id == *p);
-    (chosen.iter().filter(|(p, _)| playing(p)))
-        .filter_map(|(&p, sai)| {
+    (chosen.iter())
+        .filter_map(|(&p, sai)| Some((players.iter().find(|player| player.id == p)?, sai)))
+        .filter_map(|(player, sai)| {
+            let p = player.id;
             if let Some(sai) = sai {
                 return Some((p, sai.clone()));
+            }
+            if let Some(named) = &player.ai_profile {
+                if sais.iter().any(|s| s.id == *named) {
+                    return Some((p, named.clone()));
+                }
+                // Such as `example_sai`, which no profile has.
+                warn!("{}: no AI profile \"{named}\"", player.name);
             }
             let nation = nations.get(&p).map(|n| &n.id);
             let faction = factions.get(&p).map(|g| &g.id);
@@ -481,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn computer_players_play_their_chosen_profile_else_one_fitting_their_side() {
+    fn computer_players_play_their_chosen_profile_else_the_maps_else_one_fitting_their_side() {
         let sai = |id: &str, nation: &str, faction: &str, public: bool, easiest: bool| Sai {
             id: Id::from(id),
             name: id.into(),
@@ -519,14 +527,22 @@ mod tests {
         let factions = HashMap::from([(12, faction("chuikov")), (13, faction("modded"))]);
         let chosen = BTreeMap::from([
             (10, Some(Id::from("konev_sai"))),
+            (11, None),
             (12, None),
             (13, None),
             // Gone with its team.
             (14, Some(Id::from("patton_sai"))),
         ]);
+        let mut players = players();
+        players[0].ai_profile = Some(Id::from("chuikov_sai"));
+        players[1].ai_profile = Some(Id::from("rus_sai"));
+        // A profile no file has is passed over.
+        players[2].ai_profile = Some(Id::from("example_sai"));
         for draw in 0..20 {
-            let given = computers(&players(), &chosen, (&nations, &factions, &sais), draw);
+            let given = computers(&players, &chosen, (&nations, &factions, &sais), draw);
             assert_eq!(given.get(&10), Some(&Id::from("konev_sai")));
+            // The map's, though not public.
+            assert_eq!(given.get(&11), Some(&Id::from("rus_sai")));
             // The only public one fitting, not too easy.
             assert_eq!(given.get(&12), Some(&Id::from("chuikov_sai")));
             // None fits, so any.
@@ -535,7 +551,7 @@ mod tests {
                     .get(&13)
                     .is_some_and(|s| sais.iter().any(|a| a.id == *s))
             );
-            assert_eq!(given.len(), 3);
+            assert_eq!(given.len(), 4);
         }
     }
 

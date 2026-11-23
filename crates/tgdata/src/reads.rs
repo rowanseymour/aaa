@@ -85,6 +85,8 @@ static READS: LazyLock<HashMap<&str, Vec<Read>>> = LazyLock::new(|| {
         ("vars", vec![read::<defs::AVars>(), read::<defs::UVars>()]),
         ("vfx", vec![read::<defs::Vfx>()]),
         ("worldrule", vec![read::<defs::WorldRule>()]),
+        // The choices of a world rule, in blocks of its own kind.
+        ("difficultylevel", vec![read::<defs::WorldRuleChoice>()]),
         // A string table, every line of which is read.
         ("text", vec![read::<HashMap<String, String>>()]),
     ])

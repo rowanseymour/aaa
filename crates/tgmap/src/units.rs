@@ -31,6 +31,9 @@ pub struct Player {
     /// Whether it stays in a match nobody takes it in, a computer player
     /// playing it.
     pub required: bool,
+    /// The profile its computer player plays by, e.g. `ger_sai`, where the
+    /// map names one.
+    pub ai_profile: Option<Id>,
     /// Whether having nothing left that keeps it in the match defeats it.
     pub default_defeat: bool,
     /// How the match stood for it when the map was saved.
@@ -163,6 +166,7 @@ pub(crate) fn players_and_teams(
             independent: k.independent != 0,
             playable: k.playable,
             required: k.required,
+            ai_profile: (!k.ai_profile.is_empty()).then(|| Id::from(k.ai_profile.as_str())),
             default_defeat: k.default_victory_condition.unwrap_or(true),
             outcome: match k.outcome {
                 1 => Outcome::Won,
