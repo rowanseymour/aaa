@@ -12,7 +12,7 @@ use crate::ui::{Font, Hint, font};
 use crate::{Loaded, Local, Screen, Sim};
 
 use super::log::{Line, Look, MessageLog, Place};
-use super::{CYCLE, ICON, ICON_GAP, LINE_GAP, SHADOW, WIDTH};
+use super::{CYCLE, ICON, ICON_GAP, ICON_MARGIN, LINE_GAP, SHADOW, WIDTH};
 
 /// The log's box, in the top left corner until the interface played
 /// places it.
@@ -27,9 +27,15 @@ pub struct Row(u64);
 #[derive(Component)]
 pub struct Faded(Color);
 
+/// How opaque a row text's shadow is unfaded, where the interface played
+/// letters it in a font of its own rather than the log's.
+#[derive(Component)]
+pub struct Shade(pub f32);
+
 /// A row's parts, to fade.
 pub(crate) type Parts<'a> = (
     &'a Faded,
+    Option<&'a Shade>,
     Option<&'a mut TextColor>,
     Option<&'a mut TextShadow>,
     Option<&'a mut ImageNode>,
@@ -54,19 +60,24 @@ pub fn spawn(mut commands: Commands, loaded: Res<Loaded>, mut log: ResMut<Messag
     );
     commands.spawn((
         LogBox,
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(crate::ui_scale::MARGIN),
-            left: px(crate::ui_scale::MARGIN),
-            width: px(WIDTH),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(LINE_GAP),
-            ..default()
-        },
+        log_node(),
         Pickable::IGNORE,
         GlobalZIndex(crate::ui::layer::HUD),
         DespawnOnExit(Screen::Match),
     ));
+}
+
+/// How the log's box is laid out, in the top left corner.
+pub fn log_node() -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        top: px(crate::ui_scale::MARGIN),
+        left: px(crate::ui_scale::MARGIN),
+        width: px(WIDTH),
+        flex_direction: FlexDirection::Column,
+        row_gap: px(LINE_GAP),
+        ..default()
+    }
 }
 
 /// Lays out the lines on screen, and fades each as it goes.
@@ -99,7 +110,7 @@ pub fn show(
     for (&row, &(_, opacity)) in children.iter().zip(&shown) {
         // A line naming a side has its words and gems further down.
         for part in tree.iter_descendants(row) {
-            let Ok((Faded(colour), text, shadow, image)) = faded.get_mut(part) else {
+            let Ok((Faded(colour), shade, text, shadow, image)) = faded.get_mut(part) else {
                 continue;
             };
             let colour = colour.with_alpha(colour.alpha() * opacity);
@@ -107,7 +118,8 @@ pub fn show(
                 t.set_if_neq(TextColor(colour));
             }
             if let Some(mut shadow) = shadow {
-                let faded = SHADOW.color.with_alpha(SHADOW.color.alpha() * opacity);
+                let unfaded = shade.map_or(SHADOW.color.alpha(), |s| s.0);
+                let faded = SHADOW.color.with_alpha(unfaded * opacity);
                 if shadow.color != faded {
                     shadow.color = faded;
                 }
@@ -211,7 +223,7 @@ fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
                     width: px(ICON.x),
                     height: px(ICON.y),
                     flex_shrink: 0.0,
-                    margin: UiRect::top(px(1)),
+                    margin: UiRect::top(px(ICON_MARGIN)),
                     ..default()
                 },
             ));
