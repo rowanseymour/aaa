@@ -80,6 +80,15 @@ pub fn default_person(players: &[Player], asked: Side) -> Option<u32> {
     side.map(|p| p.id)
 }
 
+/// The sides a match with no lobby gives computer players: every side but
+/// the `person`'s.
+pub fn computer_sides(players: &[Player], person: Option<u32>) -> BTreeMap<u32, Option<Id>> {
+    tgmap::sides(players)
+        .filter(|p| Some(p.id) != person)
+        .map(|p| (p.id, None))
+        .collect()
+}
+
 /// The game's question before leaving the lobby.
 #[derive(Resource)]
 pub struct Leaving(String);
@@ -1551,6 +1560,7 @@ mod tests {
             independent,
             playable,
             required: false,
+            ai_profile: None,
             default_defeat: true,
             outcome: Default::default(),
             won_by_cities: false,
@@ -1719,5 +1729,13 @@ mod tests {
         assert_eq!(default_person(&players(), Side(Some(4))), None);
         let unplayable = vec![player(10, false, false)];
         assert_eq!(default_person(&unplayable, Side(None)), None);
+    }
+
+    #[test]
+    fn with_no_lobby_computers_take_every_side_but_the_persons() {
+        let sides = computer_sides(&players(), Some(12));
+        assert_eq!(sides, [(10, None), (13, None)].into());
+        // Watching, every side.
+        assert_eq!(computer_sides(&players(), None).len(), 3);
     }
 }

@@ -585,6 +585,7 @@ pub(crate) fn play(world: &mut World, campaign: usize, mission: usize, replay: b
         let setup = tgserver::Setup {
             map: found,
             seed,
+            computers: crate::lobby::computer_sides(&brief.players, person),
             rules: [(Id::from(DIFFICULTY), difficulty.to_string())]
                 .into_iter()
                 .collect(),

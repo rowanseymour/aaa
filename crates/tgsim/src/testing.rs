@@ -361,6 +361,7 @@ pub(crate) fn player(
         independent: team.is_none(),
         playable: team.is_some(),
         required: false,
+        ai_profile: None,
         default_defeat: true,
         outcome: Default::default(),
         won_by_cities: false,

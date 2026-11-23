@@ -191,12 +191,23 @@ pub(crate) fn prepare(
 ) -> Result<Prepared, String> {
     let reached = |s| *stage.lock().unwrap_or_else(|e| e.into_inner()) = s;
     let Pending {
-        setup,
-        person,
+        mut setup,
+        mut person,
         from_menu,
         ..
     } = pending;
     let elsewhere = joined.is_some();
+    // A map played straight from the command line, with no lobby to say
+    // who plays which side.
+    if !from_menu && !elsewhere {
+        match tgmap::Brief::load(&game, &setup.map) {
+            Ok(brief) => {
+                person = lobby::default_person(&brief.players, side);
+                setup.computers = lobby::computer_sides(&brief.players, person);
+            }
+            Err(e) => warn!("{e}: no computer players"),
+        }
+    }
     info!("seed {}", setup.seed);
     let tgserver::Started {
         map,
@@ -209,7 +220,8 @@ pub(crate) fn prepare(
         // Its host says who the game plays.
         (Some((players, _)), _) => players.first().copied(),
         (None, true) => person,
-        (None, false) => lobby::default_person(&map.players, side),
+        // Where the brief couldn't say.
+        (None, false) => person.or_else(|| lobby::default_person(&map.players, side)),
     };
     let own = match joined {
         Some(own) => own,
