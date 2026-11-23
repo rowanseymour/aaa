@@ -1,7 +1,9 @@
 //! What the main menu stands over: a stretch of one of the game's maps,
 //! as its [`View`] says, with its buildings and scenery, in the game's own
-//! view, loaded and built off the main thread, then faded in. It has no
-//! units, as there's no sim behind it.
+//! view, loaded and built off the main thread, then faded in. There's no
+//! sim behind it, so its only units are for show: troops marching across
+//! it over and over, and a plane passing over now and then, as its [`View`]
+//! names them.
 //!
 //! It's kept while the screens the menu opens are up, its camera off, so
 //! coming back shows it at once; it goes when a match starts loading.
@@ -11,10 +13,13 @@ use std::thread::JoinHandle;
 
 use bevy::prelude::*;
 use tgck::map::Thing;
-use tgmap::{Map, Recruits, Role};
+use tgdata::Footing;
+use tgmap::{Ground, Map, Recruits, Role, Shape};
 use tgrender::camera::{self, RtsCamera};
+use tgrender::models::{Models, pose};
+use tgrender::space::map_point;
 use tgrender::terrain::{self, Prepared};
-use tgrender::{Edge, MapAssets};
+use tgrender::{Edge, MapAssets, Playing};
 
 use crate::{Data, Look, Screen};
 
@@ -26,6 +31,12 @@ pub struct View {
     /// Where on it the camera looks, in map units, a little to the right of
     /// what's to be seen, for the menu's column.
     pub focus: [f32; 2],
+    /// The template of the troops that march across it.
+    pub troops: Option<String>,
+    /// The template of the plane that flies over it.
+    pub plane: Option<String>,
+    /// The template of the regiment that marches across it, further off.
+    pub regiment: Option<String>,
 }
 
 /// How much further back than the game's camera it stands, at the game's
@@ -39,6 +50,25 @@ const REACH: f32 = 90.0;
 const HOLD: f32 = 0.3;
 /// Seconds the cover then takes to thin away.
 const FADE_IN: f32 = 1.0;
+/// How far troops and the plane go from the focus before coming round
+/// again: as far as objects are drawn, out of sight.
+const PASS: f32 = REACH;
+/// The nearest the camera the troops march, from the focus, in map units:
+/// each body keeps a little further off, by a different amount each time.
+const LANE: f32 = -6.0;
+/// How many bodies of troops march, roughly evenly apart, the most
+/// soldiers each can have, and the room each soldier has.
+const BODIES: usize = 3;
+const MOST: usize = 16;
+const SPACING: f32 = 1.6;
+/// Seconds between one pass of the plane and the next, and before its
+/// first.
+const PLANE_WAIT: f32 = 15.0;
+/// How far left of the focus it passes, in map units.
+const PLANE_LEFT: f32 = 12.0;
+/// How much further from the camera than the focus the regiment marches,
+/// in map units.
+const INLAND: f32 = 10.0;
 
 pub struct BackdropPlugin;
 
@@ -47,7 +77,15 @@ impl Plugin for BackdropPlugin {
         app.add_systems(OnEnter(Screen::MainMenu), show)
             .add_systems(OnExit(Screen::MainMenu), hide)
             .add_systems(OnEnter(Screen::Loading), clear)
-            .add_systems(Update, (arrive, fade_in).run_if(in_state(Screen::MainMenu)));
+            .add_systems(
+                Update,
+                (
+                    arrive,
+                    fade_in,
+                    (march, advance, fly).before(tgrender::Animate),
+                )
+                    .run_if(in_state(Screen::MainMenu)),
+            );
     }
 }
 
@@ -58,6 +96,61 @@ pub(crate) struct Backdrop;
 /// The map being loaded and its land built, until it's spawned.
 #[derive(Resource)]
 pub struct Building(Option<JoinHandle<Result<(Map, Prepared), String>>>);
+
+/// The ground the backdrop's units cross, and the way they go, from when
+/// it arrived.
+#[derive(Resource)]
+struct Stage {
+    ground: Ground,
+    /// Seconds into the app it arrived.
+    since: f32,
+    focus: Vec2,
+    /// Which way on the map is right across the screen, and which up it.
+    across: Vec2,
+    up: Vec2,
+    /// The camera's pitch, for how much nearer the camera is drawn
+    /// further up the screen.
+    pitch: f32,
+}
+
+impl Stage {
+    /// Where something `ahead` of the far side of its pass, `aside` of its
+    /// line, has got to going `along`, coming round each `2 * PASS`.
+    fn place(&self, along: Vec2, aside: Vec2, ahead: f32) -> Vec2 {
+        let gone = ahead.rem_euclid(2.0 * PASS) - PASS;
+        self.focus + along * gone + aside
+    }
+}
+
+/// A soldier in the troops marching across: which body, and which place
+/// in it, whose shape each body takes anew each time it comes round.
+#[derive(Component)]
+struct Marcher {
+    body: usize,
+    place: usize,
+    speed: f32,
+    conform: Option<Shape>,
+}
+
+/// A member of the regiment marching across, at its place in the
+/// regiment's formation: ahead of the formation's middle, and to its right.
+#[derive(Component)]
+struct Member {
+    ahead: f32,
+    right: f32,
+    /// Which member, for how it wanders.
+    which: u32,
+    /// The regiment's: its slowest member's.
+    speed: f32,
+    conform: Option<Shape>,
+}
+
+/// The plane flying over.
+#[derive(Component)]
+struct Flier {
+    speed: f32,
+    height: f32,
+}
 
 /// A cover over the land that thins away, seconds after it's spawned.
 #[derive(Component)]
@@ -123,6 +216,7 @@ fn hide(mut cameras: Query<&mut Camera, With<Backdrop>>) {
 /// it, which isn't on any entity to go with the rest.
 fn clear(mut commands: Commands, backdrop: Query<Entity, With<Backdrop>>) {
     commands.remove_resource::<Building>();
+    commands.remove_resource::<Stage>();
     commands.insert_resource(GlobalAmbientLight::default());
     backdrop.iter().for_each(|e| commands.entity(e).despawn());
 }
@@ -132,6 +226,7 @@ fn clear(mut commands: Commands, backdrop: Query<Entity, With<Backdrop>>) {
 fn arrive(
     mut commands: Commands,
     mut building: Option<ResMut<Building>>,
+    time: Res<Time>,
     data: Res<Data>,
     look: Res<Look>,
     mut assets: MapAssets,
@@ -166,13 +261,83 @@ fn arrive(
     };
     let which = |t: &Thing| still.contains(&t.id) && near(t);
     let (assets, game) = (&mut assets, &data.0);
-    tgrender::spawn_objects(&mut commands, assets, game, &map, false, which, Backdrop);
+    let mut models =
+        tgrender::spawn_objects(&mut commands, assets, game, &map, false, which, Backdrop);
     let [x, y] = at;
     let focus = tgrender::space::world(x, y, map.ground.height_at(at));
+    let (mut turned, mut pitch) = (Transform::default(), 0.0);
     for (mut cam, mut transform) in &mut cameras {
         cam.focus = focus;
         *transform = cam.transform();
+        (turned, pitch) = (*transform, cam.pitch);
     }
+    let flat = |v: Vec3| Vec2::from(map_point(v)).normalize_or_zero();
+    let stage = Stage {
+        ground: map.ground,
+        since: time.elapsed_secs(),
+        focus: Vec2::from(at),
+        across: flat(*turned.right()),
+        up: flat(*turned.up()),
+        pitch,
+    };
+    // Painted as whoever plays first.
+    let players = &map.players;
+    let owner = (players.iter().find(|p| p.playable && !p.independent))
+        .or(players.first())
+        .map_or(0, |p| p.id);
+    let view = look.backdrop.as_ref();
+    let speeds = game.speeds();
+    let speed = |template: &str| speeds.get(&tgmap::Id::from(template)).copied();
+    if let Some(troops) = view.and_then(|v| v.troops.as_deref()) {
+        match speed(troops) {
+            Some(speed) => spawn_troops(
+                &mut commands,
+                &mut models,
+                assets,
+                &stage,
+                troops,
+                owner,
+                speed,
+            ),
+            None => warn!("menu backdrop: {troops} doesn't move"),
+        }
+    }
+    if let Some(regiment) = view.and_then(|v| v.regiment.as_deref()) {
+        let speed = |t: &tgmap::Id| speeds.get(t).copied();
+        spawn_regiment(
+            &mut commands,
+            &mut models,
+            assets,
+            game,
+            &stage,
+            regiment,
+            owner,
+            speed,
+        );
+    }
+    if let Some(plane) = view.and_then(|v| v.plane.as_deref()) {
+        let flies = game
+            .aircraft()
+            .get(&tgmap::Id::from(plane))
+            .map(|a| a.height);
+        match speed(plane).zip(flies) {
+            Some((speed, height)) => {
+                let thing =
+                    crate::views::thing_at(&stage.ground, Footing::Air, 0, plane, at, [0.0, 1.0]);
+                let mut parts = assets.models();
+                if let Some(e) = models.spawn_unit(&mut commands, &mut parts, &thing, owner, speed)
+                {
+                    commands.entity(e).insert((
+                        Backdrop,
+                        Flier { speed, height },
+                        Visibility::Hidden,
+                    ));
+                }
+            }
+            None => warn!("menu backdrop: {plane} doesn't fly"),
+        }
+    }
+    commands.insert_resource(stage);
     commands.spawn((
         Fading(0.0),
         Node {
@@ -188,6 +353,264 @@ fn arrive(
         // Gone with the menu, or it would cover the screens it opens.
         DespawnOnExit(Screen::MainMenu),
     ));
+}
+
+/// Spawns as many troops of the template `troops` as the bodies can have,
+/// for [`march`] to place and show.
+fn spawn_troops(
+    commands: &mut Commands,
+    models: &mut Models,
+    assets: &mut MapAssets,
+    stage: &Stage,
+    troops: &str,
+    owner: u32,
+    speed: f32,
+) {
+    let conform = models.conform(troops);
+    for i in 0..BODIES * MOST {
+        let marcher = Marcher {
+            body: i / MOST,
+            place: i % MOST,
+            speed,
+            conform,
+        };
+        let at = stage.focus.to_array();
+        let id = i as u32 + 1;
+        let thing =
+            crate::views::thing_at(&stage.ground, Footing::Ground, id, troops, at, [1.0, 0.0]);
+        let mut parts = assets.models();
+        if let Some(e) = models.spawn_unit(commands, &mut parts, &thing, owner, speed) {
+            commands
+                .entity(e)
+                .insert((Backdrop, marcher, Visibility::Hidden));
+        }
+    }
+}
+
+/// Spawns the regiment of the template `regiment`, each slot's members
+/// where its layout's starting formation puts them, to march at its
+/// slowest member's speed.
+#[allow(clippy::too_many_arguments)]
+fn spawn_regiment(
+    commands: &mut Commands,
+    models: &mut Models,
+    assets: &mut MapAssets,
+    game: &tgdata::GameData,
+    stage: &Stage,
+    regiment: &str,
+    owner: u32,
+    speed: impl Fn(&tgmap::Id) -> Option<f32>,
+) {
+    let id = tgmap::Id::from(regiment);
+    let Some(component) = game.organization_components().remove(&id) else {
+        return warn!("menu backdrop: {regiment} isn't an organization");
+    };
+    let layouts = game.layouts();
+    let Some(formation) =
+        (layouts.get(&component.layout)).and_then(|l| l.formations.get(l.default))
+    else {
+        return warn!("menu backdrop: {regiment} has no formation");
+    };
+    let members: Vec<(&tgmap::Id, [f32; 2])> = (component.slots.iter())
+        .zip(&formation.slots)
+        .filter_map(|(template, places)| Some((template.as_ref()?, places)))
+        .flat_map(|(template, places)| places.iter().map(move |&at| (template, at)))
+        .collect();
+    let Some(slowest) = (members.iter())
+        .filter_map(|(t, _)| speed(t))
+        .min_by(f32::total_cmp)
+    else {
+        return warn!("menu backdrop: {regiment} doesn't move");
+    };
+    // Its formation's middle, front to back, marches on the line.
+    let aheads = members.iter().map(|(_, [_, y])| *y);
+    let middle = (aheads.clone().fold(f32::MIN, f32::max) + aheads.fold(f32::MAX, f32::min)) / 2.0;
+    for (i, (template, [x, y])) in members.into_iter().enumerate() {
+        let template = template.as_str();
+        let member = Member {
+            ahead: y - middle,
+            right: x,
+            which: i as u32,
+            speed: slowest,
+            conform: models.conform(template),
+        };
+        let at = stage.focus.to_array();
+        let id = (BODIES * MOST + i) as u32 + 1;
+        let thing =
+            crate::views::thing_at(&stage.ground, Footing::Ground, id, template, at, [1.0, 0.0]);
+        let mut parts = assets.models();
+        if let Some(e) = models.spawn_unit(commands, &mut parts, &thing, owner, slowest) {
+            commands.entity(e).insert((Backdrop, member));
+        }
+    }
+}
+
+/// Marches the regiment across, further off than the troops, round and
+/// round, its members wandering a little in their places.
+fn advance(
+    time: Res<Time>,
+    stage: Option<Res<Stage>>,
+    mut members: Query<(&Member, &mut Transform, Option<&mut Playing>)>,
+) {
+    let Some(stage) = stage else {
+        return;
+    };
+    let t = time.elapsed_secs() - stage.since;
+    let (across, up) = (stage.across, stage.up);
+    for (m, mut transform, playing) in &mut members {
+        let of = |n: u32| chance([u32::MAX, 0, m.which, n]);
+        let wander = |n: u32, most: f32| {
+            let rate = 0.3 + of(n) * 0.5;
+            let phase = of(n + 1) * std::f32::consts::TAU + t * rate;
+            (most * phase.sin(), most * rate * phase.cos())
+        };
+        let (on, on_rate) = wander(0, 0.3);
+        let (off, off_rate) = wander(2, 0.2);
+        // Starting in sight, a little left of the focus.
+        let gone = (t * m.speed + PASS * 0.85).rem_euclid(2.0 * PASS) - PASS;
+        // Right of the way it goes, which is across, is down the screen.
+        let at = stage.focus + across * (gone + m.ahead + on) + up * (INLAND - m.right + off);
+        let heading = across * (m.speed + on_rate) + up * off_rate;
+        (transform.translation, transform.rotation) = pose(
+            &stage.ground,
+            at.to_array(),
+            heading.normalize_or(across).to_array(),
+            m.conform,
+            Footing::Ground,
+        );
+        if let Some(mut p) = playing {
+            p.set_moving(Some(heading.length()));
+        }
+    }
+}
+
+/// A number from 0 to 1 that's the same for the same `keys` and looks
+/// unrelated to any other's.
+fn chance(keys: [u32; 4]) -> f32 {
+    let mut h: u32 = 0x9e37_79b9;
+    for k in keys {
+        h = (h ^ k).wrapping_mul(0x85eb_ca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2_ae35);
+        h ^= h >> 16;
+    }
+    (h >> 8) as f32 / (1 << 24) as f32
+}
+
+/// Marches the troops across, round and round, each body loosely in ranks
+/// and files of a size and shape it takes anew each time round, out of
+/// sight. Soldiers wander a little in their places, out of step.
+fn march(
+    time: Res<Time>,
+    stage: Option<Res<Stage>>,
+    mut marchers: Query<(
+        &Marcher,
+        &mut Transform,
+        &mut Visibility,
+        Option<&mut Playing>,
+    )>,
+) {
+    let Some(stage) = stage else {
+        return;
+    };
+    let t = time.elapsed_secs() - stage.since;
+    let (across, up) = (stage.across, stage.up);
+    for (m, mut transform, mut visibility, playing) in &mut marchers {
+        let body = m.body as u32;
+        let apart = 2.0 * PASS / BODIES as f32;
+        let skew = (chance([body, 0, 0, 0]) - 0.5) * apart * 0.4;
+        // The way it's come since the start, the first body a little left
+        // of the focus.
+        let ahead = t * m.speed + m.body as f32 * apart + skew + PASS * 0.6;
+        let lap = (ahead / (2.0 * PASS)).floor() as u32;
+        // The body's, then the soldier's.
+        let of_body = |n: u32| chance([body, lap, u32::MAX, n]);
+        let of_one = |n: u32| chance([body, lap, m.place as u32, n]);
+        let count = 7 + (of_body(0) * 10.0) as usize;
+        let files = 2 + (of_body(1) * 3.0) as usize;
+        visibility.set_if_neq(match m.place < count {
+            true => Visibility::Inherited,
+            false => Visibility::Hidden,
+        });
+        let (rank, file) = ((m.place / files) as f32, (m.place % files) as f32);
+        let mut back = rank * SPACING + (of_one(0) - 0.5) * 0.9 * SPACING;
+        if of_one(1) < 0.1 {
+            back += 1.5 + of_one(2) * 3.0;
+        }
+        let lane = LANE + of_body(2) * 5.0;
+        let mut aside =
+            lane + (file - (files - 1) as f32 / 2.0) * SPACING * (0.9 + of_body(3) * 0.4);
+        aside += (of_one(3) - 0.5) * 0.7 * SPACING;
+        // Wandering, slowly, forward and back and side to side.
+        let wander = |n: u32, most: f32| {
+            let rate = 0.4 + of_one(n) * 0.7;
+            let phase = of_one(n + 1) * std::f32::consts::TAU + t * rate;
+            (most * phase.sin(), most * rate * phase.cos())
+        };
+        let (on, on_rate) = wander(4, 0.4);
+        let (off, off_rate) = wander(6, 0.3);
+        let gone = ahead.rem_euclid(2.0 * PASS) - PASS;
+        let at = stage.focus + across * (gone - back + on) + up * (aside + off);
+        let heading = across * (m.speed + on_rate) + up * off_rate;
+        (transform.translation, transform.rotation) = pose(
+            &stage.ground,
+            at.to_array(),
+            heading.normalize_or(across).to_array(),
+            m.conform,
+            Footing::Ground,
+        );
+        if let Some(mut p) = playing {
+            // Setting off one by one, so out of step.
+            let off_at = chance([body, 0, m.place as u32, 9]) * 0.8;
+            p.set_moving((t > off_at).then_some(heading.length()));
+        }
+    }
+}
+
+/// Flies the plane over from the top right of the screen to the bottom
+/// left, waiting out of sight between passes.
+fn fly(
+    time: Res<Time>,
+    stage: Option<Res<Stage>>,
+    mut planes: Query<(
+        &Flier,
+        &mut Transform,
+        &mut Visibility,
+        Option<&mut Playing>,
+    )>,
+) {
+    let Some(stage) = stage else {
+        return;
+    };
+    let t = time.elapsed_secs() - stage.since;
+    // A step up the map goes only so far up the screen.
+    let along = -(stage.across + stage.up / stage.pitch.sin()).normalize_or_zero();
+    for (f, mut transform, mut visibility, playing) in &mut planes {
+        let crossing = 2.0 * PASS / f.speed;
+        let into = t.rem_euclid(PLANE_WAIT + crossing) - PLANE_WAIT;
+        visibility.set_if_neq(match into >= 0.0 {
+            true => Visibility::Inherited,
+            false => Visibility::Hidden,
+        });
+        // High up, it's seen further up the screen than the ground under
+        // it: its line runs nearer the camera to be seen over the focus,
+        // and left of it, clear of the menu.
+        let aside = -stage.up * f.height / stage.pitch.tan() - stage.across * PLANE_LEFT;
+        let at = stage.place(along, aside, into.max(0.0) * f.speed);
+        let (mut over, turned) = pose(
+            &stage.ground,
+            at.to_array(),
+            along.to_array(),
+            None,
+            Footing::Air,
+        );
+        // Level, at its height over where the backdrop looks.
+        over.y = stage.ground.height_at(stage.focus.to_array()) + f.height;
+        (transform.translation, transform.rotation) = (over, turned);
+        if let Some(mut p) = playing {
+            p.set_moving(Some(f.speed));
+        }
+    }
 }
 
 fn fade_in(

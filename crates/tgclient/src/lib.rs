@@ -152,7 +152,13 @@ impl Look {
                 warn!("no backdrop_focus for the backdrop {map}");
                 return None;
             };
-            Some(backdrop::View { map, focus })
+            Some(backdrop::View {
+                map,
+                focus,
+                troops: look.backdrop_troops.clone(),
+                plane: look.backdrop_plane.clone(),
+                regiment: look.backdrop_regiment.clone(),
+            })
         });
         Look {
             title: (look.title.clone()).unwrap_or_else(|| program.name.to_string()),

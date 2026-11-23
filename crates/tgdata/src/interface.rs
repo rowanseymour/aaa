@@ -190,8 +190,8 @@ impl GameData {
 
     /// How this project's own interface looks for the game: each field
     /// from the first `[ModernInterface]` block, in a `.tgi` file under
-    /// `Modern/`, that has it, `null` saying there's none; the backdrop's
-    /// focus from the block its map is from.
+    /// `Modern/`, that has it, `null` saying there's none; the rest of the
+    /// backdrop from the block its map is from.
     pub fn modern_interface(&self) -> defs::ModernInterface {
         let files = self.modern_files();
         let mut look = defs::ModernInterface::default();
@@ -210,7 +210,13 @@ impl GameData {
                 });
                 backdrop = backdrop.or_else(|| {
                     let map = given(block.backdrop_map)?;
-                    Some(map.map(|m| (m, block.backdrop_focus)))
+                    let rest = (
+                        block.backdrop_focus,
+                        block.backdrop_troops,
+                        block.backdrop_plane,
+                        block.backdrop_regiment,
+                    );
+                    Some(map.map(|m| (m, rest)))
                 });
                 look.tint = look.tint.or(block.tint);
                 look.light = look.light.or(block.light);
@@ -219,8 +225,11 @@ impl GameData {
         }
         look.title = title.flatten();
         look.logo = logo.flatten();
-        if let Some((map, focus)) = backdrop.flatten() {
-            (look.backdrop_map, look.backdrop_focus) = (Some(map), focus);
+        if let Some((map, (focus, troops, plane, regiment))) = backdrop.flatten() {
+            look.backdrop_map = Some(map);
+            look.backdrop_focus = focus;
+            (look.backdrop_troops, look.backdrop_plane) = (troops, plane);
+            look.backdrop_regiment = regiment;
         }
         look
     }
