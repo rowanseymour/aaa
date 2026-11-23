@@ -35,6 +35,8 @@ pub struct View {
     pub troops: Option<String>,
     /// The template of the plane that flies over it.
     pub plane: Option<String>,
+    /// The template of the regiment that marches across it, further off.
+    pub regiment: Option<String>,
 }
 
 /// How much further back than the game's camera it stands, at the game's
@@ -51,19 +53,22 @@ const FADE_IN: f32 = 1.0;
 /// How far troops and the plane go from the focus before coming round
 /// again: as far as objects are drawn, out of sight.
 const PASS: f32 = REACH;
-/// How far nearer the camera than the focus the troops march, in map units.
+/// The nearest the camera the troops march, from the focus, in map units:
+/// each body keeps a little further off, by a different amount each time.
 const LANE: f32 = -6.0;
-/// How many bodies of troops march, evenly apart, each in ranks and
-/// files, and the room each soldier has.
+/// How many bodies of troops march, roughly evenly apart, the most
+/// soldiers each can have, and the room each soldier has.
 const BODIES: usize = 3;
-const RANKS: usize = 4;
-const FILES: usize = 3;
+const MOST: usize = 16;
 const SPACING: f32 = 1.6;
 /// Seconds between one pass of the plane and the next, and before its
 /// first.
 const PLANE_WAIT: f32 = 15.0;
 /// How far left of the focus it passes, in map units.
 const PLANE_LEFT: f32 = 12.0;
+/// How much further from the camera than the focus the regiment marches,
+/// in map units.
+const INLAND: f32 = 10.0;
 
 pub struct BackdropPlugin;
 
@@ -74,7 +79,11 @@ impl Plugin for BackdropPlugin {
             .add_systems(OnEnter(Screen::Loading), clear)
             .add_systems(
                 Update,
-                (arrive, fade_in, (march, fly).before(tgrender::Animate))
+                (
+                    arrive,
+                    fade_in,
+                    (march, advance, fly).before(tgrender::Animate),
+                )
                     .run_if(in_state(Screen::MainMenu)),
             );
     }
@@ -113,11 +122,25 @@ impl Stage {
     }
 }
 
-/// A soldier in the troops marching across, where it stands in their ranks.
+/// A soldier in the troops marching across: which body, and which place
+/// in it, whose shape each body takes anew each time it comes round.
 #[derive(Component)]
 struct Marcher {
-    rank: f32,
-    aside: f32,
+    body: usize,
+    place: usize,
+    speed: f32,
+    conform: Option<Shape>,
+}
+
+/// A member of the regiment marching across, at its place in the
+/// regiment's formation: ahead of the formation's middle, and to its right.
+#[derive(Component)]
+struct Member {
+    ahead: f32,
+    right: f32,
+    /// Which member, for how it wanders.
+    which: u32,
+    /// The regiment's: its slowest member's.
     speed: f32,
     conform: Option<Shape>,
 }
@@ -279,6 +302,19 @@ fn arrive(
             None => warn!("menu backdrop: {troops} doesn't move"),
         }
     }
+    if let Some(regiment) = view.and_then(|v| v.regiment.as_deref()) {
+        let speed = |t: &tgmap::Id| speeds.get(t).copied();
+        spawn_regiment(
+            &mut commands,
+            &mut models,
+            assets,
+            game,
+            &stage,
+            regiment,
+            owner,
+            speed,
+        );
+    }
     if let Some(plane) = view.and_then(|v| v.plane.as_deref()) {
         let flies = game
             .aircraft()
@@ -319,8 +355,8 @@ fn arrive(
     ));
 }
 
-/// Spawns troops of the template `troops` in their ranks, at the start of
-/// their march.
+/// Spawns as many troops of the template `troops` as the bodies can have,
+/// for [`march`] to place and show.
 fn spawn_troops(
     commands: &mut Commands,
     models: &mut Models,
@@ -331,16 +367,10 @@ fn spawn_troops(
     speed: f32,
 ) {
     let conform = models.conform(troops);
-    let each = RANKS * FILES;
-    for i in 0..BODIES * each {
-        let body = (i / each) as f32 * 2.0 * PASS / BODIES as f32;
-        let (rank, file) = ((i % each / FILES) as f32, (i % FILES) as f32);
-        // Out of step a little, as soldiers are.
-        let jitter =
-            |n: u32| (((i as u32).wrapping_mul(2_654_435_761) ^ n) % 1000) as f32 / 1000.0 - 0.5;
+    for i in 0..BODIES * MOST {
         let marcher = Marcher {
-            rank: body - rank * SPACING + jitter(1) * 0.6,
-            aside: (file - (FILES - 1) as f32 / 2.0) * SPACING + jitter(2) * 0.4,
+            body: i / MOST,
+            place: i % MOST,
             speed,
             conform,
         };
@@ -350,35 +380,189 @@ fn spawn_troops(
             crate::views::thing_at(&stage.ground, Footing::Ground, id, troops, at, [1.0, 0.0]);
         let mut parts = assets.models();
         if let Some(e) = models.spawn_unit(commands, &mut parts, &thing, owner, speed) {
-            commands.entity(e).insert((Backdrop, marcher));
+            commands
+                .entity(e)
+                .insert((Backdrop, marcher, Visibility::Hidden));
         }
     }
 }
 
-/// Marches the troops across, round and round.
-fn march(
+/// Spawns the regiment of the template `regiment`, each slot's members
+/// where its layout's starting formation puts them, to march at its
+/// slowest member's speed.
+#[allow(clippy::too_many_arguments)]
+fn spawn_regiment(
+    commands: &mut Commands,
+    models: &mut Models,
+    assets: &mut MapAssets,
+    game: &tgdata::GameData,
+    stage: &Stage,
+    regiment: &str,
+    owner: u32,
+    speed: impl Fn(&tgmap::Id) -> Option<f32>,
+) {
+    let id = tgmap::Id::from(regiment);
+    let Some(component) = game.organization_components().remove(&id) else {
+        return warn!("menu backdrop: {regiment} isn't an organization");
+    };
+    let layouts = game.layouts();
+    let Some(formation) =
+        (layouts.get(&component.layout)).and_then(|l| l.formations.get(l.default))
+    else {
+        return warn!("menu backdrop: {regiment} has no formation");
+    };
+    let members: Vec<(&tgmap::Id, [f32; 2])> = (component.slots.iter())
+        .zip(&formation.slots)
+        .filter_map(|(template, places)| Some((template.as_ref()?, places)))
+        .flat_map(|(template, places)| places.iter().map(move |&at| (template, at)))
+        .collect();
+    let Some(slowest) = (members.iter())
+        .filter_map(|(t, _)| speed(t))
+        .min_by(f32::total_cmp)
+    else {
+        return warn!("menu backdrop: {regiment} doesn't move");
+    };
+    // Its formation's middle, front to back, marches on the line.
+    let aheads = members.iter().map(|(_, [_, y])| *y);
+    let middle = (aheads.clone().fold(f32::MIN, f32::max) + aheads.fold(f32::MAX, f32::min)) / 2.0;
+    for (i, (template, [x, y])) in members.into_iter().enumerate() {
+        let template = template.as_str();
+        let member = Member {
+            ahead: y - middle,
+            right: x,
+            which: i as u32,
+            speed: slowest,
+            conform: models.conform(template),
+        };
+        let at = stage.focus.to_array();
+        let id = (BODIES * MOST + i) as u32 + 1;
+        let thing =
+            crate::views::thing_at(&stage.ground, Footing::Ground, id, template, at, [1.0, 0.0]);
+        let mut parts = assets.models();
+        if let Some(e) = models.spawn_unit(commands, &mut parts, &thing, owner, slowest) {
+            commands.entity(e).insert((Backdrop, member));
+        }
+    }
+}
+
+/// Marches the regiment across, further off than the troops, round and
+/// round, its members wandering a little in their places.
+fn advance(
     time: Res<Time>,
     stage: Option<Res<Stage>>,
-    mut marchers: Query<(&Marcher, &mut Transform, Option<&mut Playing>)>,
+    mut members: Query<(&Member, &mut Transform, Option<&mut Playing>)>,
 ) {
     let Some(stage) = stage else {
         return;
     };
     let t = time.elapsed_secs() - stage.since;
-    let lane = stage.up * LANE;
-    for (m, mut transform, playing) in &mut marchers {
-        let aside = lane + stage.up * m.aside;
-        let at = stage.place(stage.across, aside, t * m.speed + m.rank + PASS * 0.4);
-        let facing = stage.across.to_array();
+    let (across, up) = (stage.across, stage.up);
+    for (m, mut transform, playing) in &mut members {
+        let of = |n: u32| chance([u32::MAX, 0, m.which, n]);
+        let wander = |n: u32, most: f32| {
+            let rate = 0.3 + of(n) * 0.5;
+            let phase = of(n + 1) * std::f32::consts::TAU + t * rate;
+            (most * phase.sin(), most * rate * phase.cos())
+        };
+        let (on, on_rate) = wander(0, 0.3);
+        let (off, off_rate) = wander(2, 0.2);
+        // Starting in sight, a little left of the focus.
+        let gone = (t * m.speed + PASS * 0.85).rem_euclid(2.0 * PASS) - PASS;
+        // Right of the way it goes, which is across, is down the screen.
+        let at = stage.focus + across * (gone + m.ahead + on) + up * (INLAND - m.right + off);
+        let heading = across * (m.speed + on_rate) + up * off_rate;
         (transform.translation, transform.rotation) = pose(
             &stage.ground,
             at.to_array(),
-            facing,
+            heading.normalize_or(across).to_array(),
             m.conform,
             Footing::Ground,
         );
         if let Some(mut p) = playing {
-            p.set_moving(Some(m.speed));
+            p.set_moving(Some(heading.length()));
+        }
+    }
+}
+
+/// A number from 0 to 1 that's the same for the same `keys` and looks
+/// unrelated to any other's.
+fn chance(keys: [u32; 4]) -> f32 {
+    let mut h: u32 = 0x9e37_79b9;
+    for k in keys {
+        h = (h ^ k).wrapping_mul(0x85eb_ca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2_ae35);
+        h ^= h >> 16;
+    }
+    (h >> 8) as f32 / (1 << 24) as f32
+}
+
+/// Marches the troops across, round and round, each body loosely in ranks
+/// and files of a size and shape it takes anew each time round, out of
+/// sight. Soldiers wander a little in their places, out of step.
+fn march(
+    time: Res<Time>,
+    stage: Option<Res<Stage>>,
+    mut marchers: Query<(
+        &Marcher,
+        &mut Transform,
+        &mut Visibility,
+        Option<&mut Playing>,
+    )>,
+) {
+    let Some(stage) = stage else {
+        return;
+    };
+    let t = time.elapsed_secs() - stage.since;
+    let (across, up) = (stage.across, stage.up);
+    for (m, mut transform, mut visibility, playing) in &mut marchers {
+        let body = m.body as u32;
+        let apart = 2.0 * PASS / BODIES as f32;
+        let skew = (chance([body, 0, 0, 0]) - 0.5) * apart * 0.4;
+        // The way it's come since the start, the first body a little left
+        // of the focus.
+        let ahead = t * m.speed + m.body as f32 * apart + skew + PASS * 0.6;
+        let lap = (ahead / (2.0 * PASS)).floor() as u32;
+        // The body's, then the soldier's.
+        let of_body = |n: u32| chance([body, lap, u32::MAX, n]);
+        let of_one = |n: u32| chance([body, lap, m.place as u32, n]);
+        let count = 7 + (of_body(0) * 10.0) as usize;
+        let files = 2 + (of_body(1) * 3.0) as usize;
+        visibility.set_if_neq(match m.place < count {
+            true => Visibility::Inherited,
+            false => Visibility::Hidden,
+        });
+        let (rank, file) = ((m.place / files) as f32, (m.place % files) as f32);
+        let mut back = rank * SPACING + (of_one(0) - 0.5) * 0.9 * SPACING;
+        if of_one(1) < 0.1 {
+            back += 1.5 + of_one(2) * 3.0;
+        }
+        let lane = LANE + of_body(2) * 5.0;
+        let mut aside =
+            lane + (file - (files - 1) as f32 / 2.0) * SPACING * (0.9 + of_body(3) * 0.4);
+        aside += (of_one(3) - 0.5) * 0.7 * SPACING;
+        // Wandering, slowly, forward and back and side to side.
+        let wander = |n: u32, most: f32| {
+            let rate = 0.4 + of_one(n) * 0.7;
+            let phase = of_one(n + 1) * std::f32::consts::TAU + t * rate;
+            (most * phase.sin(), most * rate * phase.cos())
+        };
+        let (on, on_rate) = wander(4, 0.4);
+        let (off, off_rate) = wander(6, 0.3);
+        let gone = ahead.rem_euclid(2.0 * PASS) - PASS;
+        let at = stage.focus + across * (gone - back + on) + up * (aside + off);
+        let heading = across * (m.speed + on_rate) + up * off_rate;
+        (transform.translation, transform.rotation) = pose(
+            &stage.ground,
+            at.to_array(),
+            heading.normalize_or(across).to_array(),
+            m.conform,
+            Footing::Ground,
+        );
+        if let Some(mut p) = playing {
+            // Setting off one by one, so out of step.
+            let off_at = chance([body, 0, m.place as u32, 9]) * 0.8;
+            p.set_moving((t > off_at).then_some(heading.length()));
         }
     }
 }

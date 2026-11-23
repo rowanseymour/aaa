@@ -1316,7 +1316,7 @@ mod tests {
             "look-shared",
             &[(
                 "Modern/look.tgi",
-                "[ModernInterface]\ntitle = Shared\nlogo = /Other/logo.png\nbackdrop_map = m\nbackdrop_focus = 1, 2\nbackdrop_troops = t\nbackdrop_plane = p",
+                "[ModernInterface]\ntitle = Shared\nlogo = /Other/logo.png\nbackdrop_map = m\nbackdrop_focus = 1, 2\nbackdrop_troops = t\nbackdrop_plane = p\nbackdrop_regiment = r",
             )],
         );
         let mut game = empty();
@@ -1332,6 +1332,7 @@ mod tests {
         assert_eq!(look.backdrop_focus, Some([1.0, 2.0]));
         assert_eq!(look.backdrop_troops.as_deref(), Some("t"));
         assert_eq!(look.backdrop_plane.as_deref(), Some("p"));
+        assert_eq!(look.backdrop_regiment.as_deref(), Some("r"));
 
         // `null` says there's none, and a map brings only its own focus.
         let unset = folder(
@@ -1350,6 +1351,7 @@ mod tests {
         assert_eq!(look.backdrop_map.as_deref(), Some("own"));
         assert_eq!(look.backdrop_focus, None);
         assert_eq!((look.backdrop_troops, look.backdrop_plane), (None, None));
+        assert_eq!(look.backdrop_regiment, None);
 
         for dir in [own, shared, unset] {
             let _ = std::fs::remove_dir_all(dir);

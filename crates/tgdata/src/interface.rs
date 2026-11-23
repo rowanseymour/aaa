@@ -214,6 +214,7 @@ impl GameData {
                         block.backdrop_focus,
                         block.backdrop_troops,
                         block.backdrop_plane,
+                        block.backdrop_regiment,
                     );
                     Some(map.map(|m| (m, rest)))
                 });
@@ -224,13 +225,11 @@ impl GameData {
         }
         look.title = title.flatten();
         look.logo = logo.flatten();
-        if let Some((map, (focus, troops, plane))) = backdrop.flatten() {
+        if let Some((map, (focus, troops, plane, regiment))) = backdrop.flatten() {
             look.backdrop_map = Some(map);
-            (
-                look.backdrop_focus,
-                look.backdrop_troops,
-                look.backdrop_plane,
-            ) = (focus, troops, plane);
+            look.backdrop_focus = focus;
+            (look.backdrop_troops, look.backdrop_plane) = (troops, plane);
+            look.backdrop_regiment = regiment;
         }
         look
     }

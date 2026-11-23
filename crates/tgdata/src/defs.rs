@@ -1262,6 +1262,9 @@ pub struct ModernInterface {
     pub backdrop_troops: Option<String>,
     /// The template of the plane that now and then flies over it.
     pub backdrop_plane: Option<String>,
+    /// The template of a regiment that marches across it, further off, in
+    /// formation.
+    pub backdrop_regiment: Option<String>,
 }
 
 /// A bonus or penalty the lobby can give a side the computer plays.

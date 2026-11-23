@@ -157,6 +157,7 @@ impl Look {
                 focus,
                 troops: look.backdrop_troops.clone(),
                 plane: look.backdrop_plane.clone(),
+                regiment: look.backdrop_regiment.clone(),
             })
         });
         Look {
