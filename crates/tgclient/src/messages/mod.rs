@@ -7,7 +7,7 @@ mod draw;
 mod log;
 mod told;
 
-pub(crate) use draw::{LogBox, Shade, WholeLog, log_node, cycle, list, relist, show, spawn};
+pub(crate) use draw::{LogBox, Shade, WholeLog, cycle, list, log_node, relist, show, spawn};
 pub(crate) use log::{About, MessageLog, filled, start};
 pub(crate) use told::{By, Failed, Refused, refuse, tell, tell_leaving};
 

@@ -378,11 +378,7 @@ impl Letters {
 
     /// What sets text in the font `ids` names, its lines as far apart as
     /// those of the font `label` names.
-    pub fn lettered(
-        &self,
-        ids: &str,
-        label: &str,
-    ) -> (TextFont, LineHeight, TextShadow, Lettered) {
+    pub fn lettered(&self, ids: &str, label: &str) -> (TextFont, LineHeight, TextShadow, Lettered) {
         let lettering = self.lettering(ids);
         let pitch = (!label.eq_ignore_ascii_case(ids)).then(|| self.lettering(label));
         let lined = pitch.as_ref().map_or(&lettering.own, |p| &p.own);

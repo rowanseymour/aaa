@@ -66,7 +66,12 @@ impl Plugin for OriginalHudPlugin {
             PostUpdate,
             (
                 match_textures,
-                (fit_view, letter_log, lettering::scale, lettering::share_face)
+                (
+                    fit_view,
+                    letter_log,
+                    lettering::scale,
+                    lettering::share_face,
+                )
                     .chain()
                     .before(bevy::camera::CameraUpdateSystems)
                     .before(bevy::ui::UiSystems::Prepare),
@@ -626,7 +631,10 @@ pub fn spawn(
     let log = named(LOG).map(|w| w.bounds(screen));
     commands.insert_resource(log.map_or_else(
         || LogAt {
-            at: Vec2::new(edge(LOG_LEFT_OF, |at| at.right), edge(LOG_UNDER, |at| at.bottom)),
+            at: Vec2::new(
+                edge(LOG_LEFT_OF, |at| at.right),
+                edge(LOG_UNDER, |at| at.bottom),
+            ),
             width: crate::messages::WIDTH,
         },
         |at| LogAt {
@@ -1531,12 +1539,18 @@ mod tests {
         assert!(world.get::<crate::messages::Shade>(text).is_some());
         assert!(world.get::<lettering::Lettered>(elsewhere).is_none());
         let measured = |e| world.get::<lettering::Measured>(e).copied();
-        assert_eq!(measured(icon).and_then(|m| m.size), Some(crate::messages::ICON));
+        assert_eq!(
+            measured(icon).and_then(|m| m.size),
+            Some(crate::messages::ICON)
+        );
         assert_eq!(
             measured(icon).and_then(|m| m.top_margin),
             Some(crate::messages::ICON_MARGIN)
         );
-        assert_eq!(measured(row).and_then(|m| m.gap), Some(crate::messages::ICON_GAP));
+        assert_eq!(
+            measured(row).and_then(|m| m.gap),
+            Some(crate::messages::ICON_GAP)
+        );
         // A side's gem within a line keeps its own size.
         assert!(measured(gem).is_none());
     }
