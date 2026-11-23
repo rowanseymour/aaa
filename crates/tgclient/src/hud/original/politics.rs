@@ -229,7 +229,7 @@ fn write(
                     sized(*size),
                 ));
             }
-            text.spawn(letters.text(&panel.font, &format!(" {}", row.name), ink));
+            text.spawn(letters.text(&panel.font, &row.name, ink));
         });
         let marker = row
             .relation
