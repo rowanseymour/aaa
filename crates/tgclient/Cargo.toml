@@ -20,3 +20,4 @@ raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 directories = "6"
+ttf-parser = "0.25"

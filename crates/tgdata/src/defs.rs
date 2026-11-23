@@ -1718,6 +1718,9 @@ pub struct AVars {
     pub view_zone_friendly_supply_color: Option<[f32; 3]>,
     #[serde(rename = "ViewZoneFriendlySupplyTexture")]
     pub view_zone_friendly_supply_texture: Option<String>,
+    /// The font, by its `ids`, that a tooltip's title is in.
+    #[serde(rename = "TextFontIDSToolTipName")]
+    pub text_font_ids_tool_tip_name: Option<String>,
     /// The side, in world units, of the squares the terrain is drawn in.
     #[serde(rename = "TerrainBlockSize")]
     pub terrain_block_size: Option<f32>,

@@ -164,17 +164,28 @@ impl Looks {
 pub struct Quantity {
     pub glyph: Option<Handle<Image>>,
     pub amount: f32,
-    /// Shown signed, as what's earned is.
-    pub earned: bool,
+    pub sign: Sign,
     pub resource: String,
+}
+
+/// How an amount's sign is shown.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum Sign {
+    /// Not at all, as what's paid is.
+    #[default]
+    Bare,
+    /// As a gain, as what's earned is.
+    Earned,
+    /// As a loss, as what's kept up is, but for a limit taken up.
+    Spent,
 }
 
 impl Quantity {
     pub fn number(&self) -> String {
-        if self.earned && self.amount > 0.0 {
-            format!("+{}", self.amount)
-        } else {
-            self.amount.to_string()
+        match self.sign {
+            Sign::Earned if self.amount > 0.0 => format!("+{}", self.amount),
+            Sign::Spent if self.amount > 0.0 => format!("-{}", self.amount),
+            _ => self.amount.to_string(),
         }
     }
 
@@ -314,14 +325,19 @@ pub fn setup(
         "ui_error_missing_single_recruit_item",
         "Must select a hero to attach",
     );
-    let quantities = |amounts: &[tgdata::Amount], earned: bool| -> Vec<Quantity> {
+    let kinds = &sim.0.rules().economy.resources;
+    let quantities = |amounts: &[tgdata::Amount], sign: Sign| -> Vec<Quantity> {
         amounts
             .iter()
-            .map(|a| Quantity {
-                glyph: glyphs.get(&a.kind).cloned(),
-                amount: a.amount,
-                earned,
-                resource: a.resource.clone(),
+            .map(|a| {
+                let taken_up = (kinds.iter())
+                    .any(|r| r.id == a.kind && r.role == tgdata::ResourceRole::LimitedConsumed);
+                Quantity {
+                    glyph: glyphs.get(&a.kind).cloned(),
+                    amount: a.amount,
+                    sign: if taken_up { Sign::Bare } else { sign },
+                    resource: a.resource.clone(),
+                }
             })
             .collect()
     };
@@ -353,7 +369,7 @@ pub fn setup(
                         true => Vec::new(),
                         false => vec![Row {
                             label: cost_title.clone(),
-                            amounts: quantities(&cost, false),
+                            amounts: quantities(&cost, Sign::Bare),
                         }],
                     },
                     notes: technology.map_or_else(Vec::new, |t| {
@@ -393,15 +409,15 @@ pub fn setup(
                 let costed = listing.is_some_and(|l| !l.cost.is_empty());
                 let economy = listing.map_or_else(Vec::new, |l| {
                     [
-                        (&cost, &l.cost, false),
-                        (&production, &l.production, true),
-                        (&upkeep, &l.upkeep, false),
+                        (&cost, &l.cost, Sign::Bare),
+                        (&production, &l.production, Sign::Earned),
+                        (&upkeep, &l.upkeep, Sign::Spent),
                     ]
                     .into_iter()
                     .filter(|(_, amounts, _)| !amounts.is_empty())
-                    .map(|(label, amounts, earned)| Row {
+                    .map(|(label, amounts, sign)| Row {
                         label: label.clone(),
-                        amounts: quantities(amounts, earned),
+                        amounts: quantities(amounts, sign),
                     })
                     .collect()
                 });
@@ -442,14 +458,17 @@ pub fn setup(
         .map(|id| {
             let listing = listings.get(id);
             let economy = listing.map_or_else(Vec::new, |l| {
-                [(&cost, &l.cost, false), (&upkeep, &l.upkeep, false)]
-                    .into_iter()
-                    .filter(|(_, amounts, _)| !amounts.is_empty())
-                    .map(|(label, amounts, earned)| Row {
-                        label: label.clone(),
-                        amounts: quantities(amounts, earned),
-                    })
-                    .collect()
+                [
+                    (&cost, &l.cost, Sign::Bare),
+                    (&upkeep, &l.upkeep, Sign::Spent),
+                ]
+                .into_iter()
+                .filter(|(_, amounts, _)| !amounts.is_empty())
+                .map(|(label, amounts, sign)| Row {
+                    label: label.clone(),
+                    amounts: quantities(amounts, sign),
+                })
+                .collect()
             });
             let look = Look {
                 name: listing.map_or_else(|| id.to_string(), |l| l.name.clone()),
@@ -541,5 +560,27 @@ pub(crate) fn look_of<'a>(
         Entry::Pack => &looks.pack.1,
         Entry::Sell => &looks.sell.1,
         Entry::Recruit(i) => &looks.menu(sim, building)[i].look,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_amount_is_signed_as_gained_or_lost() {
+        let number = |amount, sign| {
+            let q = Quantity {
+                glyph: None,
+                amount,
+                sign,
+                resource: "oil".into(),
+            };
+            q.number()
+        };
+        assert_eq!(number(25.0, Sign::Bare), "25");
+        assert_eq!(number(12.0, Sign::Earned), "+12");
+        assert_eq!(number(5.0, Sign::Spent), "-5");
+        assert_eq!(number(0.0, Sign::Spent), "0");
     }
 }

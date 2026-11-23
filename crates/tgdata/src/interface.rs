@@ -181,40 +181,86 @@ impl GameData {
     /// One of the interface's fonts, by its `ids` as a label names it:
     /// `[Font]` in a `.tgi` file in `Fonts/`, whose first `[CharacterSet]`
     /// gives the face.
+    ///
+    /// A face named rather than given as a file is one of Windows' own,
+    /// which the data doesn't hold: it's stood in for by the file a
+    /// `[SystemFont]` block of the same `name` gives, `bold_font` where the
+    /// set is bold and it has one, else `font`.
     pub fn font(&self, ids: &str) -> Option<FontLook> {
-        let names = self.entry_names(|n| {
-            n.strip_prefix("fonts/")
-                .is_some_and(|f| f.ends_with(".tgi") && !f.contains('/'))
-        });
-        let files = self.parse_named(names.iter().map(String::as_str));
+        let files = self.font_files();
         let word = |b: &tgi::Block, key: &str| {
             let value = b.field(key)?.value.as_deref()?;
             Some(value.split_whitespace().next()?.to_string())
         };
-        let font = (files.iter())
-            .flat_map(|(_, f)| f.root.blocks_of("Font"))
-            .find(|f| word(f, "ids").is_some_and(|i| i.eq_ignore_ascii_case(ids)))?;
+        let number = |b: &tgi::Block, key: &str| word(b, key)?.parse::<f32>().ok();
+        let blocks = |kind| (files.iter()).flat_map(move |(_, f)| f.root.blocks_of(kind));
+        let font =
+            blocks("Font").find(|f| word(f, "ids").is_some_and(|i| i.eq_ignore_ascii_case(ids)))?;
         let set = font.blocks_of("CharacterSet").next();
         let flag = |key| {
             set.and_then(|s| word(s, key))
                 .is_some_and(|v| v.eq_ignore_ascii_case("true"))
         };
-        // A face the data doesn't hold is one of the system's, by name.
-        let file = (set.and_then(|s| s.field("font")?.value.clone()))
-            .map(|f| f.trim().trim_start_matches('/').to_string())
-            .filter(|f| self.exists(f));
+        let bold = flag("bold");
+        let face = |key| -> Option<Typeface> {
+            let value = set?.field(key)?.value.as_deref()?;
+            // Up to any comment after it.
+            let named = value.split(";;").next()?.trim();
+            let file = named.trim_start_matches('/');
+            if self.exists(file) {
+                return Some(Typeface {
+                    file: Some(file.to_string()),
+                    system: false,
+                });
+            }
+            // A path is the data's, if it's missing; a bare name the system's.
+            if named.contains('/') {
+                return None;
+            }
+            let system = blocks("SystemFont").find(|f| {
+                f.field("name")
+                    .and_then(|n| n.value.as_deref())
+                    .is_some_and(|n| n.trim().eq_ignore_ascii_case(named))
+            });
+            let file = system.and_then(|system| {
+                let file = (bold.then(|| system.field("bold_font")).flatten())
+                    .or_else(|| system.field("font"))?;
+                let file = file.value.as_deref()?.trim().trim_start_matches('/');
+                self.exists(file).then(|| file.to_string())
+            });
+            Some(Typeface { file, system: true })
+        };
+        let backup = set.and_then(|s| {
+            Some(Backup {
+                face: face("backup_font"),
+                size: number(s, "backup_font_size")?,
+                below: number(s, "use_backup_font_when_smaller_than")?,
+            })
+        });
         Some(FontLook {
-            file,
-            size: word(font, "size")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(12.0),
-            bold: flag("bold"),
-            shadow: flag("shadow").then(|| {
-                (set.and_then(|s| word(s, "shadow_opacity")))
-                    .and_then(|o| o.parse().ok())
-                    .unwrap_or(1.0)
-            }),
+            face: face("font"),
+            size: number(font, "size").unwrap_or(12.0),
+            bold,
+            shadow: flag("shadow")
+                .then(|| set.and_then(|s| number(s, "shadow_opacity")).unwrap_or(1.0)),
+            backup,
         })
+    }
+
+    /// The `.tgi` files in `Fonts/` itself.
+    fn font_files(&self) -> Vec<(String, Arc<tgi::Parsed>)> {
+        let names = self.entry_names(|n| {
+            n.strip_prefix("fonts/")
+                .is_some_and(|f| f.ends_with(".tgi") && !f.contains('/'))
+        });
+        self.parse_named(names.iter().map(String::as_str))
+    }
+
+    /// The font, by its `ids`, that a tooltip's title is in, where the
+    /// settings name one.
+    pub fn tooltip_title_font(&self) -> Option<String> {
+        let vars = self.avars();
+        (vars.iter()).find_map(|v| v.text_font_ids_tool_tip_name.clone())
     }
 
     /// The images the connection dialog draws, as its layout names them.
@@ -435,13 +481,33 @@ mod tests {
 /// One of the interface's fonts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FontLook {
-    /// The archive path of its face, where the data holds it rather than
-    /// naming one the system has.
-    pub file: Option<String>,
-    /// Its size as Windows gives it, in points of a 96 dots-per-inch
-    /// screen.
+    /// Its face, where it names one.
+    pub face: Option<Typeface>,
+    /// Its size as Windows gives it: points of a 96 dots-per-inch screen
+    /// for a face the data holds, pixels for one of the system's.
     pub size: f32,
     pub bold: bool,
     /// How opaque the shadow behind its glyphs is, where it has one.
     pub shadow: Option<f32>,
+    /// The font it's drawn in instead when it would be drawn too small.
+    pub backup: Option<Backup>,
+}
+
+/// The face a font's glyphs are drawn in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Typeface {
+    /// The archive path of its file, or of the one standing in for it,
+    /// where there's one.
+    pub file: Option<String>,
+    /// Whether it's a system face the data names rather than holds.
+    pub system: bool,
+}
+
+/// What a font is drawn in instead when it's drawn smaller than `below`,
+/// in the same units as its size.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Backup {
+    pub face: Option<Typeface>,
+    pub size: f32,
+    pub below: f32,
 }
