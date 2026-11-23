@@ -46,6 +46,9 @@ pub struct Staging {
     pub rules: RuleValues,
     /// What's chosen for each side.
     pub slots: Slots,
+    /// The machine each computer player belongs to, by player id, as the
+    /// host knows it; whoever runs the host's where none is.
+    pub owners: BTreeMap<u32, u32>,
     /// Everyone in the game, in the order they came in.
     pub guests: Vec<Guest>,
     /// The seconds left before the game launches, while it counts down.
@@ -95,6 +98,26 @@ impl Staging {
         self.guests.iter().any(|g| g.side == Some(player))
     }
 
+    /// What the machine side `player`'s computer player would belong to is
+    /// known as.
+    pub fn owner(&self, player: u32) -> Option<u32> {
+        let host = || self.guests.iter().find(|g| g.host).map(|g| g.client);
+        self.owners.get(&player).copied().or_else(host)
+    }
+
+    /// Whether a computer player belonging to `client`'s machine plays side
+    /// `player`.
+    pub fn owns(&self, client: u32, player: u32) -> bool {
+        let computer = !self.taken(player) && !self.slots.is_open(player);
+        computer && self.owner(player) == Some(client)
+    }
+
+    /// Whether side `player` is free for someone to take: open, and nobody
+    /// takes it.
+    fn free(&self, player: u32) -> bool {
+        self.slots.is_open(player) && !self.taken(player)
+    }
+
     /// Whether everyone counts as ready.
     pub fn ready(&self) -> bool {
         self.guests.iter().all(Guest::counts_ready)
@@ -103,14 +126,15 @@ impl Staging {
     /// Whether it has room for someone else to come in: fewer people than
     /// its most, and a side free for them unless they may watch.
     pub fn room(&self) -> bool {
-        let free = self.sides.iter().any(|&p| !self.taken(p));
+        let free = self.sides.iter().any(|&p| self.free(p));
         self.guests.len() < self.most && (self.observers || free)
     }
 
     /// Whether the person at `client` may have `choice` made, as things
-    /// stand: whoever runs the host makes the game's choices and those for
-    /// the sides nobody takes, and each person their own. While the launch
-    /// counts down, only being ready or not is chosen, and stopping it.
+    /// stand: whoever runs the host makes the game's choices, and each
+    /// person those for their own side and their machine's computer
+    /// players. While the launch counts down, only being ready or not is
+    /// chosen, and stopping it.
     pub fn allows(&self, client: u32, choice: &Choice) -> bool {
         let Some(guest) = self.guest(client) else {
             return false;
@@ -123,20 +147,28 @@ impl Staging {
                 _ => false,
             };
         }
-        let side =
-            |&player: &u32| guest.side == Some(player) || (guest.host && !self.taken(player));
+        let mine = |&player: &u32| self.owns(client, player);
         match choice {
             Choice::Map { .. } | Choice::Rules(_) | Choice::Preset { .. } | Choice::Launch(_) => {
                 guest.host
             }
             Choice::Kick(client) => guest.host && self.guest(*client).is_some_and(|g| !g.host),
-            Choice::Nation(player, _) | Choice::Faction(player, _) => side(player),
+            Choice::Nation(player, _) | Choice::Faction(player, _) => {
+                guest.side == Some(*player) || mine(player)
+            }
             // People have no handicap or profile.
-            Choice::Handicap(player, _) | Choice::Computer(player, _) | Choice::Open(player) => {
-                guest.host && !self.taken(*player)
+            Choice::Handicap(player, _) => mine(player),
+            Choice::Computer(player, _) => self.free(*player) || mine(player),
+            // Whoever runs the host puts out anyone's.
+            Choice::Open(player) => {
+                let computer = !self.taken(*player) && !self.slots.is_open(*player);
+                mine(player) || (guest.host && computer)
             }
             Choice::Side(None) => guest.side.is_some() && self.observers,
-            Choice::Side(Some(player)) => self.sides.contains(player) && !self.taken(*player),
+            // Trading places only with their own machine's computer player.
+            Choice::Side(Some(player)) => {
+                self.sides.contains(player) && (self.free(*player) || mine(player))
+            }
             // Nobody is ready without the map.
             Choice::Ready(ready) => guest.side.is_some() && (!ready || guest.holds || guest.host),
             Choice::Holds(_, _) => true,
@@ -172,11 +204,18 @@ impl Staging {
                 // What was chosen for the old map's sides means nothing on
                 // the new one's, and each machine has yet to say whether it
                 // has the new one.
-                *slots = Slots::default();
+                *slots = Slots::left_open(&sides);
+                self.owners.clear();
                 for guest in &mut self.guests {
                     guest.holds = guest.host;
                 }
                 self.arrange(preset, sides);
+                // Those still on a side hold it on the new map.
+                for guest in &self.guests {
+                    if let Some(side) = guest.side {
+                        self.slots.open.remove(&side);
+                    }
+                }
             }
             Choice::Rules(rules) => self.rules = rules,
             Choice::Preset { preset, sides } => self.arrange(preset, sides),
@@ -194,14 +233,28 @@ impl Staging {
             }
             Choice::Faction(player, id) => chosen(&mut slots.factions, player, id),
             Choice::Handicap(player, id) => chosen(&mut slots.handicaps, player, id),
-            Choice::Computer(player, id) => slots.computer(player, id),
-            Choice::Open(player) => slots.empty(player),
+            Choice::Computer(player, id) => {
+                slots.computer(player, id);
+                self.owners.insert(player, client);
+            }
+            Choice::Open(player) => {
+                slots.empty(player);
+                self.owners.remove(&player);
+            }
             Choice::Side(side) => {
                 let Some(guest) = self.guest_mut(client) else {
                     return;
                 };
                 let left = std::mem::replace(&mut guest.side, side);
+                // A computer player they trade places with goes on
+                // belonging to its machine.
+                let owner = side.and_then(|s| self.owners.remove(&s));
                 self.slots.seat(left, side);
+                if let (Some(left), Some(owner)) = (left, owner)
+                    && !self.slots.is_open(left)
+                {
+                    self.owners.insert(left, owner);
+                }
             }
             Choice::Ready(ready) => {
                 if let Some(guest) = self.guest_mut(client) {
@@ -368,7 +421,7 @@ impl<L: Link> Lobby<L> {
         self.next += 1;
         let name = name.expect("a guest is let in with a name");
         // Where nobody may watch, they take the first side free.
-        let free = self.staging.sides.iter().find(|&&p| !self.staging.taken(p));
+        let free = self.staging.sides.iter().find(|&&p| self.staging.free(p));
         let side = free.copied().filter(|_| !self.staging.observers && !host);
         if side.is_some() {
             self.staging.slots.seat(None, side);
@@ -561,6 +614,15 @@ impl<L: Link> Lobby<L> {
         let guest = self.staging.guests.remove(at);
         if let Some(side) = guest.side {
             self.staging.slots.empty(side);
+        }
+        // Their machine's computer players go with them.
+        let theirs: Vec<u32> = (self.staging.owners.iter())
+            .filter(|&(_, &c)| c == client)
+            .map(|(&p, _)| p)
+            .collect();
+        for player in theirs {
+            self.staging.owners.remove(&player);
+            self.staging.slots.empty(player);
         }
         let left = ToClient::Left(Gone {
             client,
@@ -757,6 +819,7 @@ mod tests {
             observers: true,
             map: "field".into(),
             sides: vec![1, 2],
+            slots: Slots::left_open(&[1, 2]),
             ..Default::default()
         }
     }
@@ -862,30 +925,38 @@ mod tests {
     }
 
     #[test]
-    fn a_side_taken_on_coming_in_has_no_handicap_and_is_freed_on_leaving() {
+    fn newcomers_take_a_free_side_and_free_it_and_their_computer_players_on_leaving() {
         let mut lobby = Lobby::new(
             Staging {
                 observers: false,
+                most: 2,
                 ..staging()
             },
             String::new(),
         );
         let (ours, mut host) = pair();
         lobby.admit(ours, "Host", "").unwrap();
-        let easy = Choice::Handicap(1, Some(Id::from("easy")));
-        host.send(encode(&ToHost::Choose(easy))).unwrap();
+        host.send(encode(&ToHost::Choose(Choice::Computer(1, None))))
+            .unwrap();
         lobby.turn();
-        assert_eq!(lobby.staging().slots.handicaps.len(), 1);
+        // Not the computer player's.
         let mut bob = ask(&mut lobby, "Bob", "").unwrap();
-        assert_eq!(lobby.staging().guest(2).unwrap().side, Some(1));
-        assert!(lobby.staging().slots.handicaps.is_empty());
-        bob.choose(Choice::Nation(1, Some(Id::from("usa"))))
+        assert_eq!(lobby.staging().guest(2).unwrap().side, Some(2));
+        assert!(!lobby.staging().room());
+        bob.choose(Choice::Nation(2, Some(Id::from("usa"))))
             .unwrap();
         lobby.turn();
         assert_eq!(lobby.staging().slots.nations.len(), 1);
+        host.send(encode(&ToHost::Choose(Choice::Open(1)))).unwrap();
+        lobby.turn();
+        bob.choose(Choice::Computer(1, None)).unwrap();
+        lobby.turn();
+        assert_eq!(lobby.staging().owner(1), Some(2));
         bob.leave();
         lobby.turn();
-        assert!(lobby.staging().slots.nations.is_empty());
+        let staging = lobby.staging();
+        assert!(staging.slots.nations.is_empty() && staging.owners.is_empty());
+        assert!(staging.slots.is_open(1) && staging.slots.is_open(2));
     }
 
     #[test]
@@ -920,53 +991,91 @@ mod tests {
         let told = bob.take_told();
         assert!(told.contains(&refused(free_for_all)));
         assert_eq!(host.take_told().len(), 3);
-        // The host's for a side nobody takes.
+        // Nothing is chosen for an open side but who holds it.
         host.choose(Choice::Nation(1, Some(Id::from("japan"))))
             .unwrap();
         host.choose(Choice::Handicap(1, Some(Id::from("easy"))))
             .unwrap();
+        // A computer player belongs to the machine that put it there,
+        // which makes its choices.
         host.choose(Choice::Computer(1, Some(Id::from("konev_sai"))))
             .unwrap();
-        bob.choose(Choice::Computer(1, None)).unwrap();
+        host.choose(Choice::Nation(1, Some(Id::from("japan"))))
+            .unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
-        assert_eq!(bob.staging().slots.nations.len(), 2);
-        assert_eq!(bob.staging().slots.computers.len(), 1);
-        assert_eq!(
-            bob.staging().slots.nations.get(&1),
-            Some(&Id::from("japan"))
-        );
-        // Taking a computer player's side trades places with it, each
-        // keeping their own nation, and it its handicap and profile.
+        bob.choose(Choice::Computer(1, None)).unwrap();
+        bob.choose(Choice::Handicap(1, Some(Id::from("easy"))))
+            .unwrap();
+        bob.choose(Choice::Side(Some(1))).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        let staging = bob.staging();
+        assert_eq!(staging.slots.computers, [(1, Id::from("konev_sai"))].into());
+        assert!(staging.slots.handicaps.is_empty());
+        assert_eq!(staging.guest(2).unwrap().side, Some(2));
+        assert_eq!(staging.owner(1), Some(1));
+        let refusals = bob.take_told();
+        assert_eq!(refusals.len(), 3);
+        // Whoever runs the host puts out anyone's, and anyone may put
+        // their own on an open side.
+        host.choose(Choice::Open(1)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        bob.choose(Choice::Computer(1, Some(Id::from("rommel_sai"))))
+            .unwrap();
+        bob.choose(Choice::Nation(1, Some(Id::from("japan"))))
+            .unwrap();
+        bob.choose(Choice::Handicap(1, Some(Id::from("easy"))))
+            .unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        assert_eq!(bob.staging().owner(1), Some(2));
+        assert!(bob.take_told().is_empty());
+        // The host's choices for it are refused, as were those for the
+        // open side.
+        host.choose(Choice::Nation(1, Some(Id::from("usa"))))
+            .unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        assert_eq!(host.take_told().len(), 3);
+        // Taking their own computer player's side trades places with it,
+        // each keeping their own nation, and it its handicap, profile and
+        // machine.
         bob.choose(Choice::Side(Some(1))).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let staging = bob.staging();
         assert_eq!(staging.slots.handicaps, [(2, Id::from("easy"))].into());
-        assert_eq!(staging.slots.computers, [(2, Id::from("konev_sai"))].into());
+        assert_eq!(
+            staging.slots.computers,
+            [(2, Id::from("rommel_sai"))].into()
+        );
         let nations = [(1, Id::from("usa")), (2, Id::from("japan"))];
         assert_eq!(staging.slots.nations, nations.into());
+        assert_eq!(staging.owners, [(2, 2)].into());
         // Left for nobody, a side has nothing chosen.
-        host.choose(Choice::Open(2)).unwrap();
+        bob.choose(Choice::Open(2)).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let staging = bob.staging();
         assert_eq!(staging.slots.nations, [(1, Id::from("usa"))].into());
         assert!(staging.slots.is_open(2) && staging.slots.computers.is_empty());
+        assert!(staging.owners.is_empty());
         // A new map's sides are chosen afresh.
         let map = Choice::Map {
             map: "hills".into(),
             preset: Preset::Custom,
-            sides: vec![2],
+            sides: vec![1, 2],
             rules: night(),
         };
         host.choose(map).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let staging = bob.staging();
+        // Bob keeps a side the new map has too, still his.
         assert_eq!(
             (staging.map.as_str(), staging.guest(2).unwrap().side),
-            ("hills", None)
+            ("hills", Some(1))
         );
+        assert!(!staging.slots.is_open(1));
         assert!(staging.slots.nations.is_empty());
         assert_eq!(staging.rules, night());
+        assert!(staging.slots.is_open(2));
         // Changing only the rules keeps what's chosen for the sides.
+        host.choose(Choice::Computer(2, None)).unwrap();
         host.choose(Choice::Nation(2, Some(Id::from("usa"))))
             .unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);

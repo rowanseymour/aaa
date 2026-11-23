@@ -220,6 +220,9 @@ pub struct Lobby {
     person: Option<u32>,
     /// The sides others take in a game between machines, by player id.
     others: Vec<u32>,
+    /// The sides computer players of other machines play in a game between
+    /// machines, by player id, with whose machine each belongs to.
+    theirs: BTreeMap<u32, String>,
     /// What's chosen for each side: a nation or faction at random, and
     /// the default handicap, where none is.
     slots: tgserver::Slots,
@@ -243,6 +246,7 @@ impl Lobby {
             preset,
             person,
             others: Vec::new(),
+            theirs: BTreeMap::new(),
             slots: tgserver::Slots::default(),
             open: Open::Nothing,
             // As the map stores them, until the scenario map dialog
@@ -319,6 +323,11 @@ impl Lobby {
         let others = staging.guests.iter().filter(|g| g.client != me);
         self.others = others.filter_map(|g| g.side).collect();
         self.slots.clone_from(&staging.slots);
+        let name = |client| staging.guest(client).map(|g| g.name.clone());
+        let sides = self.brief.iter().flat_map(|b| b.sides().map(|p| p.id));
+        self.theirs = (sides.filter(|&p| self.computer(p) && !staging.owns(me, p)))
+            .filter_map(|p| Some((p, name(staging.owner(p)?)?)))
+            .collect();
     }
 
     /// Whether nobody holds `player`'s side.
@@ -330,6 +339,12 @@ impl Lobby {
     /// it and it isn't left open.
     fn computer(&self, player: u32) -> bool {
         self.person != Some(player) && !self.others.contains(&player) && !self.empty(player)
+    }
+
+    /// Whether a computer player belonging to the machine here plays
+    /// `player`'s side, and so its choices are made here.
+    fn mine(&self, player: u32) -> bool {
+        self.computer(player) && !self.theirs.contains_key(&player)
     }
 
     /// The profile chosen for `player`'s side, while the computer plays it.
@@ -1066,18 +1081,17 @@ fn show_slots(
                     children![side_mark(&gem, player)],
                 ))
                 .id();
-            let who = match (holder, profile) {
+            // Anyone may put a computer player on an open side, and
+            // changes their own; others' are shown with whose machine
+            // they belong to.
+            let who = match (holder, lobby.theirs.get(&id)) {
                 (Some(guest), _) => Some(guest.name.clone()),
                 (None, _) if !computer && !empty => Some("Player".into()),
-                // The host chooses for the sides nobody takes.
-                (None, _) if staging.is_none() || hosting => None,
-                (None, _) if empty => Some(open_label(player)),
-                // Elsewhere with whose machine it is, the host's.
-                (None, profile) => {
+                (None, Some(owner)) => {
                     let name = profile.map_or("Random", |s| s.name.as_str());
-                    let host = staging.and_then(|(s, _)| s.guests.iter().find(|g| g.host));
-                    Some(host.map_or(name.to_string(), |h| format!("{name} ({})", h.name)))
+                    Some(format!("{name} ({owner})"))
                 }
+                (None, None) => None,
             };
             match who {
                 Some(who) => {
@@ -1112,22 +1126,33 @@ fn show_slots(
                 };
                 // Only the machine a computer player belongs to marks what its
                 // profile doesn't list.
-                let owned = profile.filter(|_| staging.is_none() || hosting);
+                let owned = profile.filter(|_| lobby.mine(id));
                 let listing = (id, side.as_str(), owned);
-                match &player.nation {
-                    Some(_) => {
+                // Only what's the viewer's to choose opens a list.
+                let ours = staging.is_none() || lobby.person == Some(id) || lobby.mine(id);
+                match (&player.nation, ours) {
+                    (Some(_), _) | (None, false) => {
                         let fixed = commands
                             .spawn((ChildOf(row), inert(cell(NATION_WIDTH))))
                             .id();
                         flag.spawn(&mut commands, fixed);
                     }
-                    None => nation_list(&mut commands, row, &lobby, listing, flag, &all.0),
+                    (None, true) => {
+                        nation_list(&mut commands, row, &lobby, listing, flag, &all.0);
+                    }
                 }
                 // A random nation's faction is random too.
                 let nation = nation.and_then(|n| all.0.iter().find(|a| a.id.as_str() == n));
                 let fixed = player.faction.as_deref().map(Id::from);
-                let fixed =
-                    fixed.map(|f| nation.and_then(|n| n.factions.iter().find(|g| g.id == f)));
+                let fixed = fixed.or_else(|| {
+                    let chosen = lobby.slots.factions.get(&id).cloned();
+                    (!ours).then_some(chosen).flatten()
+                });
+                let fixed = match fixed {
+                    Some(f) => Some(nation.and_then(|n| n.factions.iter().find(|g| g.id == f))),
+                    None if !ours => Some(None),
+                    None => None,
+                };
                 match (fixed, nation) {
                     (None, Some(nation)) => {
                         faction_list(&mut commands, row, &lobby, listing, &nation.factions);
@@ -1147,11 +1172,25 @@ fn show_slots(
             if let Some(guest) = holder {
                 crate::staging::marks(&mut commands, row, guest, hosting, &look);
             } else if computer {
-                handicap_list(&mut commands, row, &lobby, (player, &side), &handicaps);
+                let mine = (player, side.as_str(), lobby.mine(id));
+                handicap_list(&mut commands, row, &lobby, mine, &handicaps);
+            }
+            // Whoever runs the host puts out other machines' computer
+            // players.
+            if hosting && lobby.theirs.contains_key(&id) {
+                commands
+                    .spawn((
+                        ChildOf(row),
+                        button("Kick", Font::Body),
+                        called(format!("{side}.kick")),
+                    ))
+                    .observe(move |_: On<Activate>, mut staged: ResMut<Staged>| {
+                        let _ = staged.entry.choose(tgserver::Choice::Open(id));
+                    });
             }
             // The person can move to a side no other person takes.
             let movable = staging.map_or(player.playable, |(s, _)| s.sides.contains(&id));
-            if (computer || empty) && movable {
+            if (lobby.mine(id) || empty) && movable {
                 commands
                     .spawn((
                         ChildOf(row),
@@ -1340,7 +1379,7 @@ fn handicap_list(
     commands: &mut Commands,
     row: Entity,
     lobby: &Lobby,
-    (player, side): (&Player, &str),
+    (player, side, mine): (&Player, &str, bool),
     handicaps: &Handicaps,
 ) {
     let id = player.id;
@@ -1348,6 +1387,17 @@ fn handicap_list(
     let Some(had) = had else {
         return;
     };
+    // Another machine's computer player's, shown but not chosen here.
+    if !mine {
+        let cell = Node {
+            width: px(HANDICAP_WIDTH),
+            justify_content: JustifyContent::Start,
+            ..padded()
+        };
+        let shown = commands.spawn((ChildOf(row), inert(cell))).id();
+        handicaps.shown(had).spawn(commands, shown);
+        return;
+    }
     let choices = (handicaps.all.iter()).map(|h| {
         let choice = HandicapChoice(id, h.id.clone());
         (key(Some(&h.id)), choice, handicaps.shown(h))
@@ -1692,6 +1742,7 @@ mod tests {
             preset: Preset::Custom,
             person: Some(12),
             others: Vec::new(),
+            theirs: BTreeMap::new(),
             slots: tgserver::Slots {
                 computers: BTreeMap::from([
                     (10, Id::from("konev_sai")),

@@ -13,7 +13,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 18;
+pub const PROTOCOL: u32 = 19;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

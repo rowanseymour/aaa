@@ -1047,6 +1047,7 @@ fn create(
         observers: made.observers,
         map,
         preset,
+        slots: tgserver::Slots::left_open(&sides),
         sides,
         ..default()
     };
