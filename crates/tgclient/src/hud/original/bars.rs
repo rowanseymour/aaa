@@ -9,7 +9,7 @@ use tgdata::{Id, widgets::Widget};
 
 use super::lettering::{Letters, Measured, PLAIN};
 use super::{Drawer, Step, on_screen, placed, point2, reach};
-use crate::resource_bar::{Cell, Colours, Previewing};
+use crate::resource_bar::{Cell, Colours, Previewing, Wording};
 use crate::ui::Blocks;
 
 /// The bars, under the one that slides away from them first.
@@ -167,7 +167,7 @@ impl Bar {
                                 Pickable::IGNORE,
                             ));
                         }
-                        let (text, hint) = Cell::new(game, preview, &cell.resource);
+                        let (text, hint) = Cell::new(game, preview, &cell.resource, Wording::Game);
                         // Across the rest of the cell, which is hovered whole.
                         let fill = Node {
                             flex_grow: 1.0,

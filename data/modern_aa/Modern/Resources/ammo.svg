@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Three rifle cartridges standing side by side. -->
+  <defs>
+    <g id="round" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke">
+      <path fill="#c56a34" d="M-6,22 L-6,17 Q-6,6 0,3 Q6,6 6,17 L6,22 Z"/>
+      <rect fill="#d8ae48" x="-6" y="25" width="12" height="29"/>
+      <rect fill="#b28a32" x="-7" y="56" width="14" height="5" rx="1"/>
+    </g>
+  </defs>
+  <use href="#round" x="15"/>
+  <use href="#round" x="32"/>
+  <use href="#round" x="49"/>
+</svg>

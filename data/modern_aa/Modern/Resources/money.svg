@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Two stacks of gold coins, the shorter in front. -->
+  <g transform="translate(0 -5)">
+    <g stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke">
+      <path fill="#f7d35a" d="M8,47.5 A13,5 0 0 0 34,47.5 L34,53.0 A13,5 0 0 1 8,53.0 Z"/>
+      <path fill="#e6b52f" d="M8,39.5 A13,5 0 0 0 34,39.5 L34,45.0 A13,5 0 0 1 8,45.0 Z"/>
+      <path fill="#d9a427" d="M8,31.5 A13,5 0 0 0 34,31.5 L34,37.0 A13,5 0 0 1 8,37.0 Z"/>
+      <path fill="#c9921f" d="M8,23.5 A13,5 0 0 0 34,23.5 L34,29.0 A13,5 0 0 1 8,29.0 Z"/>
+      <path fill="#f7d35a" d="M8,21 A13,5 0 1 0 34,21 A13,5 0 1 0 8,21 Z"/>
+      <path fill="#f7d35a" d="M30,47.5 A13,5 0 0 0 56,47.5 L56,53.0 A13,5 0 0 1 30,53.0 Z"/>
+      <path fill="#e6b52f" d="M30,39.5 A13,5 0 0 0 56,39.5 L56,45.0 A13,5 0 0 1 30,45.0 Z"/>
+      <path fill="#f7d35a" d="M30,37 A13,5 0 1 0 56,37 A13,5 0 1 0 30,37 Z"/>
+    </g>
+  </g>
+</svg>

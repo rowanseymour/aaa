@@ -144,6 +144,7 @@ impl Theme {
             Ink::Muted => mix(self.tint, self.light, 0.45),
             Ink::Warn => Color::srgb(1.0, 0.75, 0.3),
             Ink::Short => self.short.unwrap_or_else(|| self.ink(Ink::Warn)),
+            Ink::Gain => Color::srgb(0.62, 0.75, 0.42),
             Ink::Key => self.key.unwrap_or(Color::srgb(1.0, 1.0, 0.0)),
         }
     }
@@ -230,6 +231,8 @@ pub enum Ink {
     Warn,
     /// A figure that's gone short, such as a negative rate.
     Short,
+    /// A figure that's growing, such as a positive rate.
+    Gain,
     /// The key for what a name names, marked in it.
     Key,
 }

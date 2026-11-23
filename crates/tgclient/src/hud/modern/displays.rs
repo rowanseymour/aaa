@@ -1,7 +1,6 @@
 //! Our buttons on the minimap's rim that open the display panels.
 
 use bevy::ecs::query::QueryItem;
-use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
@@ -9,7 +8,7 @@ use bevy::ui_widgets::Button;
 
 use super::minimap;
 use crate::Loaded;
-use crate::displays::{Displays, Icons, PANELS, Panel, icon};
+use crate::displays::{Displays, Icon, PANELS, Panel, icon};
 use crate::intent::Asks;
 use crate::keys::{Bindings, Named};
 use crate::ui::Blocks;
@@ -104,14 +103,7 @@ pub struct Glyph;
 
 /// Spawns our interface's buttons on the minimap's rim that open the
 /// panels.
-pub fn spawn_buttons(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    bindings: Res<Bindings>,
-    mut icons: ResMut<Icons>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-) {
+pub fn spawn_buttons(mut commands: Commands, loaded: Res<Loaded>, bindings: Res<Bindings>) {
     let strings = loaded.game.strings();
     let said = ui::said(&strings);
     for panel in PANELS {
@@ -162,26 +154,26 @@ pub fn spawn_buttons(
                 ],
             ),
         };
-        let glyph = icons.get(&loaded.game, &path, &mut images, formats.0);
         spawn_button(
             &mut commands,
             &bindings,
             panel,
             rim,
-            glyph,
+            path,
             said(name, name_or),
             said(help, help_or),
         );
     }
 }
 
-/// Spawns the button at `rim` that opens `panel`, drawn with `glyph`.
+/// Spawns the button at `rim` that opens `panel`, drawn with the icon at
+/// `glyph`.
 fn spawn_button(
     commands: &mut Commands,
     bindings: &Bindings,
     panel: Panel,
     rim: Rim,
-    glyph: Handle<Image>,
+    glyph: String,
     name: String,
     help: String,
 ) {
@@ -194,15 +186,15 @@ fn spawn_button(
     ));
 }
 
-/// A round button at `rim` drawn with `glyph`, sounding `click` when
-/// pressed.
-pub fn rim_button(rim: Rim, glyph: Handle<Image>, click: Click) -> impl Bundle {
+/// A round button at `rim` drawn with the icon at `glyph`, sounding
+/// `click` when pressed.
+pub fn rim_button(rim: Rim, glyph: String, click: Click) -> impl Bundle {
     (rim, round_button(rim.node(), glyph, GLYPH_SIZE, click))
 }
 
-/// A round button laid out as `node`, drawn with `glyph` `size` across,
-/// sounding `click` when pressed.
-pub fn round_button(node: Node, glyph: Handle<Image>, size: f32, click: Click) -> impl Bundle {
+/// A round button laid out as `node`, drawn with the icon at `glyph`
+/// `size` across, sounding `click` when pressed.
+pub fn round_button(node: Node, glyph: String, size: f32, click: Click) -> impl Bundle {
     (
         Blocks,
         Button,
@@ -215,7 +207,7 @@ pub fn round_button(node: Node, glyph: Handle<Image>, size: f32, click: Click) -
         DespawnOnExit(super::DRAWN),
         children![(
             Glyph,
-            ImageNode::new(glyph),
+            Icon::new(glyph),
             Node {
                 width: px(size),
                 height: px(size),

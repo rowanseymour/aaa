@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- A house with a red roof. -->
+  <g stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke">
+    <path fill="#e0c88e" d="M15,36 L32,21.5 L49,36 L49,59 L15,59 Z"/>
+    <path fill="#b44a30" d="M3,31 L32,5 L61,31 L55,37 L32,16.5 L9,37 Z"/>
+  </g>
+  <rect fill="#5a3a22" x="27" y="42" width="10" height="17" rx="1"/>
+</svg>
