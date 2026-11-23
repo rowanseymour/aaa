@@ -66,7 +66,7 @@ impl Plugin for OriginalHudPlugin {
             PostUpdate,
             (
                 match_textures,
-                (fit_view, lettering::scale, lettering::share_face)
+                (fit_view, letter_log, lettering::scale, lettering::share_face)
                     .chain()
                     .before(bevy::camera::CameraUpdateSystems)
                     .before(bevy::ui::UiSystems::Prepare),
@@ -102,13 +102,18 @@ impl Plugin for OriginalHudPlugin {
     }
 }
 
-/// The floaters the message log goes beside and under.
+/// The message log's place in the layouts, and the floaters it goes beside
+/// and under where they don't give it one.
+const LOG: &str = "GameMessageLog";
 const LOG_LEFT_OF: &str = "FactionAbilitiesFloater";
 const LOG_UNDER: &str = groups::FLOATER;
 
-/// Where on the layouts' screen the message log goes.
+/// Where on the layouts' screen the message log goes, and how wide it is.
 #[derive(Resource)]
-struct LogAt(Vec2);
+struct LogAt {
+    at: Vec2,
+    width: f32,
+}
 
 /// Puts the on-screen message log in the [`Frame`]'s top left corner, clear
 /// of the floaters there, over the map's view rather than beside it.
@@ -122,9 +127,53 @@ fn place_log(
         return;
     };
     for (log, mut node) in &mut logs {
-        node.left = Val::Percent(100.0 * at.0.x / SCREEN[0]);
-        node.top = Val::Percent(100.0 * at.0.y / SCREEN[1]);
+        node.left = Val::Percent(100.0 * at.at.x / SCREEN[0]);
+        node.top = Val::Percent(100.0 * at.at.y / SCREEN[1]);
+        node.width = Val::Percent(100.0 * at.width / SCREEN[0]);
+        let gap = lettering::Measured {
+            row_gap: Some(crate::messages::LINE_GAP),
+            ..default()
+        };
+        // Its lines are drawn again, for `letter_log` to letter.
+        commands.entity(log).insert(gap).despawn_children();
         commands.entity(frame).add_child(log);
+    }
+}
+
+/// Draws the message log's lines as the layouts' own log is: in their
+/// [`PLAIN`](lettering::PLAIN) font, the icons and the gap after them in
+/// the layouts' pixels.
+fn letter_log(
+    mut commands: Commands,
+    letters: Res<lettering::Letters>,
+    added: Query<(Entity, Has<Text>, Has<ImageNode>), Added<Node>>,
+    parents: Query<&ChildOf>,
+    logs: Query<(), With<crate::messages::LogBox>>,
+) {
+    use crate::messages::{ICON, ICON_GAP, ICON_MARGIN, Shade};
+    let mut lettered = None;
+    for (part, text, icon) in &added {
+        // How far down the log it is: 0 for a line, 1 for its icon.
+        let Some(depth) = parents.iter_ancestors(part).position(|a| logs.contains(a)) else {
+            continue;
+        };
+        if text {
+            let plain = lettering::PLAIN;
+            let lettered = lettered.get_or_insert_with(|| letters.lettered(plain, plain));
+            let shade = Shade(lettered.2.color.alpha());
+            commands.entity(part).insert((lettered.clone(), shade));
+        } else if icon && depth == 1 {
+            commands.entity(part).insert(lettering::Measured {
+                size: Some(ICON),
+                top_margin: Some(ICON_MARGIN),
+                ..default()
+            });
+        } else if depth == 0 {
+            commands.entity(part).insert(lettering::Measured {
+                gap: Some(ICON_GAP),
+                ..default()
+            });
+        }
     }
 }
 
@@ -134,12 +183,16 @@ fn place_log(
 fn leave(
     mut commands: Commands,
     frames: Query<Entity, With<Frame>>,
-    logs: Query<Entity, With<crate::messages::LogBox>>,
+    mut logs: Query<(Entity, &mut Node), With<crate::messages::LogBox>>,
     mut cameras: Query<&mut Camera, With<tgrender::camera::RtsCamera>>,
 ) {
-    for log in &logs {
-        // Taken out before the frame goes, as it would go with it.
-        commands.entity(log).try_remove::<ChildOf>();
+    for (log, mut node) in &mut logs {
+        // Taken out before the frame goes, as it would go with it, and its
+        // lines drawn again in the next interface's look.
+        *node = crate::messages::log_node();
+        (commands.entity(log))
+            .try_remove::<(ChildOf, lettering::Measured)>()
+            .despawn_children();
     }
     for frame in &frames {
         commands.entity(frame).try_despawn();
@@ -561,8 +614,8 @@ pub fn spawn(
             }
         }
     }
-    // The message log goes in the corner between the floater along the top
-    // and the one down the left.
+    // The message log goes where the layouts put it, or failing that in the
+    // corner between the floater along the top and the one down the left.
     let screen = Rect {
         left: 0.0,
         top: 0.0,
@@ -570,10 +623,17 @@ pub fn spawn(
         bottom: SCREEN[1],
     };
     let edge = |name: &str, of: fn(Rect) -> f32| named(name).map_or(0.0, |w| of(w.bounds(screen)));
-    commands.insert_resource(LogAt(Vec2::new(
-        edge(LOG_LEFT_OF, |at| at.right),
-        edge(LOG_UNDER, |at| at.bottom),
-    )));
+    let log = named(LOG).map(|w| w.bounds(screen));
+    commands.insert_resource(log.map_or_else(
+        || LogAt {
+            at: Vec2::new(edge(LOG_LEFT_OF, |at| at.right), edge(LOG_UNDER, |at| at.bottom)),
+            width: crate::messages::WIDTH,
+        },
+        |at| LogAt {
+            at: Vec2::new(at.left, at.top),
+            width: at.right - at.left,
+        },
+    ));
     let colour = |c: Option<[f32; 3]>, or: Color| c.map_or(or, |[r, g, b]| Color::srgb(r, g, b));
     let short = colour(game.invalid_colour(), Color::srgb(1.0, 0.0, 0.0));
     let key = colour(game.highlight_colour(), Color::srgb(1.0, 1.0, 0.0));
@@ -1417,7 +1477,16 @@ mod tests {
         crate::hud::add_states(&mut app);
         app.update();
         let world = app.world_mut();
-        let log = world.spawn(crate::messages::LogBox).id();
+        let gap = lettering::Measured {
+            row_gap: Some(9.0),
+            ..default()
+        };
+        let placed = Node {
+            left: Val::Percent(5.0),
+            ..default()
+        };
+        let log = world.spawn((crate::messages::LogBox, placed, gap)).id();
+        let line = world.spawn((Node::default(), ChildOf(log))).id();
         let frame = world.spawn(Frame).add_child(log).id();
         let viewport = Some(Viewport::default());
         let camera = Camera {
@@ -1433,7 +1502,43 @@ mod tests {
         assert!(world.get_entity(frame).is_err());
         assert!(world.get_entity(log).is_ok());
         assert!(world.get::<ChildOf>(log).is_none());
+        // Its lines go, to be drawn again in the next interface's look, and
+        // it's laid out as before it was placed.
+        assert!(world.get_entity(line).is_err());
+        assert!(world.get::<lettering::Measured>(log).is_none());
+        assert_eq!(
+            world.get::<Node>(log).unwrap().left,
+            crate::messages::log_node().left
+        );
         assert!(world.get::<Camera>(map).unwrap().viewport.is_none());
+    }
+
+    #[test]
+    fn the_logs_lines_are_lettered_and_its_icons_measured_as_the_layouts() {
+        let mut app = App::new();
+        app.init_resource::<lettering::Letters>()
+            .add_systems(Update, letter_log);
+        let world = app.world_mut();
+        let log = world.spawn((crate::messages::LogBox, Node::default())).id();
+        let row = world.spawn((Node::default(), ChildOf(log))).id();
+        let icon = world.spawn((ImageNode::default(), ChildOf(row))).id();
+        let text = world.spawn((Text::new("x"), ChildOf(row))).id();
+        let gem = world.spawn((ImageNode::default(), ChildOf(text))).id();
+        let elsewhere = world.spawn(Text::new("y")).id();
+        app.update();
+        let world = app.world();
+        assert!(world.get::<lettering::Lettered>(text).is_some());
+        assert!(world.get::<crate::messages::Shade>(text).is_some());
+        assert!(world.get::<lettering::Lettered>(elsewhere).is_none());
+        let measured = |e| world.get::<lettering::Measured>(e).copied();
+        assert_eq!(measured(icon).and_then(|m| m.size), Some(crate::messages::ICON));
+        assert_eq!(
+            measured(icon).and_then(|m| m.top_margin),
+            Some(crate::messages::ICON_MARGIN)
+        );
+        assert_eq!(measured(row).and_then(|m| m.gap), Some(crate::messages::ICON_GAP));
+        // A side's gem within a line keeps its own size.
+        assert!(measured(gem).is_none());
     }
 
     #[test]

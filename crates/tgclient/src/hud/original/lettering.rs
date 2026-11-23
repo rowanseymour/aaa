@@ -91,6 +91,10 @@ pub struct Measured {
     pub min_width: Option<f32>,
     /// The gap between its children across.
     pub gap: Option<f32>,
+    /// The gap between its rows of children.
+    pub row_gap: Option<f32>,
+    /// The space above it.
+    pub top_margin: Option<f32>,
 }
 
 /// An image sliced into nine, whose corners and edges are in the layouts'
@@ -190,6 +194,16 @@ pub fn scale(
             && node.column_gap != px(gap * s)
         {
             node.column_gap = px(gap * s);
+        }
+        if let Some(gap) = measured.row_gap
+            && node.row_gap != px(gap * s)
+        {
+            node.row_gap = px(gap * s);
+        }
+        if let Some(top) = measured.top_margin
+            && node.margin.top != px(top * s)
+        {
+            node.margin.top = px(top * s);
         }
         if let Some(pad) = measured.padding {
             let padding = UiRect::axes(px(pad.x * s), px(pad.y * s));
@@ -354,16 +368,29 @@ impl Letters {
         words: &str,
         colour: Color,
     ) -> impl Bundle + use<> {
+        (
+            Text::new(words),
+            self.lettered(ids, label),
+            TextColor(colour),
+            Pickable::IGNORE,
+        )
+    }
+
+    /// What sets text in the font `ids` names, its lines as far apart as
+    /// those of the font `label` names.
+    pub fn lettered(
+        &self,
+        ids: &str,
+        label: &str,
+    ) -> (TextFont, LineHeight, TextShadow, Lettered) {
         let lettering = self.lettering(ids);
         let pitch = (!label.eq_ignore_ascii_case(ids)).then(|| self.lettering(label));
         let lined = pitch.as_ref().map_or(&lettering.own, |p| &p.own);
         let line = (lined.face.as_ref())
             .map_or_else(LineHeight::default, |r| LineHeight::Px(r.line(lined.px)));
         (
-            Text::new(words),
             self.font(ids),
             line,
-            TextColor(colour),
             TextShadow {
                 offset: Vec2::ONE,
                 color: Color::BLACK.with_alpha(lettering.shadow),
@@ -373,7 +400,6 @@ impl Letters {
                 backup: lettering.backup,
                 pitch,
             },
-            Pickable::IGNORE,
         )
     }
 }

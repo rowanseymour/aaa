@@ -7,7 +7,7 @@ mod draw;
 mod log;
 mod told;
 
-pub(crate) use draw::{LogBox, WholeLog, cycle, list, relist, show, spawn};
+pub(crate) use draw::{LogBox, Shade, WholeLog, log_node, cycle, list, relist, show, spawn};
 pub(crate) use log::{About, MessageLog, filled, start};
 pub(crate) use told::{By, Failed, Refused, refuse, tell, tell_leaving};
 
@@ -16,11 +16,13 @@ use bevy::prelude::*;
 /// The key that steps the camera back through the lines.
 pub const CYCLE: &str = "CycleMessageLog";
 /// The log's width, before it wraps a line.
-const WIDTH: f32 = 564.0;
-const ICON: Vec2 = Vec2::new(16.0, 17.0);
+pub(crate) const WIDTH: f32 = 564.0;
+pub(crate) const ICON: Vec2 = Vec2::new(16.0, 17.0);
 /// Between the icon and its text.
-const ICON_GAP: f32 = 8.0;
-const LINE_GAP: f32 = 3.0;
+pub(crate) const ICON_GAP: f32 = 8.0;
+/// Above the icon, to sit it level with its text.
+pub(crate) const ICON_MARGIN: f32 = 1.0;
+pub(crate) const LINE_GAP: f32 = 3.0;
 /// What keeps the text legible over pale ground, as there's no box behind
 /// it.
 const SHADOW: TextShadow = TextShadow {
