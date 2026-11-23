@@ -12,7 +12,8 @@ use crate::control_groups;
 use super::looks::{Looks, look_of};
 use super::press::{sell_command, shown_hq};
 use super::{
-    CANCEL, COMMAND_ALL, Entry, Face, Give, MENU_CANCEL, Menu, ORDERS, Offer, Page, SLOTS, Shown,
+    CANCEL, COMMAND_ALL, Entry, Face, Give, MENU_CANCEL, MOST_ALLIES, Menu, ONE_ALLY, ORDERS,
+    Offer, Page, SLOTS, Shown, TEAM_CHAT, Target,
 };
 
 /// Where a command's button goes: its slot and, that taken, which end of
@@ -204,8 +205,55 @@ impl GameHas {
     }
 }
 
+/// Where the team commands go, for a player with allies: the button
+/// opening them, how many allies the ally page offers, and each team
+/// command offered for whom they're for.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TeamButtons<'a> {
+    pub(crate) button: Option<Place>,
+    pub(crate) allies: usize,
+    /// Per team command, its place, none for one not offered.
+    pub(crate) menu: &'a [Option<Place>],
+}
+
+/// Whether `player` stands allied to any other side in the match, which
+/// gives them the team commands.
+pub fn allied(sim: &tgsim::World, player: Option<u32>) -> bool {
+    let Some(player) = player else {
+        return false;
+    };
+    let sides = &sim.sides;
+    (sides.players.iter())
+        .any(|p| p.id != player && sides.relation(player, p.id) == tgmap::Relation::Ally)
+}
+
+/// The sides `player` stands allied to that the ally page offers, by id,
+/// in the map's order: a map's independent sides never.
+pub fn allies(sim: &tgsim::World, player: Option<u32>) -> Vec<u32> {
+    let Some(player) = player else {
+        return Vec::new();
+    };
+    let sides = &sim.sides;
+    (sides.players.iter())
+        .filter(|p| p.id != player && !p.independent)
+        .filter(|p| sides.relation(player, p.id) == tgmap::Relation::Ally)
+        .map(|p| p.id)
+        .collect()
+}
+
+/// Whether the team command `ids` is offered for `target`, given the
+/// sides people play: those for one ally only for one, and Chat for one
+/// only where a person plays it.
+pub(crate) fn asks(ids: &str, target: Target, people: &[u32]) -> bool {
+    match target {
+        Target::All => !ONE_ALLY.contains(&ids),
+        Target::Side(side) => ids != TEAM_CHAT || people.contains(&side),
+    }
+}
+
 /// The buttons a page has, by slot, given each of [`ORDERS`]' slot and
-/// whether the selection has it, or a selected building's buttons.
+/// whether the selection has it, or a selected building's buttons, and
+/// the team commands for a player with allies.
 pub(crate) fn layout(
     page: Page,
     slots: &[Option<Place>],
@@ -213,9 +261,26 @@ pub(crate) fn layout(
     building: Option<BuildingButtons>,
     hq: bool,
     builds: usize,
+    team: Option<TeamButtons>,
 ) -> [Option<Entry>; SLOTS] {
     let mut out = [None; SLOTS];
     match (page, building) {
+        (Page::Allies | Page::Team(_), _) if team.is_none() => {}
+        (Page::Allies, _) => {
+            out[0] = Some(Entry::AllAllies);
+            let allies = team.map_or(0, |t| t.allies).min(MOST_ALLIES);
+            for (n, slot) in (0..allies).zip(&mut out[1..MENU_CANCEL]) {
+                *slot = Some(Entry::Ally(n));
+            }
+            out[MENU_CANCEL] = Some(Entry::TeamCancel);
+        }
+        (Page::Team(_), _) => {
+            // As in every menu, whatever slot the data gives it.
+            out[MENU_CANCEL] = Some(Entry::TeamCancel);
+            let menu = team.map_or(&[][..], |t| t.menu);
+            let menu = (menu.iter().enumerate()).map(|(i, &p)| (p, Entry::Team(i)));
+            place(&mut out, menu);
+        }
         (Page::Orders, Some(BuildingButtons { site: Some(p), .. })) => {
             put(&mut out, Some(p), Entry::CancelSite);
         }
@@ -311,6 +376,12 @@ pub(crate) fn layout(
     if hq && page == Page::Orders && out[COMMAND_ALL].is_none() {
         out[COMMAND_ALL] = Some(Entry::CommandAll);
     }
+    let button = team.and_then(|t| t.button).map(|p| p.slot);
+    if page == Page::Orders
+        && let Some(slot) = button.filter(|&s| s < SLOTS && out[s].is_none())
+    {
+        out[slot] = Some(Entry::TeamCommands);
+    }
     out
 }
 
@@ -380,7 +451,17 @@ pub(crate) fn ready(
         | Entry::CommandAll
         | Entry::Sell
         | Entry::Build(_)
-        | Entry::CancelSite => true,
+        | Entry::CancelSite
+        | Entry::TeamCommands
+        | Entry::AllAllies
+        | Entry::Ally(_)
+        | Entry::TeamCancel => true,
+        // Chat only opens the chat bar; the sim has nothing for the rest
+        // to do.
+        Entry::Team(i) => looks
+            .team
+            .get(i)
+            .is_some_and(|t| t.ids.as_str() == TEAM_CHAT),
     }
 }
 
@@ -398,6 +479,7 @@ pub(crate) fn lit(entry: Entry, page: Page) -> bool {
 
 /// What the grid holds for the page and the selection, whichever
 /// interface draws it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn contents(
     page: Page,
     sim: &tgsim::World,
@@ -406,6 +488,7 @@ pub(crate) fn contents(
     building: Option<usize>,
     local: Option<u32>,
     behavior: Option<bool>,
+    people: &[u32],
 ) -> Shown {
     let hq = shown_hq(sim, selected, building);
     let menu = looks.menu(sim, building);
@@ -429,6 +512,13 @@ pub(crate) fn contents(
     researches.truncate(list.len());
     let order_slots: Vec<Option<Place>> = looks.orders.iter().map(|(s, _)| *s).collect();
     let builds = builds(sim, selected);
+    let allies = allies(sim, local);
+    let team_places: Vec<Option<Place>> = (looks.team.iter())
+        .map(|t| match page {
+            Page::Team(target) => t.place.filter(|_| asks(t.ids.as_str(), target, people)),
+            _ => None,
+        })
+        .collect();
     let entries = layout(
         page,
         &order_slots,
@@ -461,6 +551,11 @@ pub(crate) fn contents(
         }),
         hq.is_some(),
         builds.len(),
+        allied(sim, local).then_some(TeamButtons {
+            button: looks.team_commands.0,
+            allies: allies.len(),
+            menu: &team_places,
+        }),
     );
     let faces = entries.map(|entry| {
         entry.map(|e| Face {
@@ -475,6 +570,12 @@ pub(crate) fn contents(
                 &lacks,
                 &researches,
             ),
+            tint: match e {
+                Entry::Ally(n) => (allies.get(n))
+                    .and_then(|&side| sim.sides.player(side))
+                    .map(|p| p.rgb),
+                _ => None,
+            },
         })
     });
     Shown {
@@ -683,7 +784,7 @@ mod tests {
             "hq_attach",
             "hq_detach",
         ]);
-        let grid = layout(Page::Orders, &GAME, &attached, None, false, 0);
+        let grid = layout(Page::Orders, &GAME, &attached, None, false, 0, None);
         for (slot, id) in [
             (0, "move"),
             (1, "kill"),
@@ -695,7 +796,7 @@ mod tests {
         }
         assert_eq!(grid.iter().flatten().count(), 7);
         let truck = having(&["move", "stop", "unpack", "disband"]);
-        let grid = layout(Page::Orders, &GAME, &truck, None, false, 0);
+        let grid = layout(Page::Orders, &GAME, &truck, None, false, 0, None);
         assert_eq!(grid[9], order("unpack"));
         assert_eq!(grid[11], order("disband"));
         assert_eq!(grid.iter().flatten().count(), 4);
@@ -715,12 +816,12 @@ mod tests {
             "hq_detach",
             "disband",
         ]);
-        let grid = layout(Page::Orders, &GAME, &both, None, false, 0);
+        let grid = layout(Page::Orders, &GAME, &both, None, false, 0, None);
         assert_eq!(grid[11], order("hq_detach"));
         assert_eq!(grid[10], order("hq_attach"));
         assert_eq!(grid[9], order("disband"));
         let rout = having(&["move", "guard", "rout", "hq_attach"]);
-        let grid = layout(Page::Orders, &GAME, &rout, None, false, 0);
+        let grid = layout(Page::Orders, &GAME, &rout, None, false, 0, None);
         assert_eq!(grid[10], order("hq_attach"));
         // The first slot no shown order wants, not Move's.
         assert_eq!(grid[0], order("move"));
@@ -731,12 +832,12 @@ mod tests {
     fn the_build_menu_lists_what_can_be_built_and_sites_offer_only_cancel() {
         // Not with Group Behavior's, which would take Construct's slot.
         let all = ORDERS.map(|(id, _)| !id.starts_with("group_behavior"));
-        let menu = layout(Page::Menu(Menu::Build), &GAME, &all, None, false, 3);
+        let menu = layout(Page::Menu(Menu::Build), &GAME, &all, None, false, 3, None);
         let built: Vec<Option<Entry>> = (0..3).map(|i| Some(Entry::Build(i))).collect();
         assert_eq!(menu[..3], built[..]);
         assert_eq!(menu.iter().flatten().count(), 4);
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
-        let grid = layout(Page::Orders, &GAME, &all, None, false, 3);
+        let grid = layout(Page::Orders, &GAME, &all, None, false, 3, None);
         assert_eq!(grid[4], order("construct"));
         assert_eq!(grid[5], order("repair"));
         let site = BuildingButtons {
@@ -752,7 +853,7 @@ mod tests {
             air_attack: None,
             escort: None,
         };
-        let grid = layout(Page::Orders, &GAME, &all, Some(site), false, 0);
+        let grid = layout(Page::Orders, &GAME, &all, Some(site), false, 0, None);
         assert_eq!(grid[11], Some(Entry::CancelSite));
         assert_eq!(grid.iter().flatten().count(), 1);
     }
@@ -760,17 +861,175 @@ mod tests {
     #[test]
     fn hqs_have_a_button_for_their_organizations_where_nothing_else_is() {
         let truck = having(&["move", "stop", "unpack", "disband"]);
-        let grid = layout(Page::Orders, &GAME, &truck, None, true, 0);
+        let grid = layout(Page::Orders, &GAME, &truck, None, true, 0, None);
         assert_eq!(grid[COMMAND_ALL], Some(Entry::CommandAll));
         assert_eq!(grid.iter().flatten().count(), 5);
         // Not over an order, nor while one's aimed.
         let mut slots = GAME;
         let moving = ORDERS.iter().position(|(id, _)| *id == "move").unwrap();
         slots[moving] = at(COMMAND_ALL);
-        let grid = layout(Page::Orders, &slots, &truck, None, true, 0);
+        let grid = layout(Page::Orders, &slots, &truck, None, true, 0, None);
         assert_eq!(grid[COMMAND_ALL], order("move"));
-        let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true, 0);
+        let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true, 0, None);
         assert!(!grid.contains(&Some(Entry::CommandAll)));
+    }
+
+    /// The team commands' places as the game's data gives them: Attack,
+    /// Defend, Explore, the four gifts and requests, Build, Chat and
+    /// Report, and the way back.
+    const TEAM: [Option<Place>; 10] = [
+        at(0),
+        at(1),
+        at(3),
+        at(4),
+        at(5),
+        at(6),
+        at(7),
+        at(2),
+        at(10),
+        at(9),
+    ];
+
+    /// Their ids, in the same order.
+    const TEAM_IDS: [&str; 10] = [
+        "team_attack",
+        "team_defend",
+        "team_explore",
+        "team_give_resources",
+        "team_give_actor",
+        "team_request_resources",
+        "team_request_actor",
+        "team_build",
+        "team_chat",
+        "team_report",
+    ];
+
+    /// The team commands for a player with two allies.
+    fn team() -> Option<TeamButtons<'static>> {
+        Some(TeamButtons {
+            button: at(8),
+            allies: 2,
+            menu: &TEAM,
+        })
+    }
+
+    #[test]
+    fn the_ally_page_offers_all_allies_then_each_and_a_way_back() {
+        let all = [true; ORDERS.len()];
+        let grid = layout(Page::Allies, &GAME, &all, None, true, 0, team());
+        assert_eq!(grid[0], Some(Entry::AllAllies));
+        assert_eq!(grid[1], Some(Entry::Ally(0)));
+        assert_eq!(grid[2], Some(Entry::Ally(1)));
+        assert_eq!(grid[11], Some(Entry::TeamCancel));
+        assert_eq!(grid.iter().flatten().count(), 4);
+        // No more than ten allies get a button.
+        let many = TeamButtons {
+            allies: 14,
+            ..team().unwrap()
+        };
+        let grid = layout(Page::Allies, &GAME, &all, None, true, 0, Some(many));
+        assert_eq!(grid[10], Some(Entry::Ally(9)));
+        assert_eq!(grid[11], Some(Entry::TeamCancel));
+    }
+
+    #[test]
+    fn what_can_be_asked_depends_on_whom_it_s_for() {
+        let shown = |target| {
+            (TEAM_IDS.iter())
+                .filter(|ids| asks(ids, target, &[7]))
+                .count()
+        };
+        // All allies: no giving or asking; one ally a computer plays: no
+        // chat; one a person plays: all ten.
+        assert_eq!(shown(Target::All), 6);
+        assert_eq!(shown(Target::Side(3)), 9);
+        assert_eq!(shown(Target::Side(7)), 10);
+        assert!(!asks("team_give_resources", Target::All, &[]));
+        assert!(asks("team_chat", Target::All, &[]));
+        assert!(!asks("team_chat", Target::Side(3), &[7]));
+    }
+
+    #[test]
+    fn a_player_with_allies_has_the_team_commands_whatever_is_selected() {
+        let truck = having(&["move", "stop", "unpack", "disband"]);
+        let grid = layout(Page::Orders, &GAME, &truck, None, true, 0, team());
+        assert_eq!(grid[8], Some(Entry::TeamCommands));
+        assert_eq!(grid.iter().flatten().count(), 6);
+        // With nothing of the player's selected, it's all there is.
+        let none = [false; ORDERS.len()];
+        let grid = layout(Page::Orders, &GAME, &none, None, false, 0, team());
+        assert_eq!(
+            grid.iter().flatten().collect::<Vec<_>>(),
+            [&Entry::TeamCommands]
+        );
+        // Not without allies, nor while an order's aimed.
+        let grid = layout(Page::Orders, &GAME, &truck, None, true, 0, None);
+        assert!(!grid.contains(&Some(Entry::TeamCommands)));
+        let grid = layout(
+            Page::Aiming(Aim::Move),
+            &GAME,
+            &truck,
+            None,
+            true,
+            0,
+            team(),
+        );
+        assert!(!grid.contains(&Some(Entry::TeamCommands)));
+    }
+
+    #[test]
+    fn the_team_commands_take_their_slots_with_the_way_back_last() {
+        let grid = layout(
+            Page::Team(Target::All),
+            &GAME,
+            &[true; ORDERS.len()],
+            None,
+            true,
+            0,
+            team(),
+        );
+        let expected = [0, 1, 7, 2, 3, 4, 5, 6].map(|i| Some(Entry::Team(i)));
+        assert_eq!(grid[..8], expected);
+        assert_eq!(grid[8], None);
+        assert_eq!(grid[9], Some(Entry::Team(9)));
+        assert_eq!(grid[10], Some(Entry::Team(8)));
+        assert_eq!(grid[11], Some(Entry::TeamCancel));
+        // Gone with the allies.
+        let grid = layout(
+            Page::Team(Target::All),
+            &GAME,
+            &[true; ORDERS.len()],
+            None,
+            true,
+            0,
+            None,
+        );
+        assert_eq!(grid, [None; SLOTS]);
+    }
+
+    #[test]
+    fn allies_are_who_the_player_stands_allied_to() {
+        let mut players: Vec<_> = [1, 2, 3].map(crate::tests::player).into();
+        for p in &mut players {
+            p.relations = vec![tgmap::Relation::Enemy; 3];
+        }
+        // One way only: 2 doesn't have 1 as an ally. 3, independent, is an
+        // ally that gives the button but isn't offered on the ally page.
+        players[0].relations[1] = tgmap::Relation::Ally;
+        players[0].relations[2] = tgmap::Relation::Ally;
+        players[2].independent = true;
+        let sides = tgsim::Sides {
+            players,
+            ..Default::default()
+        };
+        let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
+        let sim = tgsim::World::from_organizations(sides, pathing, &[]);
+        assert!(allied(&sim, Some(1)));
+        assert!(!allied(&sim, Some(2)));
+        assert!(!allied(&sim, Some(3)));
+        assert!(!allied(&sim, None));
+        assert_eq!(allies(&sim, Some(1)), [2]);
+        assert!(allies(&sim, Some(2)).is_empty());
     }
 
     #[test]
@@ -782,6 +1041,7 @@ mod tests {
             None,
             false,
             0,
+            None,
         );
         assert_eq!(grid[2], order("retreat"));
         assert_eq!(grid[CANCEL], Some(Entry::Cancel));
@@ -811,6 +1071,7 @@ mod tests {
             Some(hq),
             false,
             0,
+            None,
         );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[5], Some(Entry::Rally));
@@ -831,7 +1092,8 @@ mod tests {
                 &[true; ORDERS.len()],
                 Some(depot),
                 false,
-                0
+                0,
+                None
             )
             .iter()
             .all(Option::is_none)
@@ -843,6 +1105,7 @@ mod tests {
             Some(hq),
             false,
             0,
+            None,
         );
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
@@ -853,6 +1116,7 @@ mod tests {
             Some(hq),
             false,
             0,
+            None,
         );
         assert_eq!(rally[5], Some(Entry::Rally));
         assert_eq!(rally[CANCEL], Some(Entry::Cancel));
@@ -888,6 +1152,7 @@ mod tests {
             Some(hq),
             false,
             0,
+            None,
         );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], None);
@@ -904,6 +1169,7 @@ mod tests {
             Some(none),
             false,
             0,
+            None,
         );
         assert_eq!(grid[..2], [None, None]);
         assert_eq!(grid[5], Some(Entry::Rally));
@@ -914,6 +1180,7 @@ mod tests {
             Some(hq),
             false,
             0,
+            None,
         );
         assert_eq!(
             menu[..3],
@@ -938,6 +1205,7 @@ mod tests {
             Some(ship),
             false,
             0,
+            None,
         );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], Some(Entry::Open(Menu::Location)));
@@ -955,6 +1223,7 @@ mod tests {
             Some(crowded),
             false,
             0,
+            None,
         );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Location)));
         assert_eq!(grid[1], Some(Entry::Open(Menu::Deploy)));
@@ -971,6 +1240,7 @@ mod tests {
             Some(crowded),
             false,
             0,
+            None,
         );
         assert_eq!(grid[1], Some(Entry::Sell));
         assert_eq!(grid[11], Some(Entry::Open(Menu::Location)));
@@ -981,6 +1251,7 @@ mod tests {
             Some(ship),
             false,
             0,
+            None,
         );
         assert_eq!(deploy[0], Some(Entry::Recruit(1)));
         assert_eq!(deploy.iter().flatten().count(), 2);
@@ -991,6 +1262,7 @@ mod tests {
             Some(ship),
             false,
             0,
+            None,
         );
         assert_eq!(
             carried[..3],
@@ -1028,6 +1300,7 @@ mod tests {
             Some(pool),
             false,
             0,
+            None,
         );
         assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
         assert_eq!(grid.iter().flatten().count(), 1);
@@ -1038,6 +1311,7 @@ mod tests {
             Some(pool),
             false,
             0,
+            None,
         );
         assert_eq!(
             menu[..4],
@@ -1061,6 +1335,7 @@ mod tests {
             Some(done),
             false,
             0,
+            None,
         );
         assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
     }
@@ -1081,11 +1356,11 @@ mod tests {
             escort: at(5),
         };
         let all = [true; ORDERS.len()];
-        let grid = layout(Page::Orders, &GAME, &all, Some(airfield), false, 0);
+        let grid = layout(Page::Orders, &GAME, &all, Some(airfield), false, 0, None);
         assert_eq!(grid[4], Some(Entry::AirAttack));
         assert_eq!(grid[5], Some(Entry::Escort));
         assert_eq!(grid[9], Some(Entry::Pack));
-        let aiming = layout(Page::AirAttack, &GAME, &all, Some(airfield), false, 0);
+        let aiming = layout(Page::AirAttack, &GAME, &all, Some(airfield), false, 0, None);
         assert_eq!(aiming[4], Some(Entry::AirAttack));
         assert_eq!(aiming[CANCEL], Some(Entry::Cancel));
         assert_eq!(aiming.iter().flatten().count(), 2);

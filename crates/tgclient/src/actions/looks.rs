@@ -12,9 +12,9 @@ use crate::{Loaded, Raising, Sim};
 use super::layout::{GameHas, Place};
 use super::tips::{Row, Said};
 use super::{
-    AIR_ATTACK, Aim, CANCEL_LOOK, COMMAND_ALL_HELP, COMMAND_ALL_ICON, COMMAND_ALL_NAME, DEPLOY,
-    DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON, Entry, Give, Menu, ORDERS, PACK, Page, RALLY,
-    RESEARCH, Refusal, SELL, Shown,
+    AIR_ATTACK, ALL_ALLIES, Aim, CANCEL_LOOK, COMMAND_ALL_HELP, COMMAND_ALL_ICON, COMMAND_ALL_NAME,
+    DEPLOY, DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON, Entry, Give, Menu, ORDERS, PACK, Page,
+    RALLY, RESEARCH, Refusal, SELECT_ALLY, SELL, Shown, TEAM_CANCEL, TEAM_COMMANDS,
 };
 
 /// How a button shows.
@@ -61,6 +61,15 @@ pub(crate) struct Topic {
     pub(crate) notes: Vec<String>,
 }
 
+/// One of the requests the player can make of allies, as its button in
+/// the team commands shows.
+pub(crate) struct TeamCommand {
+    /// E.g. `team_attack`, as the hotkeys name it.
+    pub(crate) ids: Id,
+    pub(crate) place: Option<Place>,
+    pub(crate) look: Look,
+}
+
 /// The icons and names of the buttons, loaded with the match.
 #[derive(Resource)]
 pub struct Looks {
@@ -79,6 +88,15 @@ pub struct Looks {
     /// Where a site's Cancel goes.
     pub(crate) site: Option<Place>,
     command_all: Look,
+    /// The button that opens the team commands, the team commands in it,
+    /// and its way back.
+    pub(crate) team_commands: (Option<Place>, Look),
+    pub(crate) team: Vec<TeamCommand>,
+    pub(crate) team_cancel: Look,
+    /// The ally page's buttons for all allies and for one, which say only
+    /// what their tooltip does: the button for one, the ally's name.
+    all_allies: Look,
+    ally: Look,
     /// The tooltip's heading for what a recruit needs.
     pub(crate) requires: String,
     /// What a recruit the player can't afford says, given its name and
@@ -216,6 +234,13 @@ impl Looks {
         let looks = (self.orders.iter().chain(places))
             .map(|(_, look)| look)
             .chain([&self.cancel, &self.command_all])
+            .chain([
+                &self.team_commands.1,
+                &self.team_cancel,
+                &self.all_allies,
+                &self.ally,
+            ])
+            .chain(self.team.iter().map(|t| &t.look))
             .chain(self.menus.values().flatten().map(|r| &r.look))
             .chain(self.researches.values().flatten().map(|t| &t.look))
             .chain(self.buildings.values().map(|b| &b.look));
@@ -309,6 +334,45 @@ pub fn setup(
         disabled: None,
         icon: image(game, COMMAND_ALL_ICON),
     };
+    let mut button = |name: &str| {
+        let info = game.action_button(name).unwrap_or_default();
+        let place = info.slot.map(|slot| Place { slot, high: false });
+        let look = Look {
+            name: info.name.unwrap_or_default(),
+            help: info.tooltip,
+            disabled: None,
+            icon: info.icon.as_deref().and_then(|p| image(game, p)),
+        };
+        (place, look)
+    };
+    let team_commands = button(TEAM_COMMANDS);
+    let (_, team_cancel) = button(TEAM_CANCEL);
+    // Just the tooltip, as the key marks it.
+    let mut tooltip_only = |name: &str| {
+        let (_, look) = button(name);
+        Look {
+            name: look.help.unwrap_or_default(),
+            help: None,
+            ..look
+        }
+    };
+    let all_allies = tooltip_only(ALL_ALLIES);
+    let ally = tooltip_only(SELECT_ALLY);
+    let team = (game.team_commands().into_iter())
+        .map(|c| TeamCommand {
+            place: c.slot.map(|slot| Place {
+                slot,
+                high: c.high_importance,
+            }),
+            look: Look {
+                name: c.name,
+                help: c.tooltip,
+                disabled: c.disabled,
+                icon: c.icon.as_deref().and_then(|p| image(game, p)),
+            },
+            ids: c.ids,
+        })
+        .collect();
     let affording = title(
         "recruit_error_affording|ss",
         "Insufficient funds for %s. Requires %s.",
@@ -504,6 +568,11 @@ pub fn setup(
         cancel,
         site,
         command_all,
+        team_commands,
+        team,
+        team_cancel,
+        all_allies,
+        ally,
         requires,
         affording,
         research_affording,
@@ -557,6 +626,11 @@ pub(crate) fn look_of<'a>(
             &looks.escort(on).1
         }
         Entry::CommandAll => &looks.command_all,
+        Entry::TeamCommands => &looks.team_commands.1,
+        Entry::Team(i) => looks.team.get(i).map_or(&looks.cancel, |t| &t.look),
+        Entry::TeamCancel => &looks.team_cancel,
+        Entry::AllAllies => &looks.all_allies,
+        Entry::Ally(_) => &looks.ally,
         Entry::Pack => &looks.pack.1,
         Entry::Sell => &looks.sell.1,
         Entry::Recruit(i) => &looks.menu(sim, building)[i].look,

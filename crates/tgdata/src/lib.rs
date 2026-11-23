@@ -76,7 +76,8 @@ pub use heroes::Hero;
 pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use interface::{
-    Backup, Command, ConnectionLook, CursorLook, FontLook, FormationLook, SupplyBorder, Typeface,
+    ActionButton, Backup, Command, ConnectionLook, CursorLook, FontLook, FormationLook,
+    SupplyBorder, Typeface,
 };
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use morale::{

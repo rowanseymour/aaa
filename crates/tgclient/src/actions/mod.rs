@@ -8,7 +8,9 @@
 //! anything; [`crate::object_display`] shows what it's been asked for, and a button
 //! sets the rally point what it recruits moves on to. One that researches
 //! has Research, opening a menu of the technologies it lists. A building that
-//! packs, into a truck say, has Pack, dimmed while it can't. Each button
+//! packs, into a truck say, has Pack, dimmed while it can't. A player with
+//! allies has Team Commands whatever is selected: a choice of ally, then
+//! the requests that can be made of them. Each button
 //! answers to the [`Intent`]s naming what it does or its slot's widget,
 //! whatever sends them; its tooltip marks the letter of its key.
 
@@ -24,7 +26,7 @@ pub(crate) use card_buttons::{
     AimedFor, CARD_BUTTON, CardButton, card_order, hold_card_button, let_go_card_buttons,
     press_card_button, show_card_buttons,
 };
-pub(crate) use layout::{builder, builds, contents, lit, structure_state};
+pub(crate) use layout::{allied, allies, builder, builds, contents, lit, structure_state};
 pub(crate) use looks::{Looks, Quantity, setup};
 pub(crate) use press::{act, widget};
 pub(crate) use tips::{Said, Tip, fill, hover, tell};
@@ -92,6 +94,26 @@ const COMMAND_ALL: usize = 4;
 const COMMAND_ALL_ICON: &str = "UI/Game/ActionButtons/IconCommandAll.png";
 const COMMAND_ALL_NAME: &str = "action_buttons_CommandAll_name";
 const COMMAND_ALL_HELP: &str = "action_buttons_CommandAll_tooltip";
+
+/// The layouts' names for the button that opens the team commands, the
+/// requests made of allies, the ally page's buttons for all allies and
+/// for one, and the way back from either page.
+const TEAM_COMMANDS: &str = "GoToTeamCommands";
+const ALL_ALLIES: &str = "SelectTeamKingdomAlly";
+const SELECT_ALLY: &str = "SelectTeamKingdom";
+const TEAM_CANCEL: &str = "CancelTeamCommands";
+/// How many allies the ally page has buttons for, after the one for all.
+const MOST_ALLIES: usize = 10;
+/// The team commands offered only for one ally, never for all of them.
+const ONE_ALLY: [&str; 4] = [
+    "team_give_resources",
+    "team_give_actor",
+    "team_request_resources",
+    "team_request_actor",
+];
+/// The team command that opens the chat bar, offered for one ally only
+/// when a person plays it.
+const TEAM_CHAT: &str = "team_chat";
 
 /// Where the game puts the button that cancels an order being aimed.
 const CANCEL: usize = 8;
@@ -192,6 +214,20 @@ pub enum Page {
     /// One of the selected building's menus of what it recruits or
     /// researches.
     Menu(Menu),
+    /// The choice of whom the team commands are for, whatever is
+    /// selected.
+    Allies,
+    /// The team commands for them.
+    Team(Target),
+}
+
+/// Whom the team commands are for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Target {
+    /// All the player's allies.
+    All,
+    /// One ally, by player id.
+    Side(u32),
 }
 
 /// Which of a building's menus something is in: Deploy for what comes out
@@ -254,6 +290,16 @@ pub enum Entry {
     Build(usize),
     /// Calls off the selected building site.
     CancelSite,
+    /// Opens the ally page.
+    TeamCommands,
+    /// Opens the team commands for all allies.
+    AllAllies,
+    /// Opens them for one ally, by index into [`allies`].
+    Ally(usize),
+    /// Index into the team commands.
+    Team(usize),
+    /// Goes back from the ally page or the team commands.
+    TeamCancel,
 }
 
 /// A grid button, of either interface, at this slot.
@@ -282,6 +328,8 @@ pub struct Face {
     pub icon: Option<Handle<Image>>,
     /// Whether pressing it can do anything now; its icon's greyed if not.
     pub ready: bool,
+    /// The colour its icon is drawn in, where it's an ally's.
+    pub tint: Option<[f32; 3]>,
 }
 
 /// The slot whose press was just refused and why, said while the cursor
@@ -304,16 +352,25 @@ pub fn back_out(
     chosen: Res<SelectedBuilding>,
     (sim, local): (Res<Sim>, Res<crate::Local>),
     mut page: ResMut<Page>,
-    mut was: bevy::ecs::system::Local<(Option<usize>, Option<usize>)>,
+    mut seen: bevy::ecs::system::Local<Seen>,
     displays: Res<crate::displays::Displays>,
 ) {
+    let picked = (selected.0.clone(), chosen.0);
+    let repicked = seen.picked != picked;
+    seen.picked = picked;
+    let cleared = selected.0.is_empty() && chosen.0.is_none();
     // A menu is the building's, or the builder's, it was opened on.
-    let switched = std::mem::replace(&mut was.0, chosen.0) != chosen.0;
+    let switched = std::mem::replace(&mut seen.chosen, chosen.0) != chosen.0;
     let builder = builder(&sim.0, &selected.0);
-    let rebuilt = std::mem::replace(&mut was.1, builder) != builder;
+    let rebuilt = std::mem::replace(&mut seen.builder, builder) != builder;
     let theirs = !crate::selection::commanded(&sim.0, local.0, &selected.0, chosen.0);
     let gone = match *page {
         Page::Orders => false,
+        // Requests of allies are open whoever's things are selected, while
+        // there are allies to ask, until something else is selected.
+        Page::Allies | Page::Team(_) if !allied(&sim.0, local.0) => true,
+        Page::Team(Target::Side(side)) if !allies(&sim.0, local.0).contains(&side) => true,
+        Page::Allies | Page::Team(_) => repicked && !cleared,
         _ if theirs => true,
         Page::Placing(_) | Page::Menu(Menu::Build) => builder.is_none() || rebuilt,
         Page::Aiming(_) => selected.0.is_empty(),
@@ -323,9 +380,36 @@ pub fn back_out(
     };
     // Escape closes a display panel that's up, not the page under it.
     let escaped = keys.just_pressed(KeyCode::Escape) && crate::displays::closed(Some(displays));
+    // A team page that gave way to a selection comes back when that's
+    // cleared.
+    match *page {
+        Page::Allies | Page::Team(_) if gone && !escaped => seen.left = Some(*page),
+        Page::Orders if repicked && cleared => {
+            if let Some(left) = seen.left.take().filter(|_| allied(&sim.0, local.0)) {
+                page.set_if_neq(left);
+                return;
+            }
+        }
+        Page::Orders => {}
+        _ => seen.left = None,
+    }
+    if escaped {
+        seen.left = None;
+    }
     if gone || escaped {
         page.set_if_neq(Page::Orders);
     }
+}
+
+/// What [`back_out`] saw last: the building selected, the builder, and
+/// the whole selection; and the team page that gave way to a selection
+/// since.
+#[derive(Default)]
+pub struct Seen {
+    chosen: Option<usize>,
+    builder: Option<usize>,
+    picked: (Vec<usize>, Option<usize>),
+    left: Option<Page>,
 }
 
 /// Has the grid's buttons, of either interface, sound when pressed only
@@ -353,12 +437,15 @@ pub fn fill_slots(
     sim: Res<Sim>,
     looks: Res<Looks>,
     local: Res<Local>,
-    groups: Res<ControlGroups>,
+    (groups, orders): (Res<ControlGroups>, Res<crate::Orders>),
     mut shown: ResMut<Shown>,
 ) {
+    let people = crate::chat::people(&orders, local.0);
     let building = chosen.0.filter(|_| selected.0.is_empty());
     let behavior = groups.behavior(&selected.0);
-    // Others' things have no buttons, nor anything for a key to press.
+    // Others' things have no buttons of their own, nor anything for a key
+    // to press, but a player with allies has the team commands whatever
+    // is selected.
     let now = match crate::selection::commanded(&sim.0, local.0, &selected.0, building) {
         true => contents(
             *page,
@@ -368,8 +455,92 @@ pub fn fill_slots(
             building,
             local.0,
             behavior,
+            &people,
         ),
+        false if allied(&sim.0, local.0) => {
+            contents(*page, &sim.0, &looks, &[], None, local.0, None, &people)
+        }
         false => Shown::default(),
     };
     shown.set_if_neq(now);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A match of the player, 1, allied to 2, whose building is 0, with
+    /// nothing selected and the grid on `page`.
+    fn app(page: Page) -> App {
+        let mut players: Vec<_> = [1, 2].map(crate::tests::player).into();
+        for p in &mut players {
+            p.relations = vec![tgmap::Relation::Ally; 2];
+        }
+        let sides = tgsim::Sides {
+            players,
+            ..Default::default()
+        };
+        let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
+        let mut world = tgsim::World::from_organizations(sides, pathing, &[]);
+        world.add_buildings(&[tgmap::Building {
+            id: 9,
+            template: "hq".into(),
+            owner: 2,
+            position: [20.0, 20.0],
+            facing: [0.0, -1.0],
+            fighter: Default::default(),
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle: None,
+            deploy: None,
+            organization: None,
+            awake: false,
+        }]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Selected>()
+            .init_resource::<SelectedBuilding>()
+            .init_resource::<crate::displays::Displays>()
+            .insert_resource(Sim(world))
+            .insert_resource(Local(Some(1)))
+            .insert_resource(page)
+            .add_systems(Update, back_out);
+        app.update();
+        app
+    }
+
+    fn pick(app: &mut App, building: Option<usize>) {
+        app.world_mut().resource_mut::<SelectedBuilding>().0 = building;
+        app.update();
+    }
+
+    fn page(app: &App) -> Page {
+        *app.world().resource::<Page>()
+    }
+
+    #[test]
+    fn a_team_page_gives_way_to_a_selection_and_comes_back_when_it_s_cleared() {
+        let team = Page::Team(Target::Side(2));
+        let mut app = app(team);
+        assert_eq!(page(&app), team);
+        // A building of someone else's: the selection's commands.
+        pick(&mut app, Some(0));
+        assert_eq!(page(&app), Page::Orders);
+        pick(&mut app, None);
+        assert_eq!(page(&app), team);
+        // Clearing what's already clear leaves the page as it is.
+        pick(&mut app, None);
+        assert_eq!(page(&app), team);
+    }
+
+    #[test]
+    fn a_team_page_goes_with_the_ally_it_was_for() {
+        let mut app = app(Page::Team(Target::Side(2)));
+        let mut sim = app.world_mut().resource_mut::<Sim>();
+        sim.0.sides.players[0].relations[1] = tgmap::Relation::Enemy;
+        app.update();
+        assert_eq!(page(&app), Page::Orders);
+    }
 }
