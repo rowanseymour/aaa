@@ -188,6 +188,35 @@ impl GameData {
         self.interface_setting(|v| v.ui_color_highlight)
     }
 
+    /// The images this project's own interface draws in place of the
+    /// game's, by the game's image's lower-case path from the archive root:
+    /// from the `[IconStandIn]` blocks of the `.tgi` files under `Modern/`,
+    /// the first for an image winning.
+    pub fn icon_stand_ins(&self) -> Arc<HashMap<String, String>> {
+        self.kept("icon_stand_ins", || {
+            let files = self.modern_files();
+            let mut stand_ins = HashMap::new();
+            for file in scoped(&files) {
+                for block in file.read::<defs::IconStandIn>("IconStandIn") {
+                    let (Some(image), Some(texture)) = (block.image, block.texture) else {
+                        continue;
+                    };
+                    let image = image.trim().trim_start_matches('/').to_ascii_lowercase();
+                    let texture = beside(file.file, texture.trim());
+                    stand_ins.entry(image).or_insert(texture);
+                }
+            }
+            stand_ins
+        })
+    }
+
+    /// The image this project's own interface draws for the game's at
+    /// `path`: its stand-in, if it has one, else the game's.
+    pub fn modern_icon(&self, path: &str) -> String {
+        let key = path.trim_start_matches('/').to_ascii_lowercase();
+        (self.icon_stand_ins().get(&key).cloned()).unwrap_or_else(|| path.to_string())
+    }
+
     /// How this project's own interface looks for the game: each field
     /// from the first `[ModernInterface]` block, in a `.tgi` file under
     /// `Modern/`, that has it, `null` saying there's none; the rest of the

@@ -1416,6 +1416,20 @@ mod tests {
     }
 
     #[test]
+    fn this_projects_own_icon_stand_ins_are_there() {
+        let game = own_data();
+        let stand_ins = game.icon_stand_ins();
+        assert!(!stand_ins.is_empty());
+        for (image, texture) in stand_ins.iter() {
+            assert!(game.exists(texture), "{image}: no {texture}");
+        }
+        // As the data spells it, whatever its case.
+        let gun = "/properties/abilityicons/IconAbilityDamageGun.PNG";
+        assert!(game.modern_icon(gun).ends_with(".svg"));
+        assert_eq!(game.modern_icon("Art/none.png"), "Art/none.png");
+    }
+
+    #[test]
     fn a_system_face_is_stood_in_for_by_the_file_named_for_it() {
         let dir = folder(
             "system-face",

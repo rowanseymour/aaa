@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Button;
 
 use super::actions::{BUTTON, GAP, PAD};
+use crate::displays::Icon;
 use crate::intent::Asks;
 use crate::keys::Bindings;
 use crate::special_ops::{Operation, Panel, action, probe};
@@ -100,7 +101,8 @@ pub fn spawn(
     };
     let game = &loaded.game;
     let medal = (game.experience_glyph())
-        .and_then(|name| cache.get(game, &mut images, &format!("{GLYPH_DIR}/{name}.png")));
+        .map(|name| game.modern_icon(&format!("{GLYPH_DIR}/{name}.png")))
+        .filter(|path| game.exists(path));
     let buttons: Vec<_> = (shared.operations.iter())
         .map(|op| {
             let icon = (op.icon.as_deref()).and_then(|path| cache.get(game, &mut images, path));
@@ -145,7 +147,7 @@ pub fn spawn(
         .with_children(|row| {
             if let Some(medal) = medal {
                 row.spawn((
-                    ImageNode::new(medal),
+                    Icon::new(medal),
                     Node {
                         width: px(MEDAL),
                         height: px(MEDAL),

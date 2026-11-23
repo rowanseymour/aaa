@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- A shield, its rim steel and its face olive. -->
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke" fill="#8e959b" d="M9,6 L55,6 L55,30 C55,46 45,56 32,62 C19,56 9,46 9,30 Z"/>
+  <path fill="#7d8a44" d="M15,12 L32,12 L32,55 C22,50 15,42 15,30 Z"/>
+  <path fill="#5f6a30" d="M32,12 L49,12 L49,30 C49,42 42,50 32,55 Z"/>
+</svg>

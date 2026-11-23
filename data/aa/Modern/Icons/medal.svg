@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- A gold medal on a striped ribbon. -->
+  <g stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke">
+    <path fill="#b8322a" d="M17,3 L47,3 L40,30 L24,30 Z"/>
+    <circle fill="#e6b52f" cx="32" cy="45" r="16"/>
+  </g>
+  <path fill="#f2ead2" d="M22,3 L27,3 L29.5,30 L26.5,30 Z M37,3 L42,3 L37.5,30 L34.5,30 Z"/>
+  <circle fill="#f7d35a" cx="32" cy="45" r="11.5"/>
+  <polygon fill="#c9921f" points="32.00,36.50 34.23,42.43 40.56,42.72 35.61,46.67 37.29,52.78 32.00,49.30 26.71,52.78 28.39,46.67 23.44,42.72 29.77,42.43"/>
+</svg>

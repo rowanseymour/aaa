@@ -57,6 +57,7 @@ static READS: LazyLock<HashMap<&str, Vec<Read>>> = LazyLock::new(|| {
             "hotkeyconfigurationdata",
             vec![read::<defs::HotkeyConfiguration>()],
         ),
+        ("iconstandin", vec![read::<defs::IconStandIn>()]),
         ("kingdomcolor", vec![read::<defs::KingdomColor>()]),
         ("mainmenuinterface", vec![read::<defs::Interface>()]),
         ("minimap", vec![read::<defs::Minimap>()]),

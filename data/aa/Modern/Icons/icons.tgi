@@ -1,0 +1,50 @@
+;; The icons this project's own interface draws in place of the game's, such
+;; as a weapon's, in colour to match its resource icons.
+
+[IconStandIn]
+{
+	image = /Properties/AbilityIcons/IconAbilityDamageGun.png
+	texture = gun.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/AbilityIcons/IconAbilityDamageExplosive.png
+	texture = explosive.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/AbilityIcons/IconAbilityDamageArmorPierce.png
+	texture = armor_pierce.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/AbilityIcons/IconAbilityAntiAircraft.png
+	texture = anti_aircraft.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/AbilityIcons/IconAbilityDamageFire.png
+	texture = fire.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/AbilityIcons/IconAbilityRepair.png
+	texture = repair.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/AbilityIcons/IconAbilityDefense.png
+	texture = defense.svg
+}
+
+[IconStandIn]
+{
+	image = /Fonts/medium/1280/FactionExperience.png
+	texture = medal.svg
+}

@@ -914,8 +914,13 @@ impl Shows<'_> {
 
     /// The shield icon `template` gives its defence.
     pub(crate) fn defense_icon(&mut self, template: &Id) -> Option<Handle<Image>> {
-        let icon = (self.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
+        let icon = self.defense_icon_path(template);
         self.image(icon.as_deref())
+    }
+
+    /// The path of the shield icon `template` gives its defence.
+    pub(crate) fn defense_icon_path(&self, template: &Id) -> Option<String> {
+        (self.looks.listings.get(template)).and_then(|l| l.defense_icon.clone())
     }
 
     /// The icons of the first `most` of `target`'s weapons.
@@ -924,12 +929,17 @@ impl Shows<'_> {
         target: Target,
         most: usize,
     ) -> Vec<Option<Handle<Image>>> {
-        let icons: Vec<Option<String>> = (self.sim.weapons(target).iter())
-            .take(most)
-            .map(|w| w.shown.icon.clone())
-            .collect();
+        let icons = self.weapon_icon_paths(target, most);
         (icons.iter())
             .map(|icon| self.image(icon.as_deref()))
+            .collect()
+    }
+
+    /// The paths of the icons of the first `most` of `target`'s weapons.
+    pub(crate) fn weapon_icon_paths(&self, target: Target, most: usize) -> Vec<Option<String>> {
+        (self.sim.weapons(target).iter())
+            .take(most)
+            .map(|w| w.shown.icon.clone())
             .collect()
     }
 
