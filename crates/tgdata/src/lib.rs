@@ -1353,17 +1353,12 @@ mod tests {
         let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
         let games = (std::fs::read_dir(&data).unwrap())
             .map(|e| e.unwrap().path())
-            .filter(|p| {
-                p.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("modern_")
-            });
+            .filter(|p| p.is_dir() && !p.ends_with("common"));
         let mut seen = 0;
         for own in games {
             let mut game = empty();
             game.add_depot(&own).unwrap();
-            game.add_depot(&data.join("modern")).unwrap();
+            game.add_depot(&data.join("common")).unwrap();
             let look = game.modern_interface();
             let name = own.display();
             assert!(look.title.is_some(), "{name}: no title");
@@ -1377,6 +1372,12 @@ mod tests {
             );
             if let Some(logo) = look.logo {
                 assert!(game.exists(&logo), "{name}: no {logo}");
+            }
+            // A game's own file of fonts hides the shared one of its path, so
+            // has to give every face the interface sets its text in.
+            for ids in ["modern_stencil", "modern_plain", "modern_hud"] {
+                let file = game.font(ids).and_then(|f| f.face?.file);
+                assert!(file.is_some(), "{name}: no face for {ids}");
             }
             seen += 1;
         }

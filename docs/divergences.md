@@ -43,7 +43,7 @@ the layouts' 4:3 shape, as large as fits the window and centred between black ba
 where the original stretches them to fill the screen. See
 [hud/original](../crates/tgclient/src/hud/original/mod.rs). Text in a Windows face the
 data names but doesn't hold, such as Arial, is drawn in a stand-in of the same
-metrics from this project's [data](../data/modern/Fonts/system.tgi), so its glyphs
+metrics from this project's [data](../data/common/Fonts/system.tgi), so its glyphs
 differ a little in shape and hinting.
 
 ## View

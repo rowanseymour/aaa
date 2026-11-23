@@ -307,21 +307,22 @@ fn shot_due(after: Res<ShotAfter>, started: Option<Res<MatchStarted>>, time: Res
 }
 
 /// The folders of this project's own data for the game tagged `tag`, in the
-/// order they're looked in after the game's: `modern_<tag>` where there's
-/// one, then `modern`, both in the first folder named `data` at or above
-/// the program's that has `modern`, as an install of the program or the
+/// order they're looked in after the game's: `<tag>` where there's one,
+/// then `common`, both in the first folder named `data` at or above the
+/// program's that has `common`, as an install of the program or the
 /// checkout it was built in does.
 fn own_data(tag: &str) -> Result<Vec<PathBuf>, String> {
+    const COMMON: &str = "common";
     let program = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| format!("can't find where the program is: {e}"))?;
     let root = (program.ancestors().skip(1))
         .map(|dir| dir.join("data"))
-        .find(|data| data.join("modern").is_dir())
-        .ok_or_else(|| format!("no data/modern beside {} or above it", program.display()))?;
-    let own = root.join(format!("modern_{tag}"));
+        .find(|data| data.join(COMMON).is_dir())
+        .ok_or_else(|| format!("no data/{COMMON} beside {} or above it", program.display()))?;
+    let own = root.join(tag);
     let own = own.is_dir().then_some(own);
-    Ok(own.into_iter().chain([root.join("modern")]).collect())
+    Ok(own.into_iter().chain([root.join(COMMON)]).collect())
 }
 
 /// Plays the game `program` is of, as its command line asks.
