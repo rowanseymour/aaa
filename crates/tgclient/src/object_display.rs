@@ -74,6 +74,12 @@ pub(crate) const EMPTY_SLOT: &str =
 /// gathered behind a marker.
 pub(crate) const MAX_PROPERTIES: usize = 7;
 
+/// How much brighter a banner's plate shows in a portrait than its owner's
+/// colour: each channel times this, held to 1, then times the plate's
+/// image. Measured from the game's screens, where blue (0, 0.3, 1) shows
+/// as (0, 0.6, 1) and green (0, 0.73, 0.1) as (0, 1, 0.2) over the image.
+const PORTRAIT_LIGHT: f32 = 2.0;
+
 /// How many of a building's commissions the display has places for when
 /// its layout doesn't say: the rest are shown only to be there.
 pub(crate) const MAX_QUEUED: usize = 6;
@@ -946,6 +952,17 @@ impl Shows<'_> {
         }
     }
 
+    /// Where the organization at `r`'s banner shows in a portrait of its
+    /// model, as [`BannerImages::framing`] gives it.
+    ///
+    /// [`BannerImages::framing`]: tgrender::overlay::BannerImages::framing
+    pub(crate) fn banner_framing(&mut self, r: usize) -> Option<Rect> {
+        let organization = &self.sim.organizations[r];
+        let faction = self.leaders.banner(organization.owner);
+        let template = organization.template.as_str();
+        self.banners.framing(self.game, template, faction)
+    }
+
     /// The organization at `r`'s banner, as it flies over it: its layers,
     /// bottom first, each in its colour, with none where it has no such
     /// layer.
@@ -963,8 +980,12 @@ impl Shows<'_> {
         let badge =
             wears.and_then(|(hq, _)| self.badges.badge(banners, game, images, template, hq));
         let out_of_supply = looks.out_of_supply.filter(|_| lacks);
+        let lit = |c: f32| (c * PORTRAIT_LIGHT).min(1.0);
         [
-            (looks.plate.clone(), Color::srgb(red, green, blue)),
+            (
+                looks.plate.clone(),
+                Color::srgb(lit(red), lit(green), lit(blue)),
+            ),
             (icon, Color::WHITE),
             (looks.frame, Color::WHITE),
             (out_of_supply, Color::WHITE),

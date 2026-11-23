@@ -1194,7 +1194,8 @@ impl Draw<'_, '_> {
         let decal = format!("{target}/Decal");
         self.fill(parts, &status, fill);
         self.says(parts, path, Says::Organization(marker.organization()));
-        let (Some(&(bar, at)), Some(&(picture, mark))) = (parts.get(&status), parts.get(&decal))
+        let (Some(&(bar, at)), Some(&(picture, _)), Some(&(_, mark))) =
+            (parts.get(&status), parts.get(&decal), parts.get(&target))
         else {
             // A marker that can't be placed isn't shown at all.
             let commands = self.s.commands_mut();
@@ -1203,7 +1204,8 @@ impl Draw<'_, '_> {
             }
             return;
         };
-        // Within the bar, its right edge at the share.
+        // Within the bar, its right edge at the share, its own view's size
+        // and cut off at the bar's edges.
         let size = |v: f32, of: f32| percent(100.0 * v / of.max(1.0));
         let (width, height) = (
             size(mark.width(), at.width()),
@@ -1225,7 +1227,10 @@ impl Draw<'_, '_> {
             },
             marker,
         ));
-        commands.entity(bar).add_child(picture);
+        let mut bar = commands.entity(bar);
+        bar.entry::<Node>()
+            .and_modify(|mut n| n.overflow = Overflow::clip());
+        bar.add_child(picture);
         for (_, &(e, _)) in parts
             .iter()
             .filter(|(p, _)| p.starts_with(&target) && **p != decal)
@@ -1240,6 +1245,16 @@ impl Draw<'_, '_> {
             return;
         };
         let layers = self.shows.banner(r);
+        // Where the model's own camera sees it, its picture stretched to
+        // the box.
+        let framed = self.shows.banner_framing(r);
+        let framing = framed.unwrap_or(bevy::math::Rect::new(0.0, 0.0, 1.0, 1.0));
+        // Stretched with the camera's picture, not kept square; a model with
+        // no camera keeps its image's shape.
+        let mode = match framed {
+            Some(_) => NodeImageMode::Stretch,
+            None => NodeImageMode::Auto,
+        };
         let commands = self.s.commands_mut();
         for (image, colour) in layers {
             let Some(image) = image else {
@@ -1248,13 +1263,16 @@ impl Draw<'_, '_> {
             let layer = (
                 Node {
                     position_type: PositionType::Absolute,
-                    width: percent(100),
-                    height: percent(100),
+                    left: percent(framing.min.x * 100.0),
+                    top: percent(framing.min.y * 100.0),
+                    width: percent(framing.width() * 100.0),
+                    height: percent(framing.height() * 100.0),
                     ..default()
                 },
                 ImageNode {
                     image,
                     color: colour,
+                    image_mode: mode.clone(),
                     ..default()
                 },
                 Pickable::IGNORE,
