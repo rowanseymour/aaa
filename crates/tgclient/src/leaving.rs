@@ -177,6 +177,7 @@ fn put_away(world: &mut World) {
     world.remove_resource::<crate::views::Viewed>();
     world.remove_resource::<crate::Leaders>();
     world.remove_resource::<crate::lobby::Lineup>();
+    world.remove_resource::<crate::lobby::Computers>();
     world.remove_resource::<crate::Raising>();
     world.remove_resource::<crate::effects::Effects>();
     world.remove_resource::<crate::sunlight::Sunlight>();

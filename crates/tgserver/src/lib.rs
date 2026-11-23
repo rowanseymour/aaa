@@ -22,7 +22,7 @@ use std::hash::{BuildHasher, RandomState};
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
-use tgdata::{Faction, GameData, Handicap, Id, Nation, RuleValues};
+use tgdata::{Faction, GameData, Handicap, Id, Nation, RuleValues, Sai};
 use tgmap::{FogSetting, Map, Player, Recruits};
 use tgsim::World;
 
@@ -55,6 +55,9 @@ pub struct Setup {
     pub factions: BTreeMap<u32, Id>,
     /// The handicap given each side, by player id, in place of the map's.
     pub handicaps: BTreeMap<u32, Id>,
+    /// Every side a computer player plays, by player id, with the profile
+    /// chosen for it; none for one at random.
+    pub computers: BTreeMap<u32, Option<Id>>,
     /// The world rules the match is played with, such as the fog of war,
     /// the time of day and the money each side starts with, in place of
     /// those the map stores.
@@ -69,6 +72,8 @@ pub struct Started {
     pub world: World,
     /// The faction that leads each side with one, by player id.
     pub factions: HashMap<u32, Faction>,
+    /// The profile each computer player plays by, by player id.
+    pub computers: BTreeMap<u32, Id>,
 }
 
 /// Sets up the match `setup` describes from the game's data, calling
@@ -285,12 +290,54 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         let extra = stockpiled.map_or(0.0, |s| handicap.extra.get(s.as_str()));
         world.set_stockpile(player, world.stockpile(player) + extra);
     }
+    // Not from the match's seed: only the machine a computer player
+    // thinks on needs its profile.
+    let sais = game.sais();
+    let picks = (&chosen, &factions, sais.as_slice());
+    let computers = computers(&map.players, &setup.computers, picks, fresh_seed());
     Ok(Started {
         map,
         raising,
         world,
         factions,
+        computers,
     })
+}
+
+/// What a side left to chance is given a profile from: each side's nation
+/// and faction, by player id, and every profile.
+type Picks<'a> = (
+    &'a HashMap<u32, Nation>,
+    &'a HashMap<u32, Faction>,
+    &'a [Sai],
+);
+
+/// The profile each computer player of the match's `players` plays by, by
+/// player id: the one `chosen` for it, else one at random by `draw` that
+/// fits its side, else any.
+fn computers(
+    players: &[Player],
+    chosen: &BTreeMap<u32, Option<Id>>,
+    (nations, factions, sais): Picks,
+    draw: u64,
+) -> BTreeMap<u32, Id> {
+    let playing = |p: &u32| players.iter().any(|player| player.id == *p);
+    (chosen.iter().filter(|(p, _)| playing(p)))
+        .filter_map(|(&p, sai)| {
+            if let Some(sai) = sai {
+                return Some((p, sai.clone()));
+            }
+            let nation = nations.get(&p).map(|n| &n.id);
+            let faction = factions.get(&p).map(|g| &g.id);
+            let fitting: Vec<&Sai> = (sais.iter())
+                .filter(|s| s.public && !s.easiest && s.fits(nation, faction))
+                .collect();
+            let any: Vec<&Sai> = sais.iter().collect();
+            let from = if fitting.is_empty() { &any } else { &fitting };
+            let sai = pick_at_random(draw, Pick::Computer, p, from)?;
+            Some((p, sai.id.clone()))
+        })
+        .collect()
 }
 
 /// Each side's handicap, by player id: the one `chosen` for it, else the
@@ -344,6 +391,7 @@ pub fn fresh_seed() -> u64 {
 enum Pick {
     Nation = 1,
     Faction = 2,
+    Computer = 3,
 }
 
 /// One of `items` for `player`, at random but the same wherever the match
@@ -397,6 +445,65 @@ mod tests {
             player(12, false, true),
             player(13, false, true),
         ]
+    }
+
+    #[test]
+    fn computer_players_play_their_chosen_profile_else_one_fitting_their_side() {
+        let sai = |id: &str, nation: &str, faction: &str, public: bool, easiest: bool| Sai {
+            id: Id::from(id),
+            name: id.into(),
+            nations: vec![Id::from(nation)],
+            factions: vec![Id::from(faction)],
+            public,
+            easiest,
+        };
+        let sais = [
+            sai("chuikov_sai", "nation_rus", "chuikov", true, false),
+            sai("rus_sai", "nation_rus", "chuikov", false, false),
+            sai("easy_chuikov_sai", "nation_rus", "chuikov", true, true),
+        ];
+        let nation = |id: &str| Nation {
+            id: Id::from(id),
+            name: id.into(),
+            placeholders: HashMap::new(),
+            factions: Vec::new(),
+            flag: None,
+            music: None,
+            skin: Vec::new(),
+        };
+        let faction = |id: &str| Faction {
+            id: Id::from(id),
+            name: id.into(),
+            short_name: id.into(),
+            operations: Vec::new(),
+            experience_max: None,
+            public: true,
+            portrait: None,
+            computer_name: None,
+            banner: None,
+        };
+        let nations = HashMap::from([(12, nation("nation_rus")), (13, nation("nation_usa"))]);
+        let factions = HashMap::from([(12, faction("chuikov")), (13, faction("modded"))]);
+        let chosen = BTreeMap::from([
+            (10, Some(Id::from("konev_sai"))),
+            (12, None),
+            (13, None),
+            // Gone with its team.
+            (14, Some(Id::from("patton_sai"))),
+        ]);
+        for draw in 0..20 {
+            let given = computers(&players(), &chosen, (&nations, &factions, &sais), draw);
+            assert_eq!(given.get(&10), Some(&Id::from("konev_sai")));
+            // The only public one fitting, not too easy.
+            assert_eq!(given.get(&12), Some(&Id::from("chuikov_sai")));
+            // None fits, so any.
+            assert!(
+                given
+                    .get(&13)
+                    .is_some_and(|s| sais.iter().any(|a| a.id == *s))
+            );
+            assert_eq!(given.len(), 3);
+        }
     }
 
     #[test]

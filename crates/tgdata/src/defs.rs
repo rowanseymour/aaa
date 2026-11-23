@@ -1296,6 +1296,8 @@ pub struct Sai {
     pub name: Option<String>,
     /// False for profiles only scenarios use.
     pub public: Option<bool>,
+    /// How hard it plays, e.g. `sai_difficulty_level_HARD`.
+    pub difficulty_level: Option<Id>,
     /// The nations it plays as, by id.
     #[serde(default)]
     pub nation: Vec<SaiChoice>,

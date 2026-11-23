@@ -79,12 +79,30 @@ pub struct Sai {
     pub id: Id,
     /// What the computer player is called, e.g. `Chuikov AI`.
     pub name: String,
-    /// The nation it plays as, where it names one.
-    pub nation: Option<Id>,
-    /// The faction it plays as, where it names just one.
-    pub faction: Option<Id>,
+    /// The nations it plays as, by id; any where it names none.
+    pub nations: Vec<Id>,
+    /// The factions it plays as, by id; any where it names none.
+    pub factions: Vec<Id>,
     /// Whether the lobby offers it, as it doesn't those only scenarios use.
     pub public: bool,
+    /// Whether it plays at the easiest difficulty.
+    pub easiest: bool,
+}
+
+/// The easiest difficulty a computer player profile can name.
+const EASIEST: &str = "sai_difficulty_level_easy";
+
+impl Sai {
+    /// Whether it plays as `nation` led by `faction`, a side without a
+    /// faction leaving that out.
+    pub fn fits(&self, nation: Option<&Id>, faction: Option<&Id>) -> bool {
+        let lists = |all: &[Id], id: &Id| all.is_empty() || all.contains(id);
+        let nation = match nation {
+            Some(n) => lists(&self.nations, n),
+            None => self.nations.is_empty(),
+        };
+        nation && faction.is_none_or(|g| lists(&self.factions, g))
+    }
 }
 
 /// A special operation as a faction gives it.
@@ -437,10 +455,8 @@ impl GameData {
     pub fn sais(&self) -> Vec<Sai> {
         let strings = self.strings();
         let files = self.parse_tgis(|n| n.starts_with("sai/"));
-        let one = |choices: Vec<defs::SaiChoice>| -> Option<Id> {
-            let mut ids = choices.into_iter().filter_map(|c| c.ids);
-            ids.next().filter(|_| ids.next().is_none())
-        };
+        let ids =
+            |choices: Vec<defs::SaiChoice>| choices.into_iter().filter_map(|c| c.ids).collect();
         let mut sais: Vec<Sai> = (scoped(&files).iter())
             .flat_map(|f| f.read::<defs::Sai>("SAI"))
             .filter_map(|s| {
@@ -448,9 +464,11 @@ impl GameData {
                 Some(Sai {
                     name: localized(&strings, s.name.as_deref()).unwrap_or_else(|| id.to_string()),
                     id,
-                    nation: one(s.nation),
-                    faction: one(s.faction),
+                    nations: ids(s.nation),
+                    factions: ids(s.faction),
                     public: s.public != Some(false),
+                    easiest: (s.difficulty_level.as_ref())
+                        .is_some_and(|d| d.as_str().eq_ignore_ascii_case(EASIEST)),
                 })
             })
             .collect();
@@ -538,6 +556,28 @@ mod tests {
             ids(&s.faction),
             vec![Id::from("chuikov"), Id::from("konev")]
         );
+    }
+
+    #[test]
+    fn a_profile_fits_the_nations_and_factions_it_lists_or_any_where_it_lists_none() {
+        let sai = |nations: &[&str], factions: &[&str]| Sai {
+            id: Id::from("sai"),
+            name: String::new(),
+            nations: nations.iter().map(|&n| Id::from(n)).collect(),
+            factions: factions.iter().map(|&g| Id::from(g)).collect(),
+            public: true,
+            easiest: false,
+        };
+        let (rus, usa) = (Id::from("nation_rus"), Id::from("nation_usa"));
+        let (konev, patton) = (Id::from("konev"), Id::from("patton"));
+        let russian = sai(&["NATION_RUS"], &["chuikov", "konev"]);
+        assert!(russian.fits(Some(&rus), Some(&konev)));
+        assert!(russian.fits(Some(&rus), None));
+        assert!(!russian.fits(Some(&rus), Some(&patton)));
+        assert!(!russian.fits(Some(&usa), None));
+        assert!(!russian.fits(None, None));
+        assert!(sai(&[], &[]).fits(Some(&usa), Some(&patton)));
+        assert!(sai(&[], &[]).fits(None, None));
     }
 
     #[test]

@@ -147,6 +147,7 @@ pub(crate) struct Prepared {
     raising: Recruits,
     person: Option<u32>,
     leaders: Leaders,
+    computers: lobby::Computers,
     effects: effects::Effects,
 }
 
@@ -202,6 +203,7 @@ pub(crate) fn prepare(
         raising,
         world: sim,
         factions,
+        computers,
     } = tgserver::start(&game, &setup, || reached(Stage::Objects))?;
     let person = match (&joined, from_menu) {
         // Its host says who the game plays.
@@ -233,6 +235,7 @@ pub(crate) fn prepare(
         raising,
         person,
         leaders,
+        computers: lobby::Computers(computers),
         effects,
     })
 }
@@ -246,6 +249,7 @@ pub(crate) fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
         raising,
         person,
         leaders,
+        computers,
         effects,
     } = prepared;
     let lineup = lobby::Lineup::new(&loaded.map.players, person);
@@ -256,8 +260,12 @@ pub(crate) fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
                 .map_or("no team".into(), |t| format!("team {}", t + 1));
             let nation = p.nation.as_deref().unwrap_or("no nation");
             let faction = leaders.0.get(&id).map_or("no faction", |g| g.id.as_str());
+            let sai = computers
+                .0
+                .get(&id)
+                .map_or(String::new(), |s| format!(" ({s})"));
             info!(
-                "{} ({}, {team}, {nation}, {faction}): {control:?}",
+                "{} ({}, {team}, {nation}, {faction}): {control:?}{sai}",
                 p.name, p.color
             );
         }
@@ -265,6 +273,7 @@ pub(crate) fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     world.insert_resource(Local(lineup.person()));
     world.insert_resource(leaders);
     world.insert_resource(lineup);
+    world.insert_resource(computers);
     if let Some(orders) = orders {
         world.insert_resource(orders);
     }

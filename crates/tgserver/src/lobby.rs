@@ -149,10 +149,7 @@ impl Staging {
                 guest.host
             }
             Choice::Kick(client) => guest.host && self.guest(*client).is_some_and(|g| !g.host),
-            // A profile plays as its own nation and faction.
-            Choice::Nation(player, _) | Choice::Faction(player, _) => {
-                side(player) && !self.computers.contains_key(player)
-            }
+            Choice::Nation(player, _) | Choice::Faction(player, _) => side(player),
             // People have no handicap or profile.
             Choice::Handicap(player, _) | Choice::Computer(player, _) => {
                 guest.host && !self.taken(*player)
@@ -951,9 +948,6 @@ mod tests {
         host.choose(Choice::Handicap(1, Some(Id::from("easy"))))
             .unwrap();
         host.choose(Choice::Computer(1, Some(Id::from("konev_sai"))))
-            .unwrap();
-        // A profile's nation is its own.
-        host.choose(Choice::Nation(1, Some(Id::from("usa"))))
             .unwrap();
         bob.choose(Choice::Computer(1, None)).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);

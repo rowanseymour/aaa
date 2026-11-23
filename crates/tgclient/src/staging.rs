@@ -218,7 +218,6 @@ fn follow(
     mut commands: Commands,
     mut staged: ResMut<Staged>,
     mut lobby: ResMut<Lobby>,
-    sais: Res<crate::lobby::Sais>,
     mut log: ResMut<Log>,
     launched: Option<Res<Launched>>,
     data: Res<Data>,
@@ -287,7 +286,7 @@ fn follow(
                 gone_to(&mut commands, &mut next, words.lost.clone());
                 return;
             }
-            let (title, description) = (lobby.setup(welcome.setup.seed, &sais)).map_or_else(
+            let (title, description) = (lobby.setup(welcome.setup.seed)).map_or_else(
                 || {
                     (
                         tgdata::map_title(&welcome.setup.map).to_string(),
@@ -332,16 +331,11 @@ fn follow(
 
 /// Launches the game hosted here once its countdown has run out: what's
 /// played is as the lobby has it, its chances drawn afresh.
-fn launch_hosted(
-    mut commands: Commands,
-    hosting: Option<ResMut<Hosting>>,
-    lobby: Res<Lobby>,
-    sais: Res<crate::lobby::Sais>,
-) {
+fn launch_hosted(mut commands: Commands, hosting: Option<ResMut<Hosting>>, lobby: Res<Lobby>) {
     let Some(mut hosting) = hosting.filter(|h| h.launch && h.lobby.is_some()) else {
         return;
     };
-    let Some((setup, _, _)) = lobby.setup(tgserver::fresh_seed(), &sais) else {
+    let Some((setup, _, _)) = lobby.setup(tgserver::fresh_seed()) else {
         // Nothing to play: it doesn't launch after all.
         hosting.launch = false;
         if let Some(lobby_host) = hosting.lobby.as_mut() {
