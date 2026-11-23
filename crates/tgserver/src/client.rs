@@ -141,6 +141,10 @@ pub struct Client<L> {
     heard_at: Instant,
     sent: Instant,
     played: u64,
+    /// When its copy last finished playing a step. A host in the same
+    /// program can't say anything while its copy plays, however long a
+    /// step takes, so the host goes unheard only from then.
+    played_at: Instant,
     status: Option<Status>,
 }
 
@@ -155,6 +159,7 @@ impl<L: Link> Client<L> {
             heard_at: now,
             sent: now,
             played: 0,
+            played_at: now,
             status: None,
             link,
             heard: VecDeque::new(),
@@ -176,7 +181,7 @@ impl<L: Link> Client<L> {
     /// Has it tell the time by `clock`.
     pub fn clock(&mut self, clock: Clock) {
         let now = clock.now();
-        (self.heard_at, self.sent) = (now, now);
+        (self.heard_at, self.sent, self.played_at) = (now, now, now);
         self.clock = clock;
     }
 
@@ -317,7 +322,7 @@ impl<L: Link> Client<L> {
             }
             match heard {
                 Ok(None) => {
-                    self.lost |= now >= self.heard_at + UNHEARD;
+                    self.lost |= now >= self.heard_at.max(self.played_at) + UNHEARD;
                     break;
                 }
                 // Nothing of a game being set up means anything once it's launched.
@@ -393,6 +398,7 @@ impl<L: Link> Client<L> {
                         }
                         false => self.schedule.carry_out(world),
                     });
+                    self.played_at = self.clock.now();
                     let checks = &self.schedule.record().checks;
                     for &(step, hash) in &checks[self.checked..] {
                         // A host that's gone is found so once what it
