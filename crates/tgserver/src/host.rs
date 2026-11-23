@@ -2,6 +2,7 @@
 //! given and when, and tells every client.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,10 @@ use crate::{Clock, Link, Naming, Setup, majority, ping};
 /// Makes the computer player for a side of the match set up as given, by
 /// the side's player id.
 type MakeComputer = dyn Fn(&Setup, &World, u32) -> Box<dyn ComputerPlayer> + Send + Sync;
+
+/// What makes the computer player taking a side over mid-match, with the
+/// name of the profile it plays by, where it has one.
+type MakeTaker = dyn Fn(&Setup, u32) -> (Box<dyn ComputerPlayer>, Option<String>) + Send + Sync;
 
 /// The most messages taken from a client in one turn, so that one sending
 /// without end holds nobody else up and puts only so much in a turn; the
@@ -105,6 +110,11 @@ pub struct Host<L> {
     /// is played between machines and so pausing has rules.
     pauses: Option<Pauses>,
     computer: Box<MakeComputer>,
+    taker: Box<MakeTaker>,
+    /// What the profile each computer player the host makes at launch
+    /// plays by goes by, by player id, where it's known, until it's named
+    /// so.
+    profile_names: BTreeMap<u32, String>,
     /// The computer player of each side still in the match that no client
     /// plays, by player id, once the match has begun.
     computers: BTreeMap<u32, Box<dyn ComputerPlayer>>,
@@ -269,6 +279,7 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
         | Action::Raise { .. }
         | Action::Destroy(_)
         | Action::Name { .. }
+        | Action::NameComputer { .. }
         | Action::TakeOver { .. }
         | Action::Pausing(_) => false,
     }
@@ -277,8 +288,12 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
 impl<L> Seat<L> {
     /// Whether the host carries out `action` for it.
     fn may(&self, action: &Action) -> bool {
-        let computer =
-            matches!(action, Action::Order { player, .. } if self.computers.contains(player));
+        let computer = match action {
+            Action::Order { player, .. } | Action::NameComputer { player, .. } => {
+                self.computers.contains(player)
+            }
+            _ => false,
+        };
         self.trusted || computer || allows(&self.players, action)
     }
 
@@ -324,6 +339,8 @@ impl<L: Link> Host<L> {
             taking_over: Vec::new(),
             pauses: None,
             computer: Box::new(|_, _, _| Box::new(tgsim::Idle)),
+            taker: Box::new(|_, _| (Box::new(tgsim::Idle), None)),
+            profile_names: BTreeMap::new(),
             computers: BTreeMap::new(),
         }
     }
@@ -377,7 +394,21 @@ impl<L: Link> Host<L> {
     /// Has computer players playing by `profiles` play the sides nobody
     /// else does.
     pub fn computers_from(&mut self, profiles: crate::Profiles) {
+        self.profile_names.clone_from(profiles.names());
+        let takers = profiles.clone();
+        self.takers_by(move |setup, player| takers.taker(setup, player));
         self.computers_by(move |setup, world, player| profiles.player(setup, world, player));
+    }
+
+    /// Has computer players that `taker` makes take sides over mid-match,
+    /// rather than ones that give no orders. It's given how the match was
+    /// set up and the side's player id, and gives the name of the profile
+    /// the one it makes plays by, if there is one.
+    pub fn takers_by(
+        &mut self,
+        taker: impl Fn(&Setup, u32) -> (Box<dyn ComputerPlayer>, Option<String>) + Send + Sync + 'static,
+    ) {
+        self.taker = Box::new(taker);
     }
 
     /// Has it tell the time by `clock`.
@@ -603,13 +634,25 @@ impl<L: Link> Host<L> {
                     let let_go = pauses.leave(client).into_iter().map(|a| (None, a));
                     self.put_off.extend(let_go);
                 }
-                // Its sides are played on by computer players, once the
-                // match has begun, unless another is to be let in for it.
-                for &player in &seat.players {
+                // Its sides, its person's and its computer players', are
+                // played on by new computer players once the match has
+                // begun, but for those that have lost; before then, its
+                // person's is unless another is to be let in for it.
+                let mut sides: Vec<u32> = seat
+                    .players
+                    .iter()
+                    .chain(&seat.computers)
+                    .copied()
+                    .collect();
+                sides.sort_unstable();
+                for player in sides {
                     if self.begun {
-                        let taken_over = self.take_over(player, &seat.name);
-                        self.taking_over.push(taken_over);
-                    } else if !self.gathering {
+                        if self.world.outcome(player) != Outcome::Lost {
+                            let stood = self.side_name(player, &seat.name);
+                            let taken_over = self.take_over(player, &stood);
+                            self.taking_over.push(taken_over);
+                        }
+                    } else if !self.gathering && seat.players.contains(&player) {
                         self.departed.push((player, seat.name.clone()));
                     }
                 }
@@ -630,17 +673,33 @@ impl<L: Link> Host<L> {
         events
     }
 
-    /// Has a computer player take over side `player` from the person going
-    /// by `person`, named after them unlike anyone else in the match.
-    fn take_over(&self, player: u32, person: &str) -> Action {
-        let name = format!("{person}{}", self.naming.taken_over);
+    /// Has a new computer player take over side `player`, which went by
+    /// `stood`, named after it unlike anyone else in the match.
+    fn take_over(&mut self, player: u32, stood: &str) -> Action {
+        let name = format!("{stood}{}", self.naming.taken_over);
         let name = crate::unique(&name, &self.naming.numbered, |n| self.named(n));
-        Action::TakeOver { player, name }
+        let (computer, by) = (self.taker)(&self.setup, player);
+        self.computers.insert(player, computer);
+        self.profile_names.remove(&player);
+        let by = by.unwrap_or_else(|| name.clone());
+        Action::TakeOver { player, name, by }
+    }
+
+    /// What side `player` goes by: its person's or computer player's name,
+    /// as the match has it, or `person`'s where the match has yet to name
+    /// it. A computer player is named after its profile by the machine it
+    /// thinks on, which alone knows it.
+    fn side_name(&self, player: u32, person: &str) -> String {
+        let sides = &self.world.sides;
+        let named = (sides.names.get(&player))
+            .or_else(|| sides.computers.get(&player))
+            .or_else(|| self.naming.computers.get(&player));
+        named.map_or_else(|| person.to_string(), Clone::clone)
     }
 
     /// Whether anyone in the match goes by `name`: a person, a computer
-    /// player that took a side over or is to, or one playing a side
-    /// nobody else does.
+    /// player that took a side over or is to, one named after its profile
+    /// or to be, or one playing a side nobody else does.
     fn named(&self, name: &str) -> bool {
         let sides = &self.world.sides;
         let to_take_over = |a: &Action| matches!(a, Action::TakeOver { name: n, .. } if n == name);
@@ -650,6 +709,7 @@ impl<L: Link> Host<L> {
         self.client_named(name)
             || sides.computers.values().any(|c| c == name)
             || self.taking_over.iter().any(to_take_over)
+            || self.profile_names.values().any(|c| c == name)
             || (self.naming.computers.iter()).any(|(p, c)| c == name && !played(p))
     }
 
@@ -667,6 +727,7 @@ impl<L: Link> Host<L> {
     /// The orders of the computer player of each side still in the match
     /// that no client plays, making one for a side as it comes to need it.
     /// A side whose person leaves is the computer's from the turn after.
+    /// One made by a profile chosen at launch is first named after it.
     fn think(&mut self) -> Vec<Action> {
         let theirs: Vec<u32> = (tgmap::sides(&self.world.sides.players))
             .map(|p| p.id)
@@ -674,14 +735,19 @@ impl<L: Link> Host<L> {
             .collect();
         let (setup, world, make) = (&self.setup, &self.world, &self.computer);
         self.computers.retain(|p, _| theirs.contains(p));
+        let mut named = Vec::new();
         for player in theirs {
-            (self.computers.entry(player)).or_insert_with(|| make(setup, world, player));
+            if let Entry::Vacant(made) = self.computers.entry(player) {
+                made.insert(make(setup, world, player));
+                let name = self.profile_names.remove(&player);
+                named.extend(name.map(|name| Action::NameComputer { player, name }));
+            }
         }
         let orders = self.computers.iter_mut().flat_map(|(&player, computer)| {
             let order = move |command| Action::Order { player, command };
             computer.think(world, player).into_iter().map(order)
         });
-        orders.collect()
+        named.into_iter().chain(orders).collect()
     }
 
     /// Tells each client that's asked for more since it was last told
@@ -2252,12 +2318,14 @@ mod tests {
         }
     }
 
-    /// Has `host` play the sides nobody else does by [`Marcher`]s, giving
-    /// what they note.
+    /// Has `host` play the sides nobody else does, and take sides over, by
+    /// [`Marcher`]s, giving what they note.
     fn marching(host: &mut Host<Local>) -> Thought {
         let thought = Thought::default();
         let noted = std::sync::Arc::clone(&thought);
         host.computers_by(move |_, _, _| Box::new(Marcher(noted.clone())));
+        let noted = std::sync::Arc::clone(&thought);
+        host.takers_by(move |_, _| (Box::new(Marcher(noted.clone())), Some("Marcher AI".into())));
         thought
     }
 
@@ -2349,6 +2417,112 @@ mod tests {
         assert_eq!(*thought.lock().unwrap(), [2, 3, 4]);
     }
 
+    /// The takeovers `host` has had every copy of the match carry out.
+    fn takeovers(host: &Host<Local>) -> Vec<(u32, String, String)> {
+        let given = host.schedule().record().given.iter();
+        let taken_over = given.filter_map(|g| match &g.action {
+            Action::TakeOver { player, name, by } => Some((*player, name.clone(), by.clone())),
+            _ => None,
+        });
+        taken_over.collect()
+    }
+
+    #[test]
+    fn every_side_of_a_machine_that_leaves_is_taken_over_in_the_map_s_order() {
+        let mut host = Host::new(setup(), fresh());
+        let naming = Naming {
+            computers: [(2, "Kesselring AI".to_string())].into(),
+            ..Naming::default()
+        };
+        host.name_by(naming);
+        marching(&mut host);
+        let mut clients = vec![
+            running(&mut host, &[1], &[]),
+            running(&mut host, &[3], &[2]),
+        ];
+        play(&mut host, &mut clients, 1);
+        clients[1].leave().unwrap();
+        host.turn();
+        clients.remove(1);
+        play(&mut host, &mut clients, 1);
+        // Each named after what it went by, the computer player's side
+        // after its profile.
+        let taken_over = |p, name: &str| (p, name.to_string(), "Marcher AI".to_string());
+        assert_eq!(
+            takeovers(&host),
+            [
+                taken_over(2, "Kesselring AI AI"),
+                taken_over(3, "Bob (1) AI")
+            ]
+        );
+        assert_eq!(clients[0].world().hash(), host.world().hash());
+    }
+
+    #[test]
+    fn computer_players_are_named_after_their_profiles_by_the_machine_they_think_on() {
+        let mut host = Host::new(setup(), fresh());
+        marching(&mut host);
+        host.profile_names.insert(4, "Kesselring AI".into());
+        let (ours, mut theirs) = pair();
+        host.admit_running(ours, vec![3], vec![2], "Kesselring")
+            .unwrap();
+        welcome(&mut theirs).unwrap().unwrap();
+        let mut clients = vec![
+            running(&mut host, &[1], &[]),
+            Copy {
+                client: Client::new(theirs),
+                world: fresh(),
+            },
+        ];
+        // The guest names the one its machine runs, as it draws its own.
+        let name = "Zhukov AI".to_string();
+        clients[1]
+            .ask(Action::NameComputer { player: 2, name })
+            .unwrap();
+        play(&mut host, &mut clients, 1);
+        let named = |host: &Host<Local>, p| host.world().sides.computers.get(&p).cloned();
+        assert_eq!(named(&host, 4).as_deref(), Some("Kesselring AI"));
+        assert_eq!(named(&host, 2).as_deref(), Some("Zhukov AI"));
+        // Another's computer player isn't the first's to name.
+        let name = "Konev AI".to_string();
+        clients[0]
+            .ask(Action::NameComputer { player: 2, name })
+            .unwrap();
+        clients[1].leave().unwrap();
+        host.turn();
+        clients.remove(1);
+        play(&mut host, &mut clients, 1);
+        // Named after what each went by, and unlike the host's own.
+        let taken_over = |p, name: &str| (p, name.to_string(), "Marcher AI".to_string());
+        assert_eq!(
+            takeovers(&host),
+            [
+                taken_over(2, "Zhukov AI AI"),
+                taken_over(3, "Kesselring AI (1)")
+            ]
+        );
+        assert_eq!(named(&host, 4).as_deref(), Some("Kesselring AI"));
+    }
+
+    #[test]
+    fn a_side_that_has_lost_is_not_taken_over() {
+        let mut host = Host::new(setup(), fresh());
+        marching(&mut host);
+        let mut clients = vec![
+            running(&mut host, &[1], &[]),
+            running(&mut host, &[3], &[2]),
+        ];
+        host.trust(1);
+        clients[0].ask(Action::Lose(2)).unwrap();
+        play(&mut host, &mut clients, 1);
+        clients[1].leave().unwrap();
+        host.turn();
+        clients.remove(1);
+        play(&mut host, &mut clients, 1);
+        let sides: Vec<u32> = takeovers(&host).into_iter().map(|(p, ..)| p).collect();
+        assert_eq!(sides, [3]);
+    }
+
     #[test]
     fn a_side_another_machine_runs_a_computer_player_for_is_taken() {
         let mut host = Host::new(setup(), fresh());
@@ -2426,6 +2600,8 @@ mod tests {
         let taken_over = Action::TakeOver {
             player: 2,
             name: "Player 2 AI".into(),
+            // With no profile, it goes by its own name.
+            by: "Player 2 AI".into(),
         };
         let given = host.schedule().record().given.iter().map(|g| &g.action);
         let theirs: Vec<_> = given
@@ -2497,6 +2673,8 @@ mod tests {
         let taken_over = Action::TakeOver {
             player: 2,
             name: "Player 2 (1) AI".into(),
+            // With no profile, it goes by its own name.
+            by: "Player 2 (1) AI".into(),
         };
         assert!(given.clone().any(|a| *a == taken_over));
     }

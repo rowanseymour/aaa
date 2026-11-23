@@ -159,12 +159,12 @@ pub enum Notice {
     Victorious { player: u32 },
     /// It's resigned on its own, and lost the match.
     Resigned { player: u32 },
-    /// A computer player going by `computer` has taken it over from the
-    /// person going by `person`: everyone's to tell.
+    /// A new computer player going by `computer`, playing by the profile
+    /// called `by`, has taken it over: everyone's to tell.
     TakenOver {
         player: u32,
-        person: String,
         computer: String,
+        by: String,
     },
     /// Whoever plays it has voted for its team, at this index into
     /// [`Sides::teams`](crate::Sides::teams), to resign, which others

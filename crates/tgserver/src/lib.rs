@@ -305,8 +305,12 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     // thinks on needs its profile.
     let sais = game.sais();
     let picks = (&chosen, &factions, sais.as_slice());
+    // A side taken over mid-match is given one as though left to chance.
+    let every: BTreeMap<u32, Option<Id>> =
+        tgmap::sides(&map.players).map(|p| (p.id, None)).collect();
+    let taking_over = computers(&map.players, &every, picks, fresh_seed());
     let computers = computers(&map.players, &computer_sides, picks, fresh_seed());
-    let profiles = Profiles::new(game, &computers, &sais);
+    let profiles = Profiles::new(game, &computers, &taking_over, &sais);
     Ok(Started {
         map,
         raising,

@@ -47,13 +47,19 @@ pub enum Action {
     },
     /// Has side `player` go by the name of the person playing it.
     Name { player: u32, name: String },
+    /// Has side `player`'s computer player go by `name`, its profile's.
+    NameComputer { player: u32, name: String },
     /// Tells everyone what came of someone asking to pause or unpause.
     Pausing(Pausing),
     /// Has the person playing a side resign it, as [`World::resign`].
     Resign(u32),
-    /// Has a computer player going by `name` take a side over from the
-    /// person playing it, as [`World::take_over`].
-    TakeOver { player: u32, name: String },
+    /// Has a new computer player going by `name`, playing by the profile
+    /// called `by`, take a side over, as [`World::take_over`].
+    TakeOver {
+        player: u32,
+        name: String,
+        by: String,
+    },
 }
 
 /// What came of a person asking to pause or unpause a match played
@@ -134,9 +140,13 @@ impl Action {
                 world.sides.names.insert(player, name);
             }
             Action::Name { .. } => {}
+            Action::NameComputer { player, name } if world.sides.player(player).is_some() => {
+                world.sides.computers.insert(player, name);
+            }
+            Action::NameComputer { .. } => {}
             Action::Pausing(pausing) => world.notices.push(crate::Notice::Pausing(pausing)),
             Action::Resign(player) => world.resign(player),
-            Action::TakeOver { player, name } => world.take_over(player, name),
+            Action::TakeOver { player, name, by } => world.take_over(player, name, by),
         }
         Ok(())
     }
@@ -509,6 +519,22 @@ mod tests {
         });
         s.carry_out(&mut w);
         assert_eq!(w.sides.names, [(player, "Bob".to_string())].into());
+    }
+
+    #[test]
+    fn a_computer_player_goes_by_the_name_it_is_given_not_a_person_s() {
+        let (mut w, mut s) = (fresh(), Schedule::default());
+        let player = w.sides.players[0].id;
+        for player in [player, 99] {
+            let name = "Kesselring AI".into();
+            s.act(Action::NameComputer { player, name });
+        }
+        s.carry_out(&mut w);
+        let named = [(player, "Kesselring AI".to_string())].into();
+        assert_eq!(
+            (&w.sides.computers, w.sides.names.is_empty()),
+            (&named, true)
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! the host. The host is in the same program, with a copy of its own, or
 //! elsewhere, when the game has joined its match.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use bevy::prelude::*;
@@ -327,7 +328,10 @@ impl Orders {
     pub(crate) fn allowed(&self, action: &Action) -> bool {
         let allowed = |players| tgserver::allows(players, action);
         let computer = |player| self.computers.sides.contains(player);
-        let computer = matches!(action, Action::Order { player, .. } if computer(player));
+        let computer = match action {
+            Action::Order { player, .. } | Action::NameComputer { player, .. } => computer(player),
+            _ => false,
+        };
         computer || self.players().is_none_or(allowed)
     }
 
@@ -480,6 +484,7 @@ impl Orders {
     /// Has the computer players the game runs think about `world`, the
     /// game's copy of the match, as a host does for its own: for sides
     /// still in it, while it goes on, asking the host for their orders.
+    /// One made by a profile is first named after it, for every machine.
     fn think(&mut self, world: &World) {
         let held = self.status().is_some_and(|s| s.held);
         if self.computers.sides.is_empty() || held || self.paused() || self.waiting() {
@@ -493,8 +498,15 @@ impl Orders {
         let playing = |p: &u32| world.outcome(*p) == Outcome::Playing;
         let mut orders = Vec::new();
         for &player in sides.iter().filter(|p| playing(p)) {
-            let make = || profiles.player(&self.setup, world, player);
-            let computer = players.entry(player).or_insert_with(make);
+            let computer = match players.entry(player) {
+                Entry::Occupied(made) => made.into_mut(),
+                Entry::Vacant(made) => {
+                    if let Some(name) = profiles.names().get(&player).cloned() {
+                        orders.push(Action::NameComputer { player, name });
+                    }
+                    made.insert(profiles.player(&self.setup, world, player))
+                }
+            };
             let order = |command| Action::Order { player, command };
             orders.extend(computer.think(world, player).into_iter().map(order));
         }

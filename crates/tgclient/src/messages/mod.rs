@@ -267,21 +267,21 @@ mod tests {
     }
 
     #[test]
-    fn a_side_taken_over_names_the_person_then_the_computer_player() {
+    fn a_side_taken_over_names_the_computer_player_then_its_profile() {
         let mut sim = allied_sides();
         sim.sides.computers.insert(1, "Bob AI".into());
         let (look, leaders) = (look(&[]), Leaders::default());
         let taken_over = Notice::TakenOver {
             player: 1,
-            person: "Bob".into(),
             computer: "Bob AI".into(),
+            by: "Kesselring AI".into(),
         };
         let Some(Told::Words(kind, words)) = told(&sim, Some(3), &leaders, &look, taken_over)
         else {
             panic!("a takeover is a line of its own");
         };
         assert_eq!(kind, "GENERIC_EVENT");
-        assert_eq!(words.text, "Bob taken over by Bob AI");
+        assert_eq!(words.text, "Bob AI taken over by Kesselring AI");
         // The side now goes by the computer player's name.
         let side = &sim.sides.players[0];
         assert_eq!(leaders.owner(side, &sim.sides, &look.map), "Bob AI");
