@@ -20,3 +20,15 @@
 		font = /Fonts/TrueType/BigShouldersText-600.ttf
 	}
 }
+
+;; The interface over the map's, where text is small: compact like the plain
+;; face, but drawn heavier and with figures and slashes that stay readable.
+[Font]
+{
+	ids = modern_hud
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/BarlowSemiCondensed-600.ttf
+	}
+}

@@ -1,5 +1,6 @@
-;; The icons this project's own interface draws each resource's cell of its
-;; resource bar with, in colour so each is told apart at a glance.
+;; The icons this project's own interface draws each resource with, on its
+;; resource bar and object display, in colour so each is told apart at a
+;; glance. A limit's room and what's taken of it share an icon.
 
 [ResourceIcon]
 {
@@ -21,8 +22,20 @@
 
 [ResourceIcon]
 {
+	resource_ids = unit_limit_provided
+	texture = units.svg
+}
+
+[ResourceIcon]
+{
 	resource_ids = unit_limit_consumed
 	texture = units.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = building_limit_provided
+	texture = buildings.svg
 }
 
 [ResourceIcon]

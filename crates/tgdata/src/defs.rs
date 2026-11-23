@@ -1229,8 +1229,8 @@ pub struct Emblem {
     pub texture: Option<String>,
 }
 
-/// A resource's icon, as this project's own interface draws its cell of
-/// the resource bar.
+/// A resource's icon, as this project's own interface draws the resource
+/// in place of its glyph.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResourceIcon {
     pub resource_ids: Option<Id>,

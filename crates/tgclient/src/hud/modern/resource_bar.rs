@@ -50,14 +50,7 @@ pub fn spawn(
         "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
     );
     // Our own icons where the data has them, else the game's glyphs.
-    let mut icons = game.resource_icons();
-    icons.retain(|resource, path| {
-        let there = game.exists(path);
-        if !there {
-            warn!("{resource}'s icon: no {path} in the data");
-        }
-        there
-    });
+    let icons = crate::ui::resource_icons(game);
     let glyphs = crate::ui::glyphs(game, &mut images, &mut cache);
     let stockpile = stockpile(game);
     let cells = game.economy_bar();

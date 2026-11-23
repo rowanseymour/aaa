@@ -1,5 +1,5 @@
 ;; K2's faces, in place of the shared ones: its own for the logo's lettering
-;; and headings, the shared plain face for the rest.
+;; and headings, and the shared plain face for its menus' text.
 
 [Font]
 {
