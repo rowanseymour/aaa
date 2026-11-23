@@ -788,6 +788,22 @@ mod tests {
     }
 
     #[test]
+    fn a_joined_game_makes_the_computer_players_it_runs_by_their_profiles() {
+        let mut host = Host::new(Setup::default(), super::testing::fresh());
+        let (ours, mut theirs) = tgserver::pair();
+        host.admit_running(ours, vec![1], vec![2], "Bob").unwrap();
+        let welcome = tgserver::welcome(&mut theirs).unwrap().unwrap();
+        let mut orders = Orders::joined(Box::new(theirs), welcome, "host".into());
+        orders.computers_from(tgserver::Profiles::default());
+        let mut world = super::testing::fresh();
+        host.turn();
+        orders.step(&mut world);
+        // One for the side its machine runs, and none for its person's.
+        let made: Vec<_> = orders.computers.players.keys().copied().collect();
+        assert_eq!(made, [2]);
+    }
+
+    #[test]
     fn a_joined_match_plays_the_ticks_its_host_has_sent_as_they_fall_due() {
         let (mut host, mut orders, mut world) = joined(&[1]);
         // The host may wait to hear the game has the match set up.

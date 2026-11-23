@@ -78,8 +78,12 @@ const SAID_KEPT: usize = 64;
 
 /// How long the host goes unheard from before it's taken as lost: longer
 /// than it takes the host to find a client lost, so that it's the host
-/// that holds the match for one cut off rather than the client giving up.
-const UNHEARD: Duration = Duration::from_secs(3);
+/// that holds the match for one cut off rather than the client giving up,
+/// and longer than a slow tick of the host's, through which it says
+/// nothing.
+/// A host whose link is cut is found lost by the link itself, so this is
+/// for one still connected that has stopped playing.
+pub(crate) const UNHEARD: Duration = Duration::from_secs(30);
 
 /// The longest the host goes without hearing from a client, so that it
 /// knows the client is there.
@@ -141,6 +145,10 @@ pub struct Client<L> {
     heard_at: Instant,
     sent: Instant,
     played: u64,
+    /// When its copy last finished playing a step. A host in the same
+    /// program can't say anything while its copy plays, however long a
+    /// step takes, so the host goes unheard only from then.
+    played_at: Instant,
     status: Option<Status>,
 }
 
@@ -155,6 +163,7 @@ impl<L: Link> Client<L> {
             heard_at: now,
             sent: now,
             played: 0,
+            played_at: now,
             status: None,
             link,
             heard: VecDeque::new(),
@@ -176,7 +185,7 @@ impl<L: Link> Client<L> {
     /// Has it tell the time by `clock`.
     pub fn clock(&mut self, clock: Clock) {
         let now = clock.now();
-        (self.heard_at, self.sent) = (now, now);
+        (self.heard_at, self.sent, self.played_at) = (now, now, now);
         self.clock = clock;
     }
 
@@ -317,7 +326,7 @@ impl<L: Link> Client<L> {
             }
             match heard {
                 Ok(None) => {
-                    self.lost |= now >= self.heard_at + UNHEARD;
+                    self.lost |= now >= self.heard_at.max(self.played_at) + UNHEARD;
                     break;
                 }
                 // Nothing of a game being set up means anything once it's launched.
@@ -393,6 +402,7 @@ impl<L: Link> Client<L> {
                         }
                         false => self.schedule.carry_out(world),
                     });
+                    self.played_at = self.clock.now();
                     let checks = &self.schedule.record().checks;
                     for &(step, hash) in &checks[self.checked..] {
                         // A host that's gone is found so once what it

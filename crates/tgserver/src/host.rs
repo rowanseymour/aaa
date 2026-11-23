@@ -1795,14 +1795,97 @@ mod tests {
         let clock = Clock::stopped();
         let (mut host, mut clients) = hosted_by(&clock, &[&[1]]);
         play(&mut host, &mut clients, 2);
-        clock.pass(Duration::from_millis(2900));
+        let almost = crate::client::UNHEARD - Duration::from_millis(100);
+        clock.pass(almost);
         assert_eq!(clients[0].advance(usize::MAX), Ok(()));
         // A host with nothing to say still says so.
         host.turn();
-        clock.pass(Duration::from_millis(2900));
+        clock.pass(almost);
         assert_eq!(clients[0].advance(usize::MAX), Ok(()));
-        clock.pass(Duration::from_millis(3000));
+        clock.pass(crate::client::UNHEARD);
         assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
+    }
+
+    #[test]
+    fn a_client_waits_out_a_host_silent_through_a_slow_tick() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2]]);
+        play(&mut host, &mut clients, 2);
+        // The host says nothing while it plays a slow tick, and its own
+        // copy then plays that tick as slowly before the host turns again,
+        // while the clients keep looking for what it says.
+        for _ in 0..3 {
+            host.turn();
+            for _ in 0..10 {
+                for client in &mut clients {
+                    assert_eq!(client.advance(usize::MAX), Ok(()));
+                }
+                clock.pass(Duration::from_secs(1));
+            }
+        }
+        assert_eq!(clients[0].world().ticks, host.world().ticks);
+        // A host that never turns again is gone, once it's gone unheard
+        // for that long since it last turned, ten seconds ago.
+        let since = Duration::from_secs(10);
+        clock.pass(crate::client::UNHEARD - since - Duration::from_millis(100));
+        assert_eq!(clients[0].advance(usize::MAX), Ok(()));
+        clock.pass(Duration::from_millis(100));
+        assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
+    }
+
+    /// A link on which, once, time passes after the last of what's come
+    /// has been taken and before the client plays it: as long as playing
+    /// it would take.
+    struct Slow {
+        link: Local,
+        clock: Clock,
+        passing: Option<Duration>,
+    }
+
+    impl Link for Slow {
+        fn send(&mut self, message: Vec<u8>) -> Result<(), crate::Lost> {
+            self.link.send(message)
+        }
+
+        fn receive(&mut self) -> Result<Option<Vec<u8>>, crate::Lost> {
+            let received = self.link.receive();
+            if let Ok(None) = received
+                && let Some(time) = self.passing.take()
+            {
+                self.clock.pass(time);
+            }
+            received
+        }
+    }
+
+    #[test]
+    fn a_client_slow_to_play_a_step_does_not_find_its_host_lost() {
+        let clock = Clock::stopped();
+        let mut host = Host::new(setup(), fresh());
+        host.clock(clock.clone());
+        let (ours, mut theirs) = pair();
+        host.admit(ours, vec![1], "Player 1").unwrap();
+        welcome(&mut theirs).unwrap().unwrap();
+        let link = Slow {
+            link: theirs,
+            clock: clock.clone(),
+            passing: None,
+        };
+        let mut client = Client::new(link);
+        client.clock(clock.clone());
+        let mut world = fresh();
+        host.turn();
+        assert_eq!(client.advance(&mut world, usize::MAX), Ok(()));
+        // The host, here, says nothing more until the client has played
+        // what it said, which takes longer than the host may go unheard.
+        host.turn();
+        let unheard = crate::client::UNHEARD;
+        client.link().passing = Some(unheard + Duration::from_secs(5));
+        assert_eq!(client.advance(&mut world, usize::MAX), Ok(()));
+        assert_eq!(world.ticks, 2);
+        // Gone for that long once the client has played, it's lost.
+        clock.pass(unheard);
+        assert_eq!(client.advance(&mut world, usize::MAX), Err(crate::Lost));
     }
 
     #[test]
