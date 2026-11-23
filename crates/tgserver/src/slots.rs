@@ -22,6 +22,14 @@ pub struct Slots {
 }
 
 impl Slots {
+    /// Every one of `sides` left open, with nothing chosen.
+    pub fn left_open(sides: &[u32]) -> Slots {
+        Slots {
+            open: sides.iter().copied().collect(),
+            ..Slots::default()
+        }
+    }
+
     /// Whether nobody holds side `player`.
     pub fn is_open(&self, player: u32) -> bool {
         self.open.contains(&player)
