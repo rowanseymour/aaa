@@ -901,6 +901,7 @@ mod tests {
             team: None,
             independent: false,
             playable: true,
+            required: false,
             default_defeat: true,
             outcome: Default::default(),
             won_by_cities: false,

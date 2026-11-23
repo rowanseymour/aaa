@@ -14,6 +14,7 @@ use crate::client::{ask_in, first_answer};
 use crate::host::{LONGEST_HEARD, greet, joining, worth_saying};
 use crate::presets::Preset;
 use crate::protocol::{Gone, Said, ToClient, ToHost, Welcome, decode, encode};
+use crate::slots::Slots;
 use crate::{Clock, Host, Link, Lost, Naming, NotJoined, Refusal, Setup, ping, refuse};
 
 /// The seconds a launch counts down, unless the game's data says
@@ -43,14 +44,8 @@ pub struct Staging {
     pub preset: Preset,
     /// The world rules changed from their defaults.
     pub rules: RuleValues,
-    /// The nation, faction and handicap chosen for each side, by player
-    /// id, where one is.
-    pub nations: BTreeMap<u32, Id>,
-    pub factions: BTreeMap<u32, Id>,
-    pub handicaps: BTreeMap<u32, Id>,
-    /// The profile chosen for the computer player of each side nobody
-    /// takes, by player id; one at random where none is.
-    pub computers: BTreeMap<u32, Id>,
+    /// What's chosen for each side.
+    pub slots: Slots,
     /// Everyone in the game, in the order they came in.
     pub guests: Vec<Guest>,
     /// The seconds left before the game launches, while it counts down.
@@ -95,20 +90,6 @@ impl Staging {
         self.guests.iter_mut().find(|g| g.client == client)
     }
 
-    /// Puts side `player` back to unchosen, as nobody now holds it.
-    fn free(&mut self, player: u32) {
-        self.nations.remove(&player);
-        self.factions.remove(&player);
-        self.handicaps.remove(&player);
-    }
-
-    /// Clears what side `player` had as the computer's, as a person takes
-    /// it: people have no handicap or profile.
-    fn take(&mut self, player: u32) {
-        self.handicaps.remove(&player);
-        self.computers.remove(&player);
-    }
-
     /// Whether someone takes side `player`.
     pub fn taken(&self, player: u32) -> bool {
         self.guests.iter().any(|g| g.side == Some(player))
@@ -151,7 +132,7 @@ impl Staging {
             Choice::Kick(client) => guest.host && self.guest(*client).is_some_and(|g| !g.host),
             Choice::Nation(player, _) | Choice::Faction(player, _) => side(player),
             // People have no handicap or profile.
-            Choice::Handicap(player, _) | Choice::Computer(player, _) => {
+            Choice::Handicap(player, _) | Choice::Computer(player, _) | Choice::Open(player) => {
                 guest.host && !self.taken(*player)
             }
             Choice::Side(None) => guest.side.is_some() && self.observers,
@@ -178,6 +159,7 @@ impl Staging {
             Some(id) => _ = map.insert(player, id),
             None => _ = map.remove(&player),
         };
+        let slots = &mut self.slots;
         match choice {
             Choice::Map {
                 map,
@@ -190,10 +172,7 @@ impl Staging {
                 // What was chosen for the old map's sides means nothing on
                 // the new one's, and each machine has yet to say whether it
                 // has the new one.
-                self.nations.clear();
-                self.factions.clear();
-                self.handicaps.clear();
-                self.computers.clear();
+                *slots = Slots::default();
                 for guest in &mut self.guests {
                     guest.holds = guest.host;
                 }
@@ -209,23 +188,20 @@ impl Staging {
                 }
             }
             Choice::Nation(player, id) => {
-                chosen(&mut self.nations, player, id);
+                chosen(&mut slots.nations, player, id);
                 // A faction is one of its nation's.
-                self.factions.remove(&player);
+                slots.factions.remove(&player);
             }
-            Choice::Faction(player, id) => chosen(&mut self.factions, player, id),
-            Choice::Handicap(player, id) => chosen(&mut self.handicaps, player, id),
-            Choice::Computer(player, id) => chosen(&mut self.computers, player, id),
+            Choice::Faction(player, id) => chosen(&mut slots.factions, player, id),
+            Choice::Handicap(player, id) => chosen(&mut slots.handicaps, player, id),
+            Choice::Computer(player, id) => slots.computer(player, id),
+            Choice::Open(player) => slots.empty(player),
             Choice::Side(side) => {
                 let Some(guest) = self.guest_mut(client) else {
                     return;
                 };
-                if let Some(left) = std::mem::replace(&mut guest.side, side) {
-                    self.free(left);
-                }
-                if let Some(side) = side {
-                    self.take(side);
-                }
+                let left = std::mem::replace(&mut guest.side, side);
+                self.slots.seat(left, side);
             }
             Choice::Ready(ready) => {
                 if let Some(guest) = self.guest_mut(client) {
@@ -266,9 +242,11 @@ pub enum Choice {
     Nation(u32, Option<Id>),
     Faction(u32, Option<Id>),
     Handicap(u32, Option<Id>),
-    /// The profile of the computer player of a side nobody takes, by player
-    /// id; none for one at random.
+    /// Put a computer player on a side nobody takes, by player id, playing
+    /// by a profile, or with none, one at random.
     Computer(u32, Option<Id>),
+    /// Leave a side nobody takes for nobody, by player id.
+    Open(u32),
     /// Take a side, by player id, or none to watch.
     Side(Option<u32>),
     Ready(bool),
@@ -392,8 +370,8 @@ impl<L: Link> Lobby<L> {
         // Where nobody may watch, they take the first side free.
         let free = self.staging.sides.iter().find(|&&p| !self.staging.taken(p));
         let side = free.copied().filter(|_| !self.staging.observers && !host);
-        if let Some(side) = side {
-            self.staging.take(side);
+        if side.is_some() {
+            self.staging.slots.seat(None, side);
         }
         self.staging.guests.push(Guest {
             client,
@@ -582,7 +560,7 @@ impl<L: Link> Lobby<L> {
         let (_, mut link) = self.links.remove(at);
         let guest = self.staging.guests.remove(at);
         if let Some(side) = guest.side {
-            self.staging.free(side);
+            self.staging.slots.empty(side);
         }
         let left = ToClient::Left(Gone {
             client,
@@ -897,17 +875,17 @@ mod tests {
         let easy = Choice::Handicap(1, Some(Id::from("easy")));
         host.send(encode(&ToHost::Choose(easy))).unwrap();
         lobby.turn();
-        assert_eq!(lobby.staging().handicaps.len(), 1);
+        assert_eq!(lobby.staging().slots.handicaps.len(), 1);
         let mut bob = ask(&mut lobby, "Bob", "").unwrap();
         assert_eq!(lobby.staging().guest(2).unwrap().side, Some(1));
-        assert!(lobby.staging().handicaps.is_empty());
+        assert!(lobby.staging().slots.handicaps.is_empty());
         bob.choose(Choice::Nation(1, Some(Id::from("usa"))))
             .unwrap();
         lobby.turn();
-        assert_eq!(lobby.staging().nations.len(), 1);
+        assert_eq!(lobby.staging().slots.nations.len(), 1);
         bob.leave();
         lobby.turn();
-        assert!(lobby.staging().nations.is_empty());
+        assert!(lobby.staging().slots.nations.is_empty());
     }
 
     #[test]
@@ -934,7 +912,7 @@ mod tests {
         assert_eq!(staging.guest(2).unwrap().side, Some(2));
         assert_eq!(staging.guest(1).unwrap().side, None);
         assert_eq!(staging.preset, Preset::Custom);
-        assert_eq!(staging.nations, [(2, Id::from("usa"))].into());
+        assert_eq!(staging.slots.nations, [(2, Id::from("usa"))].into());
         let refused = |choice| Told::Refused {
             choice,
             counting: false,
@@ -951,17 +929,27 @@ mod tests {
             .unwrap();
         bob.choose(Choice::Computer(1, None)).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
-        assert_eq!(bob.staging().nations.len(), 2);
-        assert_eq!(bob.staging().computers.len(), 1);
-        assert_eq!(bob.staging().nations.get(&1), Some(&Id::from("japan")));
-        // Taking a side clears its handicap and profile; leaving one clears
-        // what was chosen for it.
+        assert_eq!(bob.staging().slots.nations.len(), 2);
+        assert_eq!(bob.staging().slots.computers.len(), 1);
+        assert_eq!(
+            bob.staging().slots.nations.get(&1),
+            Some(&Id::from("japan"))
+        );
+        // Taking a computer player's side trades places with it, each
+        // keeping their own nation, and it its handicap and profile.
         bob.choose(Choice::Side(Some(1))).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let staging = bob.staging();
-        assert!(staging.handicaps.is_empty());
-        assert!(staging.computers.is_empty());
-        assert_eq!(staging.nations, [(1, Id::from("japan"))].into());
+        assert_eq!(staging.slots.handicaps, [(2, Id::from("easy"))].into());
+        assert_eq!(staging.slots.computers, [(2, Id::from("konev_sai"))].into());
+        let nations = [(1, Id::from("usa")), (2, Id::from("japan"))];
+        assert_eq!(staging.slots.nations, nations.into());
+        // Left for nobody, a side has nothing chosen.
+        host.choose(Choice::Open(2)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        let staging = bob.staging();
+        assert_eq!(staging.slots.nations, [(1, Id::from("usa"))].into());
+        assert!(staging.slots.is_open(2) && staging.slots.computers.is_empty());
         // A new map's sides are chosen afresh.
         let map = Choice::Map {
             map: "hills".into(),
@@ -976,7 +964,7 @@ mod tests {
             (staging.map.as_str(), staging.guest(2).unwrap().side),
             ("hills", None)
         );
-        assert!(staging.nations.is_empty());
+        assert!(staging.slots.nations.is_empty());
         assert_eq!(staging.rules, night());
         // Changing only the rules keeps what's chosen for the sides.
         host.choose(Choice::Nation(2, Some(Id::from("usa"))))
@@ -986,7 +974,7 @@ mod tests {
         host.choose(Choice::Rules(dusk.clone())).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let staging = bob.staging();
-        assert_eq!(staging.nations, [(2, Id::from("usa"))].into());
+        assert_eq!(staging.slots.nations, [(2, Id::from("usa"))].into());
         assert_eq!(staging.rules, dusk);
     }
 

@@ -28,6 +28,9 @@ pub struct Player {
     pub independent: bool,
     /// A person may play it.
     pub playable: bool,
+    /// Whether it stays in a match nobody takes it in, a computer player
+    /// playing it.
+    pub required: bool,
     /// Whether having nothing left that keeps it in the match defeats it.
     pub default_defeat: bool,
     /// How the match stood for it when the map was saved.
@@ -159,6 +162,7 @@ pub(crate) fn players_and_teams(
                 .position(|t| t.head.id == k.team && k.team != 0),
             independent: k.independent != 0,
             playable: k.playable,
+            required: k.required,
             default_defeat: k.default_victory_condition.unwrap_or(true),
             outcome: match k.outcome {
                 1 => Outcome::Won,

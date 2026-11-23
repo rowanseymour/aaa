@@ -360,6 +360,7 @@ pub(crate) fn player(
         team,
         independent: team.is_none(),
         playable: team.is_some(),
+        required: false,
         default_defeat: true,
         outcome: Default::default(),
         won_by_cities: false,
