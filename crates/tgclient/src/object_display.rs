@@ -1431,6 +1431,8 @@ pub fn refresh(
     for (status, mut text) in &mut statuses {
         let ids = match *status {
             Status::Organization(r) => organization_state(sim, r),
+            // Blank for a building only remembered under the fog.
+            Status::Building(b) if !seen_now(sim, fog.as_deref(), Target::Building(b)) => None,
             Status::Building(b) => hq_state(sim, b).unwrap_or_else(|| building_state(sim, b)),
         };
         let words = ids.map(|i| looks.state(i)).unwrap_or_default();

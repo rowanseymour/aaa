@@ -14,7 +14,7 @@ use bevy::text::Font as Face;
 use bevy::ui_widgets::Button;
 use tgdata::Id;
 use tgdata::widgets::{RESTING, Rect, SCREEN, ViewElement, Widget};
-use tgsim::Target;
+use tgsim::{Relation, Target};
 
 use super::Pictures;
 use super::lettering::{Letters, Measured, PLAIN, Sliced};
@@ -649,19 +649,24 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         let Some(&(label, at)) = parts.get("Label") else {
             return;
         };
+        let owner_side = owner;
         let Some(owner) = self.shows.owner(owner) else {
             return;
         };
-        // The owner's gem, as tall and wide as the line, then its name.
+        // The owner's gem, then its name.
         let line = Node {
             align_items: AlignItems::Center,
-            column_gap: percent(100.0 * 4.0 / at.width().max(1.0)),
             ..self.painter.place(at)
         };
         let font = self.font("Owner");
         let mark = (owner.gem).map(|rgb| ui::side_mark(self.shows.gem, rgb, Node::default()));
-        let words = self.painter.letters.text(&font, &owner.name, owner.colour);
-        let gem_size = Vec2::splat(at.height());
+        let colour = owner_colour(self.shows.sim, self.shows.local, owner_side);
+        let words = self.painter.letters.text(&font, &owner.name, colour);
+        // As tall as the line and as wide as the glyph's own shape, as
+        // the game sets it in the text.
+        let gem = (self.shows.gem.0.as_ref()).and_then(|g| self.shows.images.get(g));
+        let aspect = gem.map_or(1.0, |g| g.size_f32().x / g.size_f32().y.max(1.0));
+        let gem_size = Vec2::new(at.height() * aspect, at.height());
         let s = &mut *self.s;
         s.commands_mut().entity(label).despawn();
         s.spawn((line, Pickable::IGNORE)).with_children(|line| {
@@ -1431,6 +1436,18 @@ impl Draw<'_, '_> {
                 None => self.fill(&parts, "StatusBar", Fill::Vacant),
             }
         }
+    }
+}
+
+/// The colour the owner line names `owner` in, by how the player stands
+/// towards it: the game's own, plain colours rather than the tints this
+/// project's interface marks sides with.
+fn owner_colour(sim: &tgsim::World, local: Option<u32>, owner: u32) -> Color {
+    match local.map(|p| sim.sides.relation(p, owner)) {
+        Some(Relation::Itself) => Color::srgb(0.0, 1.0, 0.0),
+        Some(Relation::Ally) => Color::srgb(0.0, 0.0, 1.0),
+        Some(Relation::Neutral) => Color::srgb(0.8, 0.8, 0.8),
+        _ => Color::srgb(1.0, 0.0, 0.0),
     }
 }
 
