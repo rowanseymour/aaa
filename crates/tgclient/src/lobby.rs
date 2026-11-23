@@ -1053,8 +1053,12 @@ fn show_slots(
                 (None, _) if !computer => Some("Player".into()),
                 // The host chooses for the computer's sides.
                 (None, _) if staging.is_none() || hosting => None,
-                (None, Some(sai)) => Some(sai.name.clone()),
-                (None, None) => Some("Random".into()),
+                // Elsewhere with whose machine it is, the host's.
+                (None, profile) => {
+                    let name = profile.map_or("Random", |s| s.name.as_str());
+                    let host = staging.and_then(|(s, _)| s.guests.iter().find(|g| g.host));
+                    Some(host.map_or(name.to_string(), |h| format!("{name} ({})", h.name)))
+                }
             };
             match who {
                 Some(who) => {
@@ -1075,7 +1079,10 @@ fn show_slots(
                 hint: Some(nation.map_or("Random".into(), |n| name_of(&all.0, n))),
                 ink: None,
             };
-            let listing = (id, side.as_str(), profile);
+            // Only the machine a computer player belongs to marks what its
+            // profile doesn't list.
+            let owned = profile.filter(|_| staging.is_none() || hosting);
+            let listing = (id, side.as_str(), owned);
             match &player.nation {
                 Some(_) => {
                     let fixed = commands
