@@ -1238,6 +1238,16 @@ pub struct ResourceIcon {
     pub texture: Option<String>,
 }
 
+/// An image this project's own interface draws in place of one the game's
+/// data names, such as a weapon's icon.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IconStandIn {
+    /// The game's image, from the archive root.
+    pub image: Option<String>,
+    /// Its image, beside the file unless it starts with `/`.
+    pub texture: Option<String>,
+}
+
 /// How this project's own interface looks for a game. Colours are sRGB,
 /// each part from 0 to 1.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]

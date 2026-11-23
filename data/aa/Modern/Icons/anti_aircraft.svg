@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- A plane, seen from below, in a gun's sights. -->
+  <g stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke">
+    <path fill="#8e959b" d="M8,29 L56,29 L56,35 L35,38 L29,38 L8,35 Z"/>
+    <rect fill="#8e959b" x="21" y="47" width="22" height="5" rx="1"/>
+    <path fill="#a9b0b6" d="M32,10 Q35.5,12 35.5,19 L35.5,47 L32,55 L28.5,47 L28.5,19 Q28.5,12 32,10 Z"/>
+  </g>
+  <g fill="none" stroke-linecap="round">
+    <g stroke="#1c1a10" stroke-width="7">
+      <circle cx="32" cy="32" r="25"/>
+      <path d="M32,2 L32,8 M32,56 L32,62 M2,32 L8,32 M56,32 L62,32"/>
+    </g>
+    <g stroke="#d8402e" stroke-width="3.5">
+      <circle cx="32" cy="32" r="25"/>
+      <path d="M32,2 L32,8 M32,56 L32,62 M2,32 L8,32 M56,32 L62,32"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- A round bomb with a lit fuse. -->
+  <g stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke">
+    <path fill="none" stroke-width="3" d="M43,15 Q46,6 53,8"/>
+    <rect fill="#5d6268" x="36" y="14" width="12" height="9" rx="1.5" transform="rotate(45 42 18.5)"/>
+    <circle fill="#34383c" cx="28" cy="38" r="21"/>
+  </g>
+  <path d="M43,15 Q46,6 53,8" fill="none" stroke="#c9a36a" stroke-width="2.5"/>
+  <ellipse fill="#fff" opacity=".22" cx="20" cy="29" rx="6" ry="9" transform="rotate(35 20 29)"/>
+  <polygon fill="#f7c844" stroke="#e0662a" stroke-width="1.5" stroke-linejoin="round" points="55.00,0.00 56.88,5.41 62.61,5.53 58.04,8.99 59.70,14.47 55.00,11.20 50.30,14.47 51.96,8.99 47.39,5.53 53.12,5.41"/>
+</svg>

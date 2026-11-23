@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- A pistol, pointing right. -->
+  <g stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke">
+    <path fill="#7a4a2a" d="M13,28 L32,28 L28,58 L9,58 Z"/>
+    <path fill="none" d="M30,32 Q30,44 42,41 L43,32"/>
+    <path fill="#5d6268" d="M8,14 L56,14 Q59,14 59,17 L59,28 L8,28 Z"/>
+    <rect fill="#4a4f55" x="10" y="28" width="34" height="5"/>
+  </g>
+  <rect fill="#8e959b" x="34" y="17" width="14" height="4" rx="1"/>
+  <path d="M13,18 L13,25 M17,18 L17,25 M21,18 L21,25" stroke="#1c1a10" stroke-width="1.6" opacity=".6"/>
+  <path d="M14,36 L27,36 M13,42 L26,42 M12,48 L25,48" stroke="#4e2e18" stroke-width="2" opacity=".7"/>
+  <path d="M35,32 L35,37" stroke="#1c1a10" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

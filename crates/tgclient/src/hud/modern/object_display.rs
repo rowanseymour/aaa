@@ -89,6 +89,12 @@ pub struct ObjectDisplay;
 #[derive(Component, Default)]
 pub struct EconomyLine(Vec<(Id, String)>);
 
+/// The icon our interface draws for the game's at `path`, if there's one
+/// to draw, so a missing one leaves no gap.
+fn modern_icon(game: &tgdata::GameData, path: &str) -> Option<String> {
+    Some(game.modern_icon(path)).filter(|p| game.exists(p))
+}
+
 /// The game's layout's place for a lone thing's defence: its icon, with
 /// the figure beside it.
 const DEFENSE: [f32; 4] = [196.0, 46.0, 16.0, 16.0];
@@ -601,7 +607,8 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// The shield and the defence of `target`, for one with a body, whose
     /// `template` gives the icon.
     fn defense(&mut self, target: Target, template: &Id) {
-        let icon = self.shows.defense_icon(template);
+        let icon =
+            (self.shows.defense_icon_path(template)).and_then(|p| modern_icon(self.shows.game, &p));
         let [left, top, width, height] = DEFENSE;
         self.commands.entity(self.root).with_children(|display| {
             let row = Node {
@@ -621,7 +628,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                 .spawn((row, Shield(target), Hint(String::new())))
                 .with_children(|row| {
                     if let Some(icon) = icon {
-                        row.spawn((shield, ImageNode::new(icon), Pickable::IGNORE));
+                        row.spawn((shield, Icon::new(icon), Pickable::IGNORE));
                     }
                     row.spawn(figure);
                 });
@@ -631,8 +638,10 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// `target`'s weapons, each its icon with its main damage by it, a row
     /// each.
     fn attacks(&mut self, target: Target) {
-        let icons = self.shows.weapon_icons(target, MOST_WEAPONS);
-        for (i, icon) in icons.into_iter().enumerate() {
+        let icons = self.shows.weapon_icon_paths(target, MOST_WEAPONS);
+        let game = self.shows.game;
+        let icons = icons.into_iter().map(|p| modern_icon(game, &p?));
+        for (i, icon) in icons.enumerate() {
             let [left, top, width, height] = WEAPON;
             let top = top + WEAPON_ROW * i as f32;
             self.commands.entity(self.root).with_children(|display| {
@@ -653,7 +662,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                     .spawn((row, Armed(target, i), Hint(String::new())))
                     .with_children(|row| {
                         if let Some(icon) = icon {
-                            row.spawn((icon_node, ImageNode::new(icon), Pickable::IGNORE));
+                            row.spawn((icon_node, Icon::new(icon), Pickable::IGNORE));
                         }
                         row.spawn(figure);
                     });
