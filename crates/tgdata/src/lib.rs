@@ -84,7 +84,7 @@ pub use morale::{
     CHASING, ENGAGED, EXHAUSTED, MoraleEffect, MoraleRules, REFORMING, RESTING, ROUTING, RoutRules,
     TARGETED,
 };
-pub use nations::{BannerDecal, Banners, Faction, FactionOperation, Handicap, Nation};
+pub use nations::{BannerDecal, Banners, Faction, FactionOperation, Handicap, Nation, Sai};
 pub use objectives::{ObjectiveLook, ObjectiveLooks};
 pub use organizations::{Formation, Layout, OrganizationComponent, Ranges};
 pub use properties::PropertyLook;

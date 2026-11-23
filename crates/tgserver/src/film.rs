@@ -18,7 +18,7 @@ const MAGIC: &[u8; 4] = b"film";
 /// The layout this build writes, and the only one it reads: a film's steps
 /// only play out the same under the rules it was recorded with, so there's
 /// nothing to gain from reading an older one.
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 
 /// A match as it was played.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -877,10 +877,14 @@ pub fn dropdown() -> impl Bundle {
             // As wide as its opener, or its longest choice where that's
             // wider.
             min_width: percent(100),
+            // A long list scrolls rather than running off the screen.
+            max_height: vh(50),
+            overflow: Overflow::scroll_y(),
             flex_direction: FlexDirection::Column,
             border: UiRect::all(px(1)),
             ..default()
         },
+        bevy::ui_widgets::ScrollArea,
         Edge::Border,
         Surface::Panel,
     )
@@ -1133,6 +1137,8 @@ pub struct Shown {
     pub icon: Option<Handle<Image>>,
     pub words: String,
     pub hint: Option<String>,
+    /// What the words are drawn in, where it isn't [`Ink::Body`].
+    pub ink: Option<Ink>,
 }
 
 impl From<String> for Shown {
@@ -1167,7 +1173,7 @@ impl Shown {
             // Unwrapped, so a list as wide as its longest choice is as tall
             // as its choices.
             let words = (
-                text(self.words, Font::Body),
+                label(self.words, Font::Body, self.ink.unwrap_or(Ink::Body)),
                 TextLayout::new(Justify::Left, LineBreak::NoWrap),
             );
             commands.spawn((ChildOf(cell), words));

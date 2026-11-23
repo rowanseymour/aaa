@@ -1,5 +1,5 @@
 //! The nations sides play as, their factions, organizations' banners, and the
-//! lobby's handicaps.
+//! lobby's handicaps and computer player profiles.
 
 use std::collections::{HashMap, HashSet};
 
@@ -70,6 +70,39 @@ pub struct Faction {
     /// The banner, by id, their side's organizations fly where their
     /// templates say to.
     pub banner: Option<Id>,
+}
+
+/// A computer player's profile, as the lobby offers it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sai {
+    /// E.g. `chuikov_sai`.
+    pub id: Id,
+    /// What the computer player is called, e.g. `Chuikov AI`.
+    pub name: String,
+    /// The nations it plays as, by id; any where it names none.
+    pub nations: Vec<Id>,
+    /// The factions it plays as, by id; any where it names none.
+    pub factions: Vec<Id>,
+    /// Whether the lobby offers it, as it doesn't those only scenarios use.
+    pub public: bool,
+    /// Whether it plays at the easiest difficulty.
+    pub easiest: bool,
+}
+
+/// The easiest difficulty a computer player profile can name.
+const EASIEST: &str = "sai_difficulty_level_easy";
+
+impl Sai {
+    /// Whether it plays as `nation` led by `faction`, a side without a
+    /// faction leaving that out.
+    pub fn fits(&self, nation: Option<&Id>, faction: Option<&Id>) -> bool {
+        let lists = |all: &[Id], id: &Id| all.is_empty() || all.contains(id);
+        let nation = match nation {
+            Some(n) => lists(&self.nations, n),
+            None => self.nations.is_empty(),
+        };
+        nation && faction.is_none_or(|g| lists(&self.factions, g))
+    }
 }
 
 /// A special operation as a faction gives it.
@@ -418,6 +451,31 @@ impl GameData {
             .collect()
     }
 
+    /// The computer player profiles, by name.
+    pub fn sais(&self) -> Vec<Sai> {
+        let strings = self.strings();
+        let files = self.parse_tgis(|n| n.starts_with("sai/"));
+        let ids =
+            |choices: Vec<defs::SaiChoice>| choices.into_iter().filter_map(|c| c.ids).collect();
+        let mut sais: Vec<Sai> = (scoped(&files).iter())
+            .flat_map(|f| f.read::<defs::Sai>("SAI"))
+            .filter_map(|s| {
+                let id = s.ids?;
+                Some(Sai {
+                    name: localized(&strings, s.name.as_deref()).unwrap_or_else(|| id.to_string()),
+                    id,
+                    nations: ids(s.nation),
+                    factions: ids(s.faction),
+                    public: s.public != Some(false),
+                    easiest: (s.difficulty_level.as_ref())
+                        .is_some_and(|d| d.as_str().eq_ignore_ascii_case(EASIEST)),
+                })
+            })
+            .collect();
+        sais.sort_by(|a, b| a.name.cmp(&b.name));
+        sais
+    }
+
     /// What the computer player of each faction is called, by the
     /// faction's id: the name of the profile made for them, rather than
     /// one a campaign plays as several of a nation's factions.
@@ -479,6 +537,47 @@ mod tests {
         let h: defs::Handicap = tgi::from_block(block).unwrap();
         let extra = crate::Amounts::from(h.extra_resources.as_ref().unwrap());
         assert_eq!(extra.get("money"), 300.0);
+    }
+
+    #[test]
+    fn a_computer_player_profile_names_its_nation_and_factions() {
+        let parsed = tgi::parse(
+            "[SAI]\n{\n\tIDS = chuikov_sai\n\tpublic = false\n\
+             \t[Nation]\n\tIDS = nation_rus\n\t[Faction]\n\tids = chuikov\n\t[Faction]\n\tids = konev\n}\n",
+        );
+        let block = parsed.root.blocks_of("SAI").next().unwrap();
+        let s: defs::Sai = tgi::from_block(block).unwrap();
+        assert_eq!(s.ids, Some(Id::from("chuikov_sai")));
+        assert_eq!(s.public, Some(false));
+        let ids =
+            |c: &[defs::SaiChoice]| c.iter().filter_map(|c| c.ids.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&s.nation), vec![Id::from("nation_rus")]);
+        assert_eq!(
+            ids(&s.faction),
+            vec![Id::from("chuikov"), Id::from("konev")]
+        );
+    }
+
+    #[test]
+    fn a_profile_fits_the_nations_and_factions_it_lists_or_any_where_it_lists_none() {
+        let sai = |nations: &[&str], factions: &[&str]| Sai {
+            id: Id::from("sai"),
+            name: String::new(),
+            nations: nations.iter().map(|&n| Id::from(n)).collect(),
+            factions: factions.iter().map(|&g| Id::from(g)).collect(),
+            public: true,
+            easiest: false,
+        };
+        let (rus, usa) = (Id::from("nation_rus"), Id::from("nation_usa"));
+        let (konev, patton) = (Id::from("konev"), Id::from("patton"));
+        let russian = sai(&["NATION_RUS"], &["chuikov", "konev"]);
+        assert!(russian.fits(Some(&rus), Some(&konev)));
+        assert!(russian.fits(Some(&rus), None));
+        assert!(!russian.fits(Some(&rus), Some(&patton)));
+        assert!(!russian.fits(Some(&usa), None));
+        assert!(!russian.fits(None, None));
+        assert!(sai(&[], &[]).fits(Some(&usa), Some(&patton)));
+        assert!(sai(&[], &[]).fits(None, None));
     }
 
     #[test]
