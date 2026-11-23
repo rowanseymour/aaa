@@ -484,8 +484,10 @@ impl Plugin for LobbyPlugin {
             Update,
             (show_presets, show_slots, show_about, mark_chosen)
                 .chain()
-                .run_if(in_state(Screen::Lobby))
-                .run_if(resource_exists_and_changed::<Lobby>),
+                // Each its own: a launch can take the lobby away between
+                // them, as what one does is carried out before the next.
+                .distributive_run_if(in_state(Screen::Lobby))
+                .distributive_run_if(resource_exists_and_changed::<Lobby>),
         );
     }
 }
