@@ -774,6 +774,7 @@ pub fn run(program: Program) -> ExitCode {
     let volumes = sound::Volumes::from(game.volumes()).muted(windowless);
     app.insert_resource(lobby::Nations(game.nations()))
         .insert_resource(lobby::Handicaps::new(game.handicaps()))
+        .insert_resource(lobby::Sais(game.sais()))
         .insert_resource(lobby::Leaving::of(&strings))
         .insert_resource(confirm::Words::of(&strings))
         .insert_resource(outcome::Words::of(&strings))

@@ -1290,17 +1290,23 @@ pub struct Faction {
 /// A computer player's profile: how it plays, and whose side.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Sai {
+    pub ids: Option<Id>,
     /// What the computer player is called, or the key of the string that
     /// says.
     pub name: Option<String>,
+    /// False for profiles only scenarios use.
+    pub public: Option<bool>,
+    /// The nations it plays as, by id.
+    #[serde(default)]
+    pub nation: Vec<SaiChoice>,
     /// The factions it plays as, by id.
     #[serde(default)]
-    pub faction: Vec<SaiFaction>,
+    pub faction: Vec<SaiChoice>,
 }
 
-/// A faction a computer player's profile plays as.
+/// A nation or faction a computer player's profile plays as.
 #[derive(Debug, Clone, Deserialize)]
-pub struct SaiFaction {
+pub struct SaiChoice {
     pub ids: Option<Id>,
 }
 

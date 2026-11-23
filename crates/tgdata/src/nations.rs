@@ -1,5 +1,5 @@
 //! The nations sides play as, their factions, organizations' banners, and the
-//! lobby's handicaps.
+//! lobby's handicaps and computer player profiles.
 
 use std::collections::{HashMap, HashSet};
 
@@ -70,6 +70,21 @@ pub struct Faction {
     /// The banner, by id, their side's organizations fly where their
     /// templates say to.
     pub banner: Option<Id>,
+}
+
+/// A computer player's profile, as the lobby offers it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sai {
+    /// E.g. `chuikov_sai`.
+    pub id: Id,
+    /// What the computer player is called, e.g. `Chuikov AI`.
+    pub name: String,
+    /// The nation it plays as, where it names one.
+    pub nation: Option<Id>,
+    /// The faction it plays as, where it names just one.
+    pub faction: Option<Id>,
+    /// Whether the lobby offers it, as it doesn't those only scenarios use.
+    pub public: bool,
 }
 
 /// A special operation as a faction gives it.
@@ -418,6 +433,31 @@ impl GameData {
             .collect()
     }
 
+    /// The computer player profiles, by name.
+    pub fn sais(&self) -> Vec<Sai> {
+        let strings = self.strings();
+        let files = self.parse_tgis(|n| n.starts_with("sai/"));
+        let one = |choices: Vec<defs::SaiChoice>| -> Option<Id> {
+            let mut ids = choices.into_iter().filter_map(|c| c.ids);
+            ids.next().filter(|_| ids.next().is_none())
+        };
+        let mut sais: Vec<Sai> = (scoped(&files).iter())
+            .flat_map(|f| f.read::<defs::Sai>("SAI"))
+            .filter_map(|s| {
+                let id = s.ids?;
+                Some(Sai {
+                    name: localized(&strings, s.name.as_deref()).unwrap_or_else(|| id.to_string()),
+                    id,
+                    nation: one(s.nation),
+                    faction: one(s.faction),
+                    public: s.public != Some(false),
+                })
+            })
+            .collect();
+        sais.sort_by(|a, b| a.name.cmp(&b.name));
+        sais
+    }
+
     /// What the computer player of each faction is called, by the
     /// faction's id: the name of the profile made for them, rather than
     /// one a campaign plays as several of a nation's factions.
@@ -479,6 +519,25 @@ mod tests {
         let h: defs::Handicap = tgi::from_block(block).unwrap();
         let extra = crate::Amounts::from(h.extra_resources.as_ref().unwrap());
         assert_eq!(extra.get("money"), 300.0);
+    }
+
+    #[test]
+    fn a_computer_player_profile_names_its_nation_and_factions() {
+        let parsed = tgi::parse(
+            "[SAI]\n{\n\tIDS = chuikov_sai\n\tpublic = false\n\
+             \t[Nation]\n\tIDS = nation_rus\n\t[Faction]\n\tids = chuikov\n\t[Faction]\n\tids = konev\n}\n",
+        );
+        let block = parsed.root.blocks_of("SAI").next().unwrap();
+        let s: defs::Sai = tgi::from_block(block).unwrap();
+        assert_eq!(s.ids, Some(Id::from("chuikov_sai")));
+        assert_eq!(s.public, Some(false));
+        let ids =
+            |c: &[defs::SaiChoice]| c.iter().filter_map(|c| c.ids.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&s.nation), vec![Id::from("nation_rus")]);
+        assert_eq!(
+            ids(&s.faction),
+            vec![Id::from("chuikov"), Id::from("konev")]
+        );
     }
 
     #[test]

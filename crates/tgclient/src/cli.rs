@@ -25,8 +25,8 @@ options:
                             id, e.g. 1,2, playing the first; none, to watch,
                             unless given
   --name <name>             what others in the match know this player as
-  --side <n>                play the map's nth player (\"Side n\" in its lobby)
-                            instead of the first one a person may play
+  --side <n>                play the map's nth player instead of the first one
+                            a person may play
   --exec <script.txt>       run a file of console commands once the match starts,
                             or from the first menu without a map; may be given
                             more than once

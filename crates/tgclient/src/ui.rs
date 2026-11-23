@@ -877,10 +877,14 @@ pub fn dropdown() -> impl Bundle {
             // As wide as its opener, or its longest choice where that's
             // wider.
             min_width: percent(100),
+            // A long list scrolls rather than running off the screen.
+            max_height: vh(50),
+            overflow: Overflow::scroll_y(),
             flex_direction: FlexDirection::Column,
             border: UiRect::all(px(1)),
             ..default()
         },
+        bevy::ui_widgets::ScrollArea,
         Edge::Border,
         Surface::Panel,
     )
