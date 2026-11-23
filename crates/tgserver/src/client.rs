@@ -78,8 +78,12 @@ const SAID_KEPT: usize = 64;
 
 /// How long the host goes unheard from before it's taken as lost: longer
 /// than it takes the host to find a client lost, so that it's the host
-/// that holds the match for one cut off rather than the client giving up.
-const UNHEARD: Duration = Duration::from_secs(3);
+/// that holds the match for one cut off rather than the client giving up,
+/// and longer than a slow tick of the host's, through which it says
+/// nothing.
+/// A host whose link is cut is found lost by the link itself, so this is
+/// for one still connected that has stopped playing.
+pub(crate) const UNHEARD: Duration = Duration::from_secs(30);
 
 /// The longest the host goes without hearing from a client, so that it
 /// knows the client is there.
