@@ -9,6 +9,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
 
 use crate::actions::{COLUMNS, Page, Quantity, ROWS, SLOTS, Said, Shown, Slot, lit, widget};
+use crate::displays::Icon;
 use crate::intent::Asks;
 use crate::ui::{self, Blocks, Click, Edge, Font, Ink, Shade, Surface, label, tooltip};
 
@@ -241,8 +242,8 @@ impl TipParts<'_, '_> {
     }
 }
 
-/// An amount after its resource's glyph, as the game's tooltips show it,
-/// or before its name where there's no glyph.
+/// An amount after its resource's icon, as the game's tooltips show it,
+/// or before its name where there's none.
 fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
     cell.spawn(Node {
         column_gap: px(2),
@@ -250,18 +251,21 @@ fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
         ..default()
     })
     .with_children(|pair| {
-        if let Some(glyph) = &q.glyph {
-            pair.spawn((
-                ImageNode::new(glyph.clone()),
-                Node {
-                    width: px(16),
-                    height: px(16),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-        }
-        pair.spawn(label(q.label(), Font::Small, Ink::Body));
+        let node = Node {
+            width: px(16),
+            height: px(16),
+            ..default()
+        };
+        let text = if let Some(path) = &q.icon {
+            pair.spawn((Icon::new(path.as_str()), node, Pickable::IGNORE));
+            q.number()
+        } else {
+            if let Some(glyph) = &q.glyph {
+                pair.spawn((ImageNode::new(glyph.clone()), node, Pickable::IGNORE));
+            }
+            q.label()
+        };
+        pair.spawn(label(text, Font::Small, Ink::Body));
     });
 }
 

@@ -181,6 +181,9 @@ impl Looks {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Quantity {
     pub glyph: Option<Handle<Image>>,
+    /// The path of our own interface's icon for the resource, drawn there
+    /// in place of its glyph.
+    pub icon: Option<String>,
     pub amount: f32,
     pub sign: Sign,
     pub resource: String,
@@ -271,6 +274,7 @@ pub fn setup(
 ) {
     let game = &loaded.game;
     let glyphs = glyphs(game, &mut images, &mut cache);
+    let icons = crate::ui::resource_icons(game);
     let mut sources = HashMap::new();
     let mut image = |game: &GameData, path: &str| {
         let handle = cache.get(game, &mut images, path)?;
@@ -398,6 +402,7 @@ pub fn setup(
                     .any(|r| r.id == a.kind && r.role == tgdata::ResourceRole::LimitedConsumed);
                 Quantity {
                     glyph: glyphs.get(&a.kind).cloned(),
+                    icon: icons.get(&a.kind).cloned(),
                     amount: a.amount,
                     sign: if taken_up { Sign::Bare } else { sign },
                     resource: a.resource.clone(),
@@ -646,6 +651,7 @@ mod tests {
         let number = |amount, sign| {
             let q = Quantity {
                 glyph: None,
+                icon: None,
                 amount,
                 sign,
                 resource: "oil".into(),
