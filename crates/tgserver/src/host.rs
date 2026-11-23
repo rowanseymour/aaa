@@ -2,6 +2,7 @@
 //! given and when, and tells every client.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -110,8 +111,9 @@ pub struct Host<L> {
     pauses: Option<Pauses>,
     computer: Box<MakeComputer>,
     taker: Box<MakeTaker>,
-    /// What the profile each computer player at launch plays by goes by,
-    /// by player id, where it's known.
+    /// What the profile each computer player the host makes at launch
+    /// plays by goes by, by player id, where it's known, until it's named
+    /// so.
     profile_names: BTreeMap<u32, String>,
     /// The computer player of each side still in the match that no client
     /// plays, by player id, once the match has begun.
@@ -277,6 +279,7 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
         | Action::Raise { .. }
         | Action::Destroy(_)
         | Action::Name { .. }
+        | Action::NameComputer { .. }
         | Action::TakeOver { .. }
         | Action::Pausing(_) => false,
     }
@@ -285,8 +288,12 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
 impl<L> Seat<L> {
     /// Whether the host carries out `action` for it.
     fn may(&self, action: &Action) -> bool {
-        let computer =
-            matches!(action, Action::Order { player, .. } if self.computers.contains(player));
+        let computer = match action {
+            Action::Order { player, .. } | Action::NameComputer { player, .. } => {
+                self.computers.contains(player)
+            }
+            _ => false,
+        };
         self.trusted || computer || allows(&self.players, action)
     }
 
@@ -673,25 +680,26 @@ impl<L: Link> Host<L> {
         let name = crate::unique(&name, &self.naming.numbered, |n| self.named(n));
         let (computer, by) = (self.taker)(&self.setup, player);
         self.computers.insert(player, computer);
+        self.profile_names.remove(&player);
         let by = by.unwrap_or_else(|| name.clone());
         Action::TakeOver { player, name, by }
     }
 
     /// What side `player` goes by: its person's or computer player's name,
-    /// a computer player's being its profile's, or `person`'s where the
-    /// match has yet to name it.
+    /// as the match has it, or `person`'s where the match has yet to name
+    /// it. A computer player is named after its profile by the machine it
+    /// thinks on, which alone knows it.
     fn side_name(&self, player: u32, person: &str) -> String {
         let sides = &self.world.sides;
         let named = (sides.names.get(&player))
             .or_else(|| sides.computers.get(&player))
-            .or_else(|| self.profile_names.get(&player))
             .or_else(|| self.naming.computers.get(&player));
         named.map_or_else(|| person.to_string(), Clone::clone)
     }
 
     /// Whether anyone in the match goes by `name`: a person, a computer
-    /// player that took a side over or is to, or one playing a side
-    /// nobody else does.
+    /// player that took a side over or is to, one named after its profile
+    /// or to be, or one playing a side nobody else does.
     fn named(&self, name: &str) -> bool {
         let sides = &self.world.sides;
         let to_take_over = |a: &Action| matches!(a, Action::TakeOver { name: n, .. } if n == name);
@@ -701,6 +709,7 @@ impl<L: Link> Host<L> {
         self.client_named(name)
             || sides.computers.values().any(|c| c == name)
             || self.taking_over.iter().any(to_take_over)
+            || self.profile_names.values().any(|c| c == name)
             || (self.naming.computers.iter()).any(|(p, c)| c == name && !played(p))
     }
 
@@ -718,6 +727,7 @@ impl<L: Link> Host<L> {
     /// The orders of the computer player of each side still in the match
     /// that no client plays, making one for a side as it comes to need it.
     /// A side whose person leaves is the computer's from the turn after.
+    /// One made by a profile chosen at launch is first named after it.
     fn think(&mut self) -> Vec<Action> {
         let theirs: Vec<u32> = (tgmap::sides(&self.world.sides.players))
             .map(|p| p.id)
@@ -725,14 +735,19 @@ impl<L: Link> Host<L> {
             .collect();
         let (setup, world, make) = (&self.setup, &self.world, &self.computer);
         self.computers.retain(|p, _| theirs.contains(p));
+        let mut named = Vec::new();
         for player in theirs {
-            (self.computers.entry(player)).or_insert_with(|| make(setup, world, player));
+            if let Entry::Vacant(made) = self.computers.entry(player) {
+                made.insert(make(setup, world, player));
+                let name = self.profile_names.remove(&player);
+                named.extend(name.map(|name| Action::NameComputer { player, name }));
+            }
         }
         let orders = self.computers.iter_mut().flat_map(|(&player, computer)| {
             let order = move |command| Action::Order { player, command };
             computer.think(world, player).into_iter().map(order)
         });
-        orders.collect()
+        named.into_iter().chain(orders).collect()
     }
 
     /// Tells each client that's asked for more since it was last told
@@ -2441,6 +2456,52 @@ mod tests {
             ]
         );
         assert_eq!(clients[0].world().hash(), host.world().hash());
+    }
+
+    #[test]
+    fn computer_players_are_named_after_their_profiles_by_the_machine_they_think_on() {
+        let mut host = Host::new(setup(), fresh());
+        marching(&mut host);
+        host.profile_names.insert(4, "Kesselring AI".into());
+        let (ours, mut theirs) = pair();
+        host.admit_running(ours, vec![3], vec![2], "Kesselring")
+            .unwrap();
+        welcome(&mut theirs).unwrap().unwrap();
+        let mut clients = vec![
+            running(&mut host, &[1], &[]),
+            Copy {
+                client: Client::new(theirs),
+                world: fresh(),
+            },
+        ];
+        // The guest names the one its machine runs, as it draws its own.
+        let name = "Zhukov AI".to_string();
+        clients[1]
+            .ask(Action::NameComputer { player: 2, name })
+            .unwrap();
+        play(&mut host, &mut clients, 1);
+        let named = |host: &Host<Local>, p| host.world().sides.computers.get(&p).cloned();
+        assert_eq!(named(&host, 4).as_deref(), Some("Kesselring AI"));
+        assert_eq!(named(&host, 2).as_deref(), Some("Zhukov AI"));
+        // Another's computer player isn't the first's to name.
+        let name = "Konev AI".to_string();
+        clients[0]
+            .ask(Action::NameComputer { player: 2, name })
+            .unwrap();
+        clients[1].leave().unwrap();
+        host.turn();
+        clients.remove(1);
+        play(&mut host, &mut clients, 1);
+        // Named after what each went by, and unlike the host's own.
+        let taken_over = |p, name: &str| (p, name.to_string(), "Marcher AI".to_string());
+        assert_eq!(
+            takeovers(&host),
+            [
+                taken_over(2, "Zhukov AI AI"),
+                taken_over(3, "Kesselring AI (1)")
+            ]
+        );
+        assert_eq!(named(&host, 4).as_deref(), Some("Kesselring AI"));
     }
 
     #[test]
