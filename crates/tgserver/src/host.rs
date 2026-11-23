@@ -1757,6 +1757,60 @@ mod tests {
         assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
     }
 
+    /// A link on which, once, time passes after the last of what's come
+    /// has been taken and before the client plays it: as long as playing
+    /// it would take.
+    struct Slow {
+        link: Local,
+        clock: Clock,
+        passing: Option<Duration>,
+    }
+
+    impl Link for Slow {
+        fn send(&mut self, message: Vec<u8>) -> Result<(), crate::Lost> {
+            self.link.send(message)
+        }
+
+        fn receive(&mut self) -> Result<Option<Vec<u8>>, crate::Lost> {
+            let received = self.link.receive();
+            if let Ok(None) = received
+                && let Some(time) = self.passing.take()
+            {
+                self.clock.pass(time);
+            }
+            received
+        }
+    }
+
+    #[test]
+    fn a_client_slow_to_play_a_step_does_not_find_its_host_lost() {
+        let clock = Clock::stopped();
+        let mut host = Host::new(setup(), fresh());
+        host.clock(clock.clone());
+        let (ours, mut theirs) = pair();
+        host.admit(ours, vec![1], "Player 1").unwrap();
+        welcome(&mut theirs).unwrap().unwrap();
+        let link = Slow {
+            link: theirs,
+            clock: clock.clone(),
+            passing: None,
+        };
+        let mut client = Client::new(link);
+        client.clock(clock.clone());
+        let mut world = fresh();
+        host.turn();
+        assert_eq!(client.advance(&mut world, usize::MAX), Ok(()));
+        // The host, here, says nothing more until the client has played
+        // what it said, which takes longer than the host may go unheard.
+        host.turn();
+        client.link().passing = Some(Duration::from_secs(5));
+        assert_eq!(client.advance(&mut world, usize::MAX), Ok(()));
+        assert_eq!(world.ticks, 2);
+        // Gone for that long once the client has played, it's lost.
+        clock.pass(Duration::from_secs(3));
+        assert_eq!(client.advance(&mut world, usize::MAX), Err(crate::Lost));
+    }
+
     #[test]
     fn clients_are_let_in_before_the_match_begins_to_players_it_has() {
         let (mut host, _clients) = hosted(&[&[1]]);
