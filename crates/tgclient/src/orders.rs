@@ -130,6 +130,17 @@ impl Orders {
         }
     }
 
+    /// Has a host here play the sides nobody else does by `profiles`.
+    pub(crate) fn computers_from(&mut self, profiles: tgserver::Profiles) {
+        match &mut self.host {
+            Hosted::Here(host) => host.computers_from(profiles),
+            Hosted::Shared {
+                host: Some(host), ..
+            } => host.computers_from(profiles),
+            Hosted::Shared { host: None, .. } => {}
+        }
+    }
+
     fn of(host: Hosted, link: Line, setup: Setup, me: u32) -> Orders {
         Orders {
             host,

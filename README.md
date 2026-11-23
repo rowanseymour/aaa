@@ -49,7 +49,7 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
 | Multiplayer         | 🟡 LAN games created, found and joined from the menus, and a standalone server |
 | Map editor          | 🟡 Basic viewing of maps and placed objects |
 | Loading and saving  | ⬜ Not started |
-| AI                  | ⬜ Not started |
+| AI                  | 🟡 Computer players that recruit, research, build, attack and defend |
 
 ## Running
 

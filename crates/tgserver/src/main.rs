@@ -156,6 +156,7 @@ const IDLE: Duration = Duration::from_millis(10);
 fn host(
     setup: Setup,
     world: World,
+    profiles: tgserver::Profiles,
     ticks: u64,
     hosting: Hosting,
     naming: Naming,
@@ -163,6 +164,7 @@ fn host(
     let mut listener = quic::listen(hosting.at)?;
     eprintln!("hosting at {}", listener.at()?);
     let mut host = Host::new(setup, world);
+    host.computers_from(profiles);
     host.name_by(naming);
     host.multiplayer();
     if let Some(speed) = hosting.speed {
@@ -234,7 +236,14 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
                         ));
                     }
                     let naming = Naming::of(&game.strings(), &started.factions);
-                    host(setup.clone(), started.world, ticks, hosting, naming)?
+                    host(
+                        setup.clone(),
+                        started.world,
+                        started.profiles,
+                        ticks,
+                        hosting,
+                        naming,
+                    )?
                 }
                 None => {
                     let (mut world, mut schedule) = (started.world, Schedule::default());

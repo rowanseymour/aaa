@@ -72,7 +72,7 @@ pub use airfields::{AirAim, Berth, Job, Sortie, Stage};
 pub use attach::Hq;
 pub use bombard::{Bombardment, Shelled};
 pub use combat::Struck;
-pub use computer::{ComputerPlayer, Idle};
+pub use computer::{ComputerPlayer, Idle, Planner};
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, EconomyEffect, Ledger, Limit, Treasury};
 pub use experience::{Commander, Operated, SpecialOp};
@@ -173,6 +173,9 @@ pub const PURSUIT_DRIFT: f32 = 0.14646;
 pub struct World {
     pub sides: Sides,
     pub pathing: Pathing,
+    /// The patches of ground computer players plan over, which never
+    /// change.
+    pub regions: std::sync::Arc<tgmap::Regions>,
     /// What the match is played by: see [`World::rules`].
     pub(crate) rules: Rules,
     /// The terrain under each tile, for what it does to those on it.
@@ -1442,7 +1445,7 @@ digest!(World {
     next_commission, rng, sides,
 } skip {
     // Fixed by the map and the game's data.
-    rules, tile_terrains, scenery,
+    rules, tile_terrains, scenery, regions,
     // Follow from the buildings standing and the scenery cleared, or from
     // the terrain alone.
     pathing, clearable, main_land,

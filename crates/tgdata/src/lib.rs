@@ -38,6 +38,7 @@ mod reads;
 mod recruiting;
 mod remains;
 mod research;
+pub mod sai;
 mod settlements;
 mod special_ops;
 mod speed;

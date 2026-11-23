@@ -33,6 +33,7 @@ impl World {
         world.add_buildings(&map.buildings);
         world.detach_from_missing();
         world.tile_terrains = map.tile_terrains.clone();
+        world.regions = std::sync::Arc::new(tgmap::Regions::new(&map.terrain, &map.pathing));
         world.scenery = map.scenery.clone();
         world.props = map.props.iter().map(crate::Prop::placed).collect();
         world.clearable = map.clearable.clone();
@@ -112,6 +113,7 @@ impl World {
         let rng = rules.seed;
         let mut world = World {
             sides,
+            regions: Default::default(),
             pathing,
             rules,
             tile_terrains: tgmap::TileTerrains::default(),

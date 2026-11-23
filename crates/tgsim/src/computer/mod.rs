@@ -1,5 +1,15 @@
 //! What plays a side in place of a person.
 
+mod economy;
+mod fighting;
+mod liking;
+mod picture;
+mod planner;
+#[cfg(test)]
+mod tests;
+
+pub use planner::Planner;
+
 use crate::{Command, World};
 
 /// Gives the orders of one side nobody else plays. Only whatever hosts

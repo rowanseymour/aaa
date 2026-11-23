@@ -10,6 +10,7 @@ mod obstacle;
 mod outline;
 pub mod pathing;
 mod props;
+mod regions;
 mod tile;
 mod tile_terrains;
 mod units;
@@ -21,12 +22,14 @@ pub use obstacle::Obstacle;
 pub use outline::Outline;
 pub use pathing::{Domain, Pathing, Zone};
 pub use props::{Prop, PropTemplate};
+pub use regions::{Region, Regions};
 pub use tgck::map::Relation;
 
 /// A map's triggers, as its file holds them.
 pub mod triggers {
     pub use tgck::map::{Element, Parameter, Trigger, Triggers, Value};
 }
+pub use tgdata::sai;
 pub use tgdata::{
     ANY_DAMAGE, Affliction, AirGroup, AirJob, Aircraft, Airfield, Airlift, Amounts, AnimationSet,
     BLEEDING, CHASING, Choice, CombatAbility, CombatEffect, CombatProfile, CombatValueRules,
