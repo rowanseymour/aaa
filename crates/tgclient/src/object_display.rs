@@ -1431,6 +1431,8 @@ pub fn refresh(
     for (status, mut text) in &mut statuses {
         let ids = match *status {
             Status::Organization(r) => organization_state(sim, r),
+            // Blank for a building only remembered under the fog.
+            Status::Building(b) if !seen_now(sim, fog.as_deref(), Target::Building(b)) => None,
             Status::Building(b) => hq_state(sim, b).unwrap_or_else(|| building_state(sim, b)),
         };
         let words = ids.map(|i| looks.state(i)).unwrap_or_default();
@@ -1468,20 +1470,22 @@ fn hq_state(sim: &World, b: usize) -> Option<Option<&'static str>> {
     (held && !moving).then(|| Some(doing(sim, r)))
 }
 
-/// What a building's doing, as the game's actor state ids; nothing for one
-/// at rest.
+/// What a building's doing, as the game's actor state ids. One that packs
+/// up rests as a regiment does when nothing else is going on; any other is
+/// just normal.
 fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     let building = &sim.buildings[b];
     let structure = crate::actions::structure_state(building);
-    // A queue outweighs being out of supply, which outweighs disabled,
-    // even while either holds the queue up.
+    // A queue outweighs being out of supply, which outweighs resting, which
+    // outweighs disabled, even while either holds the queue up.
     match structure {
         "structure_packing" | "structure_unpacking" => Some(structure),
         _ if building.constructing => Some("construction"),
         "structure_researching" | "structure_recruiting" => Some(structure),
         _ if sim.out_of_supply(b) && building.standing() => Some("out_of_supply"),
+        _ if sim.rules().packing.contains_key(&building.template) => Some("mind_resting"),
         _ if building.state == State::Disabled => Some("disabled"),
-        _ => None,
+        _ => Some(structure),
     }
 }
 
@@ -2199,7 +2203,13 @@ mod tests {
     /// A match whose player 1 has a relay, building 0, unpacked from its
     /// organization 0.
     fn unpacked_hq() -> World {
-        let mut rules = tgsim::Rules::default();
+        let mut sim = hq_by(tgsim::Rules::default());
+        sim.buildings[0].unpacked_from = Some(0);
+        sim
+    }
+
+    /// A match played by `rules` whose player 1 has a relay, building 0.
+    fn hq_by(mut rules: tgsim::Rules) -> World {
         let supply = tgdata::Supply {
             range: 30.0,
             relay: true,
@@ -2223,8 +2233,50 @@ mod tests {
             awake: false,
         };
         sim.add_buildings(&[hq]);
-        sim.buildings[0].unpacked_from = Some(0);
         sim
+    }
+
+    #[test]
+    fn a_building_that_packs_rests_and_any_other_is_normal() {
+        let mut sim = hq_by(tgsim::Rules::default());
+        sim.buildings[0].state = State::Standing;
+        assert_eq!(building_state(&sim, 0), Some("structure_normal"));
+        let truck = tgmap::Organization {
+            id: 0,
+            template: "truck".into(),
+            owner: 0,
+            facing: [1.0, 0.0],
+            members: Vec::new(),
+            formations: Vec::new(),
+            formation: 0,
+            combat: None,
+            operational_range: None,
+            control_range: None,
+            primary: None,
+            unpacks: None,
+            hq: None,
+            morale: 1.0,
+            experience: 0.0,
+            efficiency: None,
+        };
+        let packs = tgmap::Packs {
+            truck,
+            offset: [0.0, 0.0],
+            facing: [1.0, 0.0],
+            seconds: 7.0,
+            health_min: 0.5,
+        };
+        let mut rules = tgsim::Rules::default();
+        rules.packing.insert(Id::from("hq"), packs);
+        let mut sim = hq_by(rules);
+        sim.buildings[0].state = State::Standing;
+        assert_eq!(building_state(&sim, 0), Some("mind_resting"));
+        sim.buildings[0].state = State::Disabled;
+        assert_eq!(
+            building_state(&sim, 0),
+            Some("mind_resting"),
+            "ties, and wins"
+        );
     }
 
     #[test]
