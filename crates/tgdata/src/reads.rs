@@ -69,7 +69,11 @@ static READS: LazyLock<HashMap<&str, Vec<Read>>> = LazyLock::new(|| {
         ("property", vec![read::<defs::Property>()]),
         ("resource", vec![read::<defs::Resource>()]),
         ("resourceicon", vec![read::<defs::ResourceIcon>()]),
-        ("sai", vec![read::<defs::Sai>()]),
+        (
+            "sai",
+            vec![read::<defs::Sai>(), read::<crate::sai::SaiBlock>()],
+        ),
+        ("ego", vec![read::<crate::sai::Ego>()]),
         ("sun", vec![read::<defs::Sun>()]),
         ("svars", vec![read::<defs::SVars>()]),
         ("targettype", vec![read::<defs::TargetType>()]),
@@ -158,7 +162,7 @@ mod tests {
 
     #[test]
     fn kinds_nothing_reads_count_as_unread() {
-        let counts = counted("[Ego]\n{\nIDS = low_income\n}\n");
+        let counts = counted("[Mood]\n{\nIDS = low_income\n}\n");
         assert_eq!(counts[0].2, tgi::Count { read: 0, unread: 1 });
     }
 

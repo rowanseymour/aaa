@@ -3,6 +3,7 @@
 
 mod client;
 mod clock;
+mod computers;
 mod film;
 mod host;
 pub mod lan;
@@ -29,6 +30,7 @@ use tgsim::World;
 
 pub use client::{Client, NotJoined, enter, join, welcome};
 pub use clock::Clock;
+pub use computers::Profiles;
 pub use film::{Film, NotFilm};
 pub use host::{Event, Host, Refusal, allows, refuse, sayable};
 use link::ping;
@@ -79,6 +81,8 @@ pub struct Started {
     pub factions: HashMap<u32, Faction>,
     /// The profile each computer player plays by, by player id.
     pub computers: BTreeMap<u32, Id>,
+    /// Those profiles, read, and those for sides taken over later.
+    pub profiles: Profiles,
 }
 
 /// Sets up the match `setup` describes from the game's data, calling
@@ -302,12 +306,14 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     let sais = game.sais();
     let picks = (&chosen, &factions, sais.as_slice());
     let computers = computers(&map.players, &computer_sides, picks, fresh_seed());
+    let profiles = Profiles::new(game, &computers, &sais);
     Ok(Started {
         map,
         raising,
         world,
         factions,
         computers,
+        profiles,
     })
 }
 

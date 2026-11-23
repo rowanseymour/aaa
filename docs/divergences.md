@@ -43,7 +43,7 @@ the layouts' 4:3 shape, as large as fits the window and centred between black ba
 where the original stretches them to fill the screen. See
 [hud/original](../crates/tgclient/src/hud/original/mod.rs). Text in a Windows face the
 data names but doesn't hold, such as Arial, is drawn in a stand-in of the same
-metrics from this project's [data](../data/modern/Fonts/system.tgi), so its glyphs
+metrics from this project's [data](../data/common/Fonts/system.tgi), so its glyphs
 differ a little in shape and hinting.
 
 ## View
@@ -124,3 +124,5 @@ talk is our own, so this project and the original can't join each other's matche
 - **Console.** A command console, also reachable over a local port, for testing and
   scripting; the original has none. See [its commands](console.md).
 - **Fog of war override.** `--fog` sets how much the fog hides, for testing.
+- **Watching computer players.** `--side 0` gives every side to a computer player,
+  for testing them. See [lobby.rs](../crates/tgclient/src/lobby.rs).

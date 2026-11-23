@@ -9,9 +9,9 @@ src=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$src/../../.." && pwd)
 emblem=$src/emblem.jpg
 text=AAA pointsize=235
-font=$root/data/modern/Fonts/TrueType/BigShouldersStencilDisplay-800.ttf
+font=$root/data/common/Fonts/TrueType/BigShouldersStencilDisplay-800.ttf
 outer=452 inner=230
-logo=$root/data/modern_aa/Modern/logo.png
+logo=$root/data/aa/Modern/logo.png
 icons=$root/packaging/aa/icons
 . "$root/assets-src/logo.sh"
 
