@@ -11,6 +11,7 @@ pub(crate) fn player(id: u32, independent: bool, playable: bool) -> Player {
         team: None,
         independent,
         playable,
+        required: false,
         default_defeat: true,
         outcome: Default::default(),
         won_by_cities: false,

@@ -13,11 +13,12 @@ mod pausing;
 pub mod presets;
 pub mod protocol;
 pub mod quic;
+mod slots;
 #[cfg(test)]
 mod testing;
 
 use std::collections::hash_map;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 
 use log::{debug, warn};
@@ -34,6 +35,7 @@ use link::ping;
 pub use link::{Link, Local, Lost, pair};
 pub use lobby::{COUNTDOWN, Choice, Entry, Guest, Lobby, Staging, Told, enter_lobby};
 pub use names::{NAME_LONGEST, NUMBERED, Naming, TAKEN_OVER, default_name, name, unique};
+pub use slots::Slots;
 
 /// What a match is played on and by, as its lobby leaves it: all that
 /// every copy of the match has to agree on before it starts.
@@ -58,6 +60,9 @@ pub struct Setup {
     /// Every side a computer player plays, by player id, with the profile
     /// chosen for it; none for one at random.
     pub computers: BTreeMap<u32, Option<Id>>,
+    /// The sides nobody holds, by player id, which leave the match unless
+    /// the map requires them.
+    pub open: BTreeSet<u32>,
     /// The world rules the match is played with, such as the fog of war,
     /// the time of day and the money each side starts with, in place of
     /// those the map stores.
@@ -103,6 +108,19 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(teams) = &setup.teams {
         map.arrange(teams);
     }
+    // A side the map requires stays, a computer player taking it.
+    let required = |p: &u32| map.players.iter().any(|q| q.id == *p && q.required);
+    let leaving: HashSet<u32> = setup
+        .open
+        .iter()
+        .copied()
+        .filter(|p| !required(p))
+        .collect();
+    let mut computer_sides = setup.computers.clone();
+    for &p in setup.open.iter().filter(|p| required(p)) {
+        computer_sides.insert(p, None);
+    }
+    map.leave(&leaving);
     let mut world_rules = map.rules.values.clone();
     world_rules.extend(setup.rules.clone());
     let rule = |id: &str| world_rules.get(&Id::from(id)).map(String::as_str);
@@ -294,7 +312,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     // thinks on needs its profile.
     let sais = game.sais();
     let picks = (&chosen, &factions, sais.as_slice());
-    let computers = computers(&map.players, &setup.computers, picks, fresh_seed());
+    let computers = computers(&map.players, &computer_sides, picks, fresh_seed());
     Ok(Started {
         map,
         raising,

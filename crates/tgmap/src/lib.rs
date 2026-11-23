@@ -397,6 +397,20 @@ impl Map {
         let (players, teams) = arranged(&self.players, &self.teams, teams);
         self.players = players;
         self.teams = teams;
+        self.take_away(&leaving);
+    }
+
+    /// Takes the sides of `leaving`, by player id, out of the match with
+    /// everything they own, the rest standing as they did.
+    pub fn leave(&mut self, leaving: &HashSet<u32>) {
+        let (players, teams) = left(&self.players, &self.teams, leaving);
+        self.players = players;
+        self.teams = teams;
+        self.take_away(leaving);
+    }
+
+    /// Takes away everything the sides of `leaving` own.
+    fn take_away(&mut self, leaving: &HashSet<u32>) {
         let owned_by_leaver = |t: &Thing| owner(t).is_some_and(|o| leaving.contains(&o));
         self.things.retain(|t| !owned_by_leaver(t));
         self.organizations.retain(|r| !leaving.contains(&r.owner));
@@ -753,6 +767,32 @@ fn obstacle_of(thing: &Thing, shape: Shape, soft: Shape) -> Obstacle {
     }
 }
 
+/// The players and teams of [`Map::leave`]: those not `leaving`, with
+/// their stances toward each other as they were.
+fn left(players: &[Player], teams: &[Team], leaving: &HashSet<u32>) -> (Vec<Player>, Vec<Team>) {
+    let stays: Vec<bool> = players.iter().map(|p| !leaving.contains(&p.id)).collect();
+    let kept = |relations: &[Relation]| -> Vec<Relation> {
+        (relations.iter().zip(&stays))
+            .filter(|(_, stays)| **stays)
+            .map(|(r, _)| *r)
+            .collect()
+    };
+    let new_players = (players.iter().zip(&stays))
+        .filter(|(_, stays)| **stays)
+        .map(|(p, _)| Player {
+            relations: kept(&p.relations),
+            ..p.clone()
+        })
+        .collect();
+    let new_teams = (teams.iter())
+        .map(|t| Team {
+            relations: kept(&t.relations),
+            ..t.clone()
+        })
+        .collect();
+    (new_players, new_teams)
+}
+
 /// The players and teams of [`Map::arrange`].
 fn arranged(
     players: &[Player],
@@ -1039,6 +1079,7 @@ mod tests {
             team: Some(team),
             independent: false,
             playable: true,
+            required: false,
             default_defeat: true,
             outcome: Default::default(),
             won_by_cities: false,
@@ -1509,6 +1550,25 @@ mod tests {
         assert_eq!(r(1, 9), Relation::Enemy);
         assert_eq!(r(9, 3), Relation::Neutral);
         assert_eq!(r(3, 9), Relation::Neutral);
+    }
+
+    #[test]
+    fn sides_that_leave_take_their_stances_with_them() {
+        let (players, teams) = sides();
+        let r = |players: &[Player], teams: &[Team], a, b| relation(players, teams, a, b);
+        let before: Vec<Relation> = [(1, 3), (3, 1), (9, 3), (1, 2)]
+            .iter()
+            .map(|&(a, b)| r(&players, &teams, a, b))
+            .collect();
+        let (players, teams) = left(&players, &teams, &HashSet::from([2, 4]));
+        let ids: Vec<u32> = players.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [1, 3, 9]);
+        let after: Vec<Relation> = [(1, 3), (3, 1), (9, 3)]
+            .iter()
+            .map(|&(a, b)| r(&players, &teams, a, b))
+            .collect();
+        assert_eq!(after, before[..3]);
+        assert_eq!(r(&players, &teams, 1, 2), Relation::Neutral);
     }
 
     #[test]

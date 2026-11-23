@@ -176,7 +176,7 @@ impl Handicaps {
 fn computer_handicaps(
     players: &[Player],
     person: Option<u32>,
-    chosen: &HashMap<u32, Id>,
+    chosen: &BTreeMap<u32, Id>,
 ) -> BTreeMap<u32, Id> {
     let lineup = Lineup::new(players, person);
     (lineup.0.into_iter())
@@ -211,18 +211,9 @@ pub struct Lobby {
     person: Option<u32>,
     /// The sides others take in a game between machines, by player id.
     others: Vec<u32>,
-    /// The nation chosen for each side, by player id; one at random where
-    /// none is.
-    nations: HashMap<u32, Id>,
-    /// The faction chosen for each side, by player id; one at random where
-    /// none is.
-    factions: HashMap<u32, Id>,
-    /// The handicap chosen for each side the computer plays, by player id;
-    /// the default where none is.
-    handicaps: HashMap<u32, Id>,
-    /// The profile chosen for each side the computer plays, by player id;
-    /// one at random where none is.
-    computers: HashMap<u32, Id>,
+    /// What's chosen for each side: a nation or faction at random, and
+    /// the default handicap, where none is.
+    slots: tgserver::Slots,
     /// What each world rule is set to, by id.
     rules: RuleValues,
     open: Open,
@@ -243,10 +234,7 @@ impl Lobby {
             preset,
             person,
             others: Vec::new(),
-            nations: HashMap::new(),
-            factions: HashMap::new(),
-            handicaps: HashMap::new(),
-            computers: HashMap::new(),
+            slots: tgserver::Slots::default(),
             open: Open::Nothing,
             // As the map stores them, until the scenario map dialog
             // changes them.
@@ -321,20 +309,23 @@ impl Lobby {
         self.person = staging.guest(me).and_then(|g| g.side);
         let others = staging.guests.iter().filter(|g| g.client != me);
         self.others = others.filter_map(|g| g.side).collect();
-        self.nations = staging.nations.clone().into_iter().collect();
-        self.factions = staging.factions.clone().into_iter().collect();
-        self.handicaps = staging.handicaps.clone().into_iter().collect();
-        self.computers = staging.computers.clone().into_iter().collect();
+        self.slots.clone_from(&staging.slots);
     }
 
-    /// Whether a computer player plays `player`'s side, as nobody takes it.
+    /// Whether nobody holds `player`'s side.
+    fn empty(&self, player: u32) -> bool {
+        self.slots.is_open(player)
+    }
+
+    /// Whether a computer player plays `player`'s side, as no person takes
+    /// it and it isn't left open.
     fn computer(&self, player: u32) -> bool {
-        self.person != Some(player) && !self.others.contains(&player)
+        self.person != Some(player) && !self.others.contains(&player) && !self.empty(player)
     }
 
     /// The profile chosen for `player`'s side, while the computer plays it.
     fn profile<'a>(&self, sais: &'a Sais, player: u32) -> Option<&'a Sai> {
-        let id = self.computers.get(&player)?;
+        let id = self.slots.computers.get(&player)?;
         sais.find(id).filter(|_| self.computer(player))
     }
 
@@ -344,18 +335,21 @@ impl Lobby {
     pub(crate) fn setup(&self, seed: u64) -> Option<(tgserver::Setup, String, String)> {
         let brief = self.brief.as_ref().ok()?;
         let playing: Vec<u32> = self.teams().into_iter().flat_map(|(_, t)| t).collect();
-        let computers: BTreeMap<u32, Option<Id>> = (playing.into_iter())
+        let computers: BTreeMap<u32, Option<Id>> = (playing.iter().copied())
             .filter(|&p| self.computer(p))
-            .map(|p| (p, self.computers.get(&p).cloned()))
+            .map(|p| (p, self.slots.computers.get(&p).cloned()))
             .collect();
+        let open = playing.into_iter().filter(|&p| self.empty(p)).collect();
+        let slots = &self.slots;
         let setup = tgserver::Setup {
             map: self.map.clone(),
             seed,
             teams: self.preset.arrange(&brief.players),
-            nations: self.nations.clone().into_iter().collect(),
-            factions: self.factions.clone().into_iter().collect(),
-            handicaps: computer_handicaps(&brief.players, self.person, &self.handicaps),
+            nations: slots.nations.clone(),
+            factions: slots.factions.clone(),
+            handicaps: computer_handicaps(&brief.players, self.person, &slots.handicaps),
             computers,
+            open,
             rules: self.rules.clone(),
         };
         Some((setup, brief.name.clone(), brief.description.clone()))
@@ -421,10 +415,19 @@ struct HandicapChoice(u32, Id);
 #[derive(Component)]
 struct ComputersOf(u32);
 
-/// One of the profiles in a side's list, by player id; none for one at
-/// random.
+/// One of the choices in the list of who plays a side, by player id.
 #[derive(Component)]
-struct ComputerChoice(u32, Option<Id>);
+struct ComputerChoice(u32, Holder);
+
+/// Who a lobby can put on a side nobody takes.
+#[derive(Clone, PartialEq)]
+enum Holder {
+    /// Nobody.
+    Open,
+    /// A computer player playing by a profile, or with none, one at
+    /// random.
+    Computer(Option<Id>),
+}
 
 /// One of the presets in their list.
 #[derive(Component)]
@@ -752,11 +755,8 @@ fn choose_side(
     if let Ok(SideChoice(person)) = choices.get(activate.entity) {
         lobby.open = Open::Nothing;
         if !share(staged, tgserver::Choice::Side(*person)) {
-            lobby.person = *person;
-            // People have no profile.
-            if let Some(p) = person {
-                lobby.computers.remove(p);
-            }
+            let from = std::mem::replace(&mut lobby.person, *person);
+            lobby.slots.seat(from, *person);
         }
     }
 }
@@ -790,11 +790,11 @@ fn choose_nation(
             return;
         }
         match nation {
-            Some(n) => lobby.nations.insert(*player, n.clone()),
-            None => lobby.nations.remove(player),
+            Some(n) => lobby.slots.nations.insert(*player, n.clone()),
+            None => lobby.slots.nations.remove(player),
         };
         // Factions lead only their own nation's sides.
-        lobby.factions.remove(player);
+        lobby.slots.factions.remove(player);
         lobby.open = Open::Nothing;
     }
 }
@@ -821,8 +821,8 @@ fn choose_faction(
             return;
         }
         match faction {
-            Some(g) => lobby.factions.insert(*player, g.clone()),
-            None => lobby.factions.remove(player),
+            Some(g) => lobby.slots.factions.insert(*player, g.clone()),
+            None => lobby.slots.factions.remove(player),
         };
         lobby.open = Open::Nothing;
     }
@@ -849,7 +849,7 @@ fn choose_handicap(
         if share(staged, choice) {
             return;
         }
-        lobby.handicaps.insert(*player, handicap.clone());
+        lobby.slots.handicaps.insert(*player, handicap.clone());
         lobby.open = Open::Nothing;
     }
 }
@@ -870,11 +870,17 @@ fn choose_computer(
     mut lobby: ResMut<Lobby>,
     staged: Option<ResMut<Staged>>,
 ) {
-    let Ok(ComputerChoice(player, sai)) = choices.get(activate.entity) else {
+    let Ok(ComputerChoice(player, holder)) = choices.get(activate.entity) else {
         return;
     };
     let player = *player;
     lobby.open = Open::Nothing;
+    let Holder::Computer(sai) = holder else {
+        if !share(staged, tgserver::Choice::Open(player)) {
+            lobby.slots.empty(player);
+        }
+        return;
+    };
     // The side plays as the profile's first nation and faction, or as
     // ones at random with none.
     let profile = sai.as_ref().and_then(|s| sais.find(s));
@@ -893,13 +899,14 @@ fn choose_computer(
         }
         return;
     }
-    let set = |map: &mut HashMap<u32, Id>, id: Option<Id>| match id {
+    let set = |map: &mut BTreeMap<u32, Id>, id: Option<Id>| match id {
         Some(id) => _ = map.insert(player, id),
         None => _ = map.remove(&player),
     };
-    set(&mut lobby.computers, sai.clone());
-    set(&mut lobby.nations, nation);
-    set(&mut lobby.factions, faction);
+    let slots = &mut lobby.slots;
+    slots.computer(player, sai.clone());
+    set(&mut slots.nations, nation);
+    set(&mut slots.factions, faction);
 }
 
 fn choose_preset(
@@ -1031,6 +1038,7 @@ fn show_slots(
             let side = format!("lobby.side{}", i + 1);
             let holder = staging.and_then(|(s, _)| s.guests.iter().find(|g| g.side == Some(id)));
             let computer = holder.is_none() && lobby.computer(id);
+            let empty = lobby.empty(id);
             let profile = lobby.profile(&sais, id);
             let cell = |width: f32| Node {
                 width: px(width),
@@ -1041,7 +1049,7 @@ fn show_slots(
                 .spawn((
                     ChildOf(slots),
                     Node {
-                        column_gap: px(12),
+                        column_gap: px(SLOT_GAP),
                         align_items: AlignItems::Center,
                         ..default()
                     },
@@ -1050,9 +1058,10 @@ fn show_slots(
                 .id();
             let who = match (holder, profile) {
                 (Some(guest), _) => Some(guest.name.clone()),
-                (None, _) if !computer => Some("Player".into()),
-                // The host chooses for the computer's sides.
+                (None, _) if !computer && !empty => Some("Player".into()),
+                // The host chooses for the sides nobody takes.
                 (None, _) if staging.is_none() || hosting => None,
+                (None, _) if empty => Some(open_label(player)),
                 // Elsewhere with whose machine it is, the host's.
                 (None, profile) => {
                     let name = profile.map_or("Random", |s| s.name.as_str());
@@ -1070,45 +1079,59 @@ fn show_slots(
                 }
                 None => computer_list(&mut commands, row, &lobby, (player, &side), &sais),
             }
-            let nation = (player.nation.as_deref()).or(lobby.nations.get(&id).map(Id::as_str));
-            // The game shows a side's nation by its flag alone, naming it
-            // only in the list to choose from.
-            let flag = Shown {
-                icon: flags.of(nation),
-                words: String::new(),
-                hint: Some(nation.map_or("Random".into(), |n| name_of(&all.0, n))),
-                ink: None,
-            };
-            // Only the machine a computer player belongs to marks what its
-            // profile doesn't list.
-            let owned = profile.filter(|_| staging.is_none() || hosting);
-            let listing = (id, side.as_str(), owned);
-            match &player.nation {
-                Some(_) => {
-                    let fixed = commands
-                        .spawn((ChildOf(row), inert(cell(NATION_WIDTH))))
-                        .id();
-                    flag.spawn(&mut commands, fixed);
+            // Nobody plays a side left open, so nothing is chosen for it:
+            // its other buttons line up with the rest.
+            if empty {
+                let gaps = 2.0 * SLOT_GAP;
+                let width = NATION_WIDTH + FACTION_WIDTH + HANDICAP_WIDTH + gaps;
+                let spacer = Node {
+                    width: px(width),
+                    ..default()
+                };
+                commands.spawn((ChildOf(row), spacer));
+            } else {
+                let nation =
+                    (player.nation.as_deref()).or(lobby.slots.nations.get(&id).map(Id::as_str));
+                // The game shows a side's nation by its flag alone, naming it
+                // only in the list to choose from.
+                let flag = Shown {
+                    icon: flags.of(nation),
+                    words: String::new(),
+                    hint: Some(nation.map_or("Random".into(), |n| name_of(&all.0, n))),
+                    ink: None,
+                };
+                // Only the machine a computer player belongs to marks what its
+                // profile doesn't list.
+                let owned = profile.filter(|_| staging.is_none() || hosting);
+                let listing = (id, side.as_str(), owned);
+                match &player.nation {
+                    Some(_) => {
+                        let fixed = commands
+                            .spawn((ChildOf(row), inert(cell(NATION_WIDTH))))
+                            .id();
+                        flag.spawn(&mut commands, fixed);
+                    }
+                    None => nation_list(&mut commands, row, &lobby, listing, flag, &all.0),
                 }
-                None => nation_list(&mut commands, row, &lobby, listing, flag, &all.0),
-            }
-            // A random nation's faction is random too.
-            let nation = nation.and_then(|n| all.0.iter().find(|a| a.id.as_str() == n));
-            let fixed = player.faction.as_deref().map(Id::from);
-            let fixed = fixed.map(|f| nation.and_then(|n| n.factions.iter().find(|g| g.id == f)));
-            match (fixed, nation) {
-                (None, Some(nation)) => {
-                    faction_list(&mut commands, row, &lobby, listing, &nation.factions);
-                }
-                (fixed, _) => {
-                    let name = fixed
-                        .flatten()
-                        .map_or("Random".into(), |g| g.short_name.clone());
-                    commands.spawn((
-                        ChildOf(row),
-                        inert(cell(160.0)),
-                        children![label(name, Font::Body, Ink::Muted)],
-                    ));
+                // A random nation's faction is random too.
+                let nation = nation.and_then(|n| all.0.iter().find(|a| a.id.as_str() == n));
+                let fixed = player.faction.as_deref().map(Id::from);
+                let fixed =
+                    fixed.map(|f| nation.and_then(|n| n.factions.iter().find(|g| g.id == f)));
+                match (fixed, nation) {
+                    (None, Some(nation)) => {
+                        faction_list(&mut commands, row, &lobby, listing, &nation.factions);
+                    }
+                    (fixed, _) => {
+                        let name = fixed
+                            .flatten()
+                            .map_or("Random".into(), |g| g.short_name.clone());
+                        commands.spawn((
+                            ChildOf(row),
+                            inert(cell(FACTION_WIDTH)),
+                            children![label(name, Font::Body, Ink::Muted)],
+                        ));
+                    }
                 }
             }
             if let Some(guest) = holder {
@@ -1116,9 +1139,9 @@ fn show_slots(
             } else if computer {
                 handicap_list(&mut commands, row, &lobby, (player, &side), &handicaps);
             }
-            // The person can move to a side the computer plays.
+            // The person can move to a side no other person takes.
             let movable = staging.map_or(player.playable, |(s, _)| s.sides.contains(&id));
-            if computer && movable {
+            if (computer || empty) && movable {
                 commands
                     .spawn((
                         ChildOf(row),
@@ -1187,6 +1210,15 @@ const NATION_WIDTH: f32 = 60.0;
 /// How wide who plays a side is shown.
 const WHO_WIDTH: f32 = 180.0;
 
+/// How wide a side's faction is shown.
+const FACTION_WIDTH: f32 = 160.0;
+
+/// How wide a side's handicap is shown: its icon, padded.
+const HANDICAP_WIDTH: f32 = 64.0;
+
+/// The room between what's shown of a side.
+const SLOT_GAP: f32 = 12.0;
+
 /// What a nation is called, by id.
 fn name_of(nations: &[Nation], id: &str) -> String {
     let nation = nations.iter().find(|n| n.id.as_str() == id);
@@ -1245,6 +1277,14 @@ fn unlisted(listed: Option<&[Id]>, all: &[Id], choice: Option<&Id>, name: String
     }
 }
 
+/// What a side left open reads as, saying so where the map requires it.
+fn open_label(player: &Player) -> String {
+    match player.required {
+        true => "Open (Required)".into(),
+        false => "Open".into(),
+    }
+}
+
 /// The profile of a side the computer plays in `row`, and the list to
 /// choose another from while it's open.
 fn computer_list(
@@ -1255,12 +1295,19 @@ fn computer_list(
     sais: &Sais,
 ) {
     let id = player.id;
-    let label = lobby
-        .profile(sais, id)
-        .map_or("Random".into(), |s| s.name.clone());
-    let offered = sais.offered().map(|s| (Some(s.id.clone()), s.name.clone()));
-    let choices = std::iter::once((None, "Random".to_string())).chain(offered);
-    let choices = choices.map(|(s, name)| (key(s.as_ref()), ComputerChoice(id, s), name));
+    let label = match lobby.profile(sais, id) {
+        _ if lobby.empty(id) => open_label(player),
+        Some(sai) => sai.name.clone(),
+        None => "Random".into(),
+    };
+    let offered = (sais.offered()).map(|s| {
+        let name = s.name.clone();
+        (key(Some(&s.id)), Holder::Computer(Some(s.id.clone())), name)
+    });
+    let open = ("open".to_string(), Holder::Open, "Open".to_string());
+    let random = (key(None), Holder::Computer(None), "Random".to_string());
+    let choices = [open, random].into_iter().chain(offered);
+    let choices = choices.map(|(key, holder, name)| (key, ComputerChoice(id, holder), name));
     let list = Dropdown {
         id: format!("{side}.computer"),
         row,
@@ -1287,7 +1334,7 @@ fn handicap_list(
     handicaps: &Handicaps,
 ) {
     let id = player.id;
-    let had = handicaps.of(lobby.handicaps.get(&id), player.handicap.as_ref());
+    let had = handicaps.of(lobby.slots.handicaps.get(&id), player.handicap.as_ref());
     let Some(had) = had else {
         return;
     };
@@ -1298,7 +1345,7 @@ fn handicap_list(
     let list = Dropdown {
         id: format!("{side}.handicap"),
         row,
-        width: px(64),
+        width: px(HANDICAP_WIDTH),
         label: handicaps.shown(had),
         open: lobby.open == Open::Handicaps(id),
     };
@@ -1321,7 +1368,7 @@ fn faction_list(
     factions: &[Faction],
 ) {
     let listed = profile.map(|s| s.factions.as_slice());
-    let chosen = lobby.factions.get(&player);
+    let chosen = lobby.slots.factions.get(&player);
     let chosen = chosen.and_then(|id| factions.iter().find(|g| g.id == *id));
     let label = chosen.map_or("Random".into(), |g| g.short_name.clone());
     let mut offered: Vec<_> = factions.iter().filter(|g| g.public).collect();
@@ -1339,7 +1386,7 @@ fn faction_list(
     let list = Dropdown {
         id: format!("{side}.general"),
         row,
-        width: px(160),
+        width: px(FACTION_WIDTH),
         label: label.into(),
         open,
     };
@@ -1423,7 +1470,7 @@ fn mark_chosen(lobby: Res<Lobby>, mut buttons: Query<Choice>) {
     for (mut chosen, side, preset, nation) in &mut buttons {
         let now = side.is_some_and(|s| s.0 == lobby.person)
             || preset.is_some_and(|p| p.0 == lobby.preset)
-            || nation.is_some_and(|NationChoice(p, n)| lobby.nations.get(p) == n.as_ref());
+            || nation.is_some_and(|NationChoice(p, n)| lobby.slots.nations.get(p) == n.as_ref());
         chosen.set_if_neq(Chosen(now));
     }
 }
@@ -1502,6 +1549,7 @@ mod tests {
             team: None,
             independent,
             playable,
+            required: false,
             default_defeat: true,
             outcome: Default::default(),
             won_by_cities: false,
@@ -1566,7 +1614,7 @@ mod tests {
         let mut players = players();
         players[1].handicap = Some(hard.clone());
         players[3].handicap = Some(easy.clone());
-        let chosen = HashMap::from([(10, hard.clone()), (12, easy.clone())]);
+        let chosen = BTreeMap::from([(10, hard.clone()), (12, easy.clone())]);
         // The lobby offers the person's side none.
         let chosen = computer_handicaps(&players, Some(12), &chosen);
         assert_eq!(chosen, BTreeMap::from([(10, hard.clone())]));
@@ -1633,17 +1681,23 @@ mod tests {
             preset: Preset::Custom,
             person: Some(12),
             others: Vec::new(),
-            nations: HashMap::new(),
-            factions: HashMap::new(),
-            handicaps: HashMap::new(),
-            computers: HashMap::from([(10, Id::from("konev_sai")), (12, Id::from("chuikov_sai"))]),
+            slots: tgserver::Slots {
+                computers: BTreeMap::from([
+                    (10, Id::from("konev_sai")),
+                    (12, Id::from("chuikov_sai")),
+                ]),
+                open: [11, 13].into(),
+                ..Default::default()
+            },
             rules: Default::default(),
             open: Open::Nothing,
         };
         let (setup, _, _) = lobby.setup(1).unwrap();
-        // The person's side has none, nor the independent one.
+        // The person's side has none, nor the one left open, nor the
+        // independent one, open or not.
         let konev = Some(Id::from("konev_sai"));
-        assert_eq!(setup.computers, BTreeMap::from([(10, konev), (13, None)]));
+        assert_eq!(setup.computers, BTreeMap::from([(10, konev)]));
+        assert_eq!(setup.open, [13].into());
     }
 
     #[test]
