@@ -1007,7 +1007,8 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         }
     }
 
-    /// A card for each, side by side.
+    /// A card for each, side by side, the display's offset apart and that
+    /// far down from its top, as the game draws them.
     fn cards(&mut self, rs: &[usize]) {
         let offset = (self.display.value("mini_display_offset"))
             .and_then(|v| v.trim().parse::<f32>().ok())
@@ -1019,7 +1020,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
                 continue;
             };
             let size = card.bounds(self.area);
-            let at = moved(size, left, 0.0);
+            let at = moved(size, left, offset);
             left += size.width() + offset;
             let holder = self
                 .s

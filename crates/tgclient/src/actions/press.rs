@@ -266,10 +266,10 @@ impl Presser<'_, '_> {
                             self.refusal.0 = Some((slot, e));
                         }
                     }
-                    *self.page = match (flown, given) {
-                        (true, Ok(())) => Page::Delivering(i),
-                        _ => commissioned(*self.page, given),
-                    };
+                    // A plain recruit leaves the menu open for the next.
+                    if flown && given.is_ok() {
+                        *self.page = Page::Delivering(i);
+                    }
                 }
             }
             Entry::Research(i) => {
@@ -288,7 +288,6 @@ impl Presser<'_, '_> {
                     debug!("can't research {}: {e:?}", item.technology);
                     self.refuse_research(b, i, e);
                 }
-                *self.page = commissioned(*self.page, given);
             }
         }
     }
@@ -404,15 +403,6 @@ pub(crate) fn shown_hq(
     }
 }
 
-/// The page after a press of a recruit in the commission menu: as the
-/// game does, back to the building's own buttons once it's been given.
-pub(crate) fn commissioned(page: Page, given: Result<(), tgsim::Refused>) -> Page {
-    match given {
-        Ok(()) => Page::Orders,
-        Err(_) => page,
-    }
-}
-
 /// The order to sell the building at `building`.
 pub(super) fn sell_command(building: usize) -> tgsim::Command {
     tgsim::Command::Sell { building }
@@ -449,12 +439,5 @@ mod tests {
             names(Entry::Open(Menu::Research), Page::Orders)[0],
             "ActorCommand research"
         );
-    }
-
-    #[test]
-    fn commissioning_goes_back_to_the_buildings_buttons() {
-        let menu = Page::Menu(Menu::Deploy);
-        assert_eq!(commissioned(menu, Ok(())), Page::Orders);
-        assert_eq!(commissioned(menu, Err(tgsim::Refused::Unable)), menu);
     }
 }
