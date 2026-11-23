@@ -6,7 +6,8 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
-use crate::resource_bar::{Cell, Previewing, stockpile};
+use crate::displays::Icon;
+use crate::resource_bar::{Cell, Previewing, Wording, stockpile};
 use crate::ui::{self, Font, Hint, Ink, Surface, backed, label};
 use crate::{Loaded, Local, Sim};
 
@@ -16,6 +17,8 @@ const CELL: f32 = 80.0;
 /// its rate.
 const STOCKPILE_CELL: f32 = 112.0;
 const HEIGHT: f32 = 22.0;
+/// A cell's icon's size.
+const ICON: f32 = 16.0;
 const GAP: f32 = 4.0;
 
 /// The widest the tooltip under the bar is before its words wrap.
@@ -46,6 +49,15 @@ pub fn spawn(
         "game_interface_UpkeepShortageIcon_ToolTip",
         "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
     );
+    // Our own icons where the data has them, else the game's glyphs.
+    let mut icons = game.resource_icons();
+    icons.retain(|resource, path| {
+        let there = game.exists(path);
+        if !there {
+            warn!("{resource}'s icon: no {path} in the data");
+        }
+        there
+    });
     let glyphs = crate::ui::glyphs(game, &mut images, &mut cache);
     let stockpile = stockpile(game);
     let cells = game.economy_bar();
@@ -93,17 +105,17 @@ pub fn spawn(
                     ..default()
                 })
                 .with_children(|cell| {
-                    if let Some(glyph) = glyphs.get(kind) {
-                        cell.spawn((
-                            ImageNode::new(glyph.clone()),
-                            Node {
-                                width: px(16),
-                                height: px(16),
-                                ..default()
-                            },
-                        ));
+                    let node = Node {
+                        width: px(ICON),
+                        height: px(ICON),
+                        ..default()
+                    };
+                    if let Some(path) = icons.get(kind) {
+                        cell.spawn((Icon::new(path.as_str()), node));
+                    } else if let Some(glyph) = glyphs.get(kind) {
+                        cell.spawn((ImageNode::new(glyph.clone()), node));
                     }
-                    let (text, hint) = Cell::new(game, preview, kind);
+                    let (text, hint) = Cell::new(game, preview, kind, Wording::Ours);
                     let mut text = cell.spawn((text, label("", Font::Hud, Ink::Body)));
                     // Unlike a label's, its text is hovered.
                     if let Some(hint) = hint {

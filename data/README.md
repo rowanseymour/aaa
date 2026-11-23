@@ -8,9 +8,10 @@ Name new ones so they can't clash, e.g. starting `modern_`.
 `modern/` is for every game, and `modern_<tag>/` for one game by its tag,
 e.g. `modern_aa`.
 
-Images can be SVGs, drawn without text, so letters have to be paths. An SVG is
-drawn at the size it gives itself: give an icon about three times the texels
-it's drawn at, so that it stays sharp when the interface is scaled up.
+Images can be SVGs, drawn without text, so letters have to be paths. Icons are
+drawn as big as they're shown, so they stay sharp at any scale; any other SVG is
+drawn at the size it gives itself, so give it about three times the texels it's
+shown at.
 
 The fonts are under the SIL Open Font License, given beside each, e.g.
 [`modern/Fonts/TrueType/OFL.txt`](modern/Fonts/TrueType/OFL.txt); the rest is

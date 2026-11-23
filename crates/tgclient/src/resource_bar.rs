@@ -58,6 +58,29 @@ pub struct Cell {
     resource: Id,
     /// Whether it's the stockpiled resource's, which shows the stockpile.
     stockpiled: bool,
+    wording: Wording,
+}
+
+/// How a cell writes its figures.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Wording {
+    /// As the game does: the stockpile's rate in brackets, and only what's
+    /// short coloured.
+    Game,
+    /// As our interface does: the stockpile's rate after a space, and each
+    /// rate coloured by which way it goes.
+    Ours,
+}
+
+/// How a run of a cell's text is coloured.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Tone {
+    #[default]
+    Body,
+    /// A figure that's gone short, such as a negative rate.
+    Short,
+    /// A rate that's growing, coloured only in [`Wording::Ours`].
+    Gain,
 }
 
 impl Cell {
@@ -67,6 +90,7 @@ impl Cell {
         game: &tgdata::GameData,
         preview: bool,
         resource: &Id,
+        wording: Wording,
     ) -> (Cell, Option<(Hint, Marked, About)>) {
         let resources = game.resources();
         let kind = resources.iter().find(|r| &r.id == resource);
@@ -74,6 +98,7 @@ impl Cell {
             preview,
             resource: resource.clone(),
             stockpiled: stockpile(game).as_ref() == Some(resource),
+            wording,
         };
         let name = kind.map_or(resource.to_string(), |k| k.name.clone());
         let about = kind.and_then(|k| k.description.clone());
@@ -152,10 +177,18 @@ pub fn show(
         let Some((stockpile, balance)) = shown else {
             continue;
         };
-        let parts = cell_parts(&cell.resource, cell.stockpiled, *stockpile, balance);
+        let parts = |stockpile, balance| {
+            cell_parts(
+                &cell.resource,
+                cell.stockpiled,
+                stockpile,
+                balance,
+                cell.wording,
+            )
+        };
+        let (parts, was) = (parts(*stockpile, balance), parts(now.0, &now.1));
         // The preview shows only what the order would change.
-        let changed =
-            !cell.preview || parts != cell_parts(&cell.resource, cell.stockpiled, now.0, &now.1);
+        let changed = !cell.preview || parts != was;
         if let Ok(mut visibility) = holders.get_mut(holder.parent()) {
             visibility.set_if_neq(crate::ui::visible(changed));
         }
@@ -185,7 +218,7 @@ type CellParts = (
 
 /// What a cell's hint says: its figures, then what the game says of its
 /// resource.
-fn said(parts: &[(String, bool)], about: Option<&str>) -> String {
+fn said(parts: &[(String, Tone)], about: Option<&str>) -> String {
     let figures: String = parts.iter().map(|(words, _)| words.as_str()).collect();
     match about {
         Some(about) => format!("{figures}\n{about}"),
@@ -208,75 +241,90 @@ fn paint(
     cell: Entity,
     children: Option<&Children>,
     (font, colours): (&TextFont, Option<&Colours>),
-    parts: Vec<(String, bool)>,
+    parts: Vec<(String, Tone)>,
     spans: &mut Query<SpanParts>,
 ) {
     let children = children.map_or(&[][..], |c| &c[..]);
-    let ink = |short| match short {
-        true => Ink::Short,
-        false => Ink::Body,
+    let ink = |tone| match tone {
+        Tone::Body => Ink::Body,
+        Tone::Short => Ink::Short,
+        Tone::Gain => Ink::Gain,
     };
-    let colour = |colours: &Colours, short| match short {
-        true => colours.short,
-        false => colours.body,
+    let colour = |colours: &Colours, tone| match tone {
+        Tone::Short => colours.short,
+        Tone::Body | Tone::Gain => colours.body,
     };
     let mut parts = parts.into_iter();
     for &child in children {
         let Ok((mut text, was_ink, was_colour)) = spans.get_mut(child) else {
             continue;
         };
-        let (words, short) = parts.next().unwrap_or_default();
+        let (words, tone) = parts.next().unwrap_or_default();
         if text.0 != words {
             text.0 = words;
         }
         match (colours, was_ink, was_colour) {
-            (Some(c), _, Some(mut was)) => _ = was.set_if_neq(TextColor(colour(c, short))),
-            (None, Some(mut was), _) => _ = was.set_if_neq(ink(short)),
+            (Some(c), _, Some(mut was)) => _ = was.set_if_neq(TextColor(colour(c, tone))),
+            (None, Some(mut was), _) => _ = was.set_if_neq(ink(tone)),
             _ => {}
         }
     }
-    for (words, short) in parts {
+    for (words, tone) in parts {
         let span = commands
             .spawn((TextSpan(words), font.clone(), ChildOf(cell)))
             .id();
         match colours {
-            Some(c) => commands.entity(span).insert(TextColor(colour(c, short))),
-            None => commands.entity(span).insert(ink(short)),
+            Some(c) => commands.entity(span).insert(TextColor(colour(c, tone))),
+            None => commands.entity(span).insert(ink(tone)),
         };
     }
 }
 
-/// What a cell says, in runs that are each short or not: the stockpile and
-/// its rate, a resource's rate, or a limit's use against what's provided.
+/// What a cell says, in runs each with its tone, worded as `wording`
+/// says: the stockpile and its rate, a resource's rate, or a limit's use
+/// against what's provided.
 fn cell_parts(
     kind: &Id,
     stockpiled: bool,
     stockpile: f32,
     balance: &Balance,
-) -> Vec<(String, bool)> {
+    wording: Wording,
+) -> Vec<(String, Tone)> {
+    let short = |s: bool| if s { Tone::Short } else { Tone::Body };
     // The sign comes from the rate, not its rounding, so a rate just under
     // zero reads -0.
     let rate = |r: f32| {
         let sign = if r < 0.0 { '-' } else { '+' };
-        (format!("{sign}{}", r.abs().round()), r < 0.0)
+        let tone = match wording == Wording::Ours && r.round() > 0.0 {
+            true => Tone::Gain,
+            false => short(r < 0.0),
+        };
+        (format!("{sign}{}", r.abs().round()), tone)
     };
     if let Some(limit) = balance.limits.iter().find(|l| l.consumed == *kind) {
         let (used, provided) = (limit.used.round(), limit.provided.round());
         return vec![
-            (used.to_string(), used > provided),
-            (format!("/{provided}"), false),
+            (used.to_string(), short(used > provided)),
+            (format!("/{provided}"), Tone::Body),
         ];
     }
     let net = balance.net.get(kind.as_str());
-    match stockpiled {
-        true => vec![
-            // Adding zero turns a -0 into 0.
-            ((stockpile.floor() + 0.0).to_string(), stockpile < 0.0),
-            ("(".into(), false),
+    if !stockpiled {
+        return vec![rate(net)];
+    }
+    // Adding zero turns a -0 into 0.
+    let held = (
+        (stockpile.floor() + 0.0).to_string(),
+        short(stockpile < 0.0),
+    );
+    match wording {
+        Wording::Game => vec![
+            held,
+            ("(".into(), Tone::Body),
             rate(net),
-            (")".into(), false),
+            (")".into(), Tone::Body),
         ],
-        false => vec![rate(net)],
+        Wording::Ours => vec![held, (" ".into(), Tone::Body), rate(net)],
     }
 }
 
@@ -319,7 +367,7 @@ mod tests {
         let said: Vec<String> = cells
             .iter()
             .map(|&k| {
-                cell_parts(&Id::from(k), k == "money", 518.7, &balance)
+                cell_parts(&Id::from(k), k == "money", 518.7, &balance, Wording::Game)
                     .into_iter()
                     .map(|p| p.0)
                     .collect()
@@ -344,10 +392,16 @@ mod tests {
         };
         let balance = ledger.balance(&rules);
         let parts = |kind: &str, stockpile| {
-            cell_parts(&Id::from(kind), kind == "money", stockpile, &balance)
+            cell_parts(
+                &Id::from(kind),
+                kind == "money",
+                stockpile,
+                &balance,
+                Wording::Game,
+            )
         };
-        let short = |s: &str| (s.to_string(), true);
-        let body = |s: &str| (s.to_string(), false);
+        let short = |s: &str| (s.to_string(), Tone::Short);
+        let body = |s: &str| (s.to_string(), Tone::Body);
         assert_eq!(
             parts("money", -12.5),
             [short("-13"), body("("), short("-0"), body(")")]
@@ -363,12 +417,45 @@ mod tests {
     }
 
     #[test]
+    fn our_wording_parts_the_rate_from_the_stockpile_and_colours_it() {
+        let mut ledger = Ledger::default();
+        ledger.production.set("money", 25.0);
+        ledger.upkeep.set("oil", 4.0);
+        ledger.production.set("ammo", 0.2);
+        let rules = EconomyRules {
+            resources: resources(),
+            ..Default::default()
+        };
+        let balance = ledger.balance(&rules);
+        let parts = |kind: &str| {
+            cell_parts(
+                &Id::from(kind),
+                kind == "money",
+                518.7,
+                &balance,
+                Wording::Ours,
+            )
+        };
+        let run = |s: &str, tone| (s.to_string(), tone);
+        assert_eq!(
+            parts("money"),
+            [
+                run("518", Tone::Body),
+                run(" ", Tone::Body),
+                run("+25", Tone::Gain)
+            ]
+        );
+        assert_eq!(parts("oil"), [run("-4", Tone::Short)]);
+        assert_eq!(parts("ammo"), [run("+0", Tone::Body)]);
+    }
+
+    #[test]
     fn a_cells_hint_is_its_figures_then_what_the_game_says_of_it() {
         let parts = [
-            ("512".into(), false),
-            ("(".into(), false),
-            ("+25".into(), true),
-            (")".into(), false),
+            ("512".into(), Tone::Body),
+            ("(".into(), Tone::Body),
+            ("+25".into(), Tone::Short),
+            (")".into(), Tone::Body),
         ];
         assert_eq!(
             said(&parts, Some("Money is gained.")),
@@ -382,7 +469,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         let cell = world.spawn(label("", Font::Hud, Ink::Body)).id();
-        let mut paint_with = |parts: Vec<(String, bool)>| {
+        let mut paint_with = |parts: Vec<(String, Tone)>| {
             world
                 .run_system_once(
                     move |mut commands: Commands,
@@ -402,8 +489,8 @@ mod tests {
                 )
                 .unwrap();
         };
-        paint_with(vec![("6".into(), true), ("/5".into(), false)]);
-        paint_with(vec![("5".into(), false)]);
+        paint_with(vec![("6".into(), Tone::Short), ("/5".into(), Tone::Body)]);
+        paint_with(vec![("5".into(), Tone::Body)]);
         let children: Vec<Entity> = world.get::<Children>(cell).unwrap().to_vec();
         let spans: Vec<(String, Ink, f32)> = children
             .iter()

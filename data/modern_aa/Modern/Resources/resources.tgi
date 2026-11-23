@@ -1,0 +1,32 @@
+;; The icons this project's own interface draws each resource's cell of its
+;; resource bar with, in colour so each is told apart at a glance.
+
+[ResourceIcon]
+{
+	resource_ids = money
+	texture = money.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = ammo
+	texture = ammo.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = oil
+	texture = oil.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = unit_limit_consumed
+	texture = units.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = building_limit_consumed
+	texture = buildings.svg
+}
