@@ -144,7 +144,8 @@ pub fn show(
     mut tooltip: TipParts,
 ) {
     tooltip.say(&said);
-    // Others' things have no buttons.
+    // Others' things have no buttons of their own, nor, without allies, the
+    // team commands.
     panel.set_if_neq(ui::visible(shown.commanded));
     if !shown.commanded {
         return;

@@ -82,6 +82,8 @@ pub struct Chat {
     sent: Vec<String>,
     /// Which of those is being looked at again, if one is.
     recall: Option<usize>,
+    /// Who it's to be opened to, as soon as it can take the keyboard.
+    asked: Option<Filter>,
 }
 
 #[derive(Component)]
@@ -123,6 +125,12 @@ impl Chat {
         self.open
     }
 
+    /// Asks for the bar to open to `filter`, which it does once it takes
+    /// the keyboard, so the key that asked isn't typed into it.
+    pub(crate) fn ask(&mut self, filter: Filter) {
+        self.asked = Some(filter);
+    }
+
     /// The bar, opened with nothing typed.
     #[cfg(test)]
     pub(crate) fn opened() -> Chat {
@@ -141,7 +149,7 @@ pub fn closed(chat: Option<Res<Chat>>) -> bool {
 
 /// The people other than the player here who play sides, by side: those
 /// the bar can whisper to.
-fn people(orders: &Orders, local: Option<u32>) -> Vec<u32> {
+pub(crate) fn people(orders: &Orders, local: Option<u32>) -> Vec<u32> {
     let seats = orders.status().into_iter().flat_map(|s| &s.seats);
     let sides = seats.flat_map(|s| s.players.iter().copied());
     sides.filter(|&side| Some(side) != local).collect()
@@ -196,7 +204,10 @@ pub fn keys(
     let activate = crate::intent::asked(&mut intents, ACTIVATE);
     if !chat.open {
         presses.clear();
-        if activate {
+        if let Some(filter) = chat.asked.take() {
+            chat.filter = Some(filter);
+            open(&mut chat, &orders, &sim.0, local);
+        } else if activate {
             open(&mut chat, &orders, &sim.0, local);
         }
         return;

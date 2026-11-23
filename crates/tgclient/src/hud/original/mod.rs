@@ -1373,6 +1373,13 @@ pub fn show_grid(
                 {
                     image.image = handle.clone();
                 }
+                // An ally's button is drawn in the ally's colour.
+                let colour = face
+                    .tint
+                    .map_or(Color::WHITE, |[r, g, b]| Color::srgb(r, g, b));
+                if image.color != colour {
+                    image.color = colour;
+                }
             }
         }
     }

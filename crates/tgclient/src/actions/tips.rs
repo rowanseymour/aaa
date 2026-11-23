@@ -135,14 +135,42 @@ pub fn tell(
     focus: Res<crate::Focus>,
     refusal: Res<Refusal>,
     bindings: Res<Bindings>,
+    (leaders, log): (
+        Res<crate::Leaders>,
+        Option<Res<crate::messages::MessageLog>>,
+    ),
     mut said: ResMut<Said>,
 ) {
+    // The ally page's buttons are named for the sides they're for.
+    let map = log.map(|l| l.map_strings()).unwrap_or_default();
+    let ally_names: Vec<String> = (super::allies(&sim.0, local.0).into_iter())
+        .filter_map(|side| sim.0.sides.player(side))
+        .map(|p| leaders.owner(p, &sim.0.sides, &map))
+        .collect();
     let building = chosen.0.filter(|_| selected.0.is_empty());
-    let tip = match crate::selection::commanded(&sim.0, local.0, &selected.0, building) {
+    // Others' things have only the team commands, as if nothing of the
+    // player's were selected.
+    let (selection, building) =
+        match crate::selection::commanded(&sim.0, local.0, &selected.0, building) {
+            true => (&selected.0[..], building),
+            false => (&[][..], None),
+        };
+    let tip = match shown.commanded {
         true => {
+            let theirs = selection.is_empty() && building.is_none();
             let under = (slots.iter()).find_map(|(slot, hover)| {
                 let entry = shown.entries[slot.0].filter(|_| hover.get())?;
-                Some((slot.0, entry))
+                // A grid from before the selection changed may still hold
+                // the player's own entries, which need what was selected.
+                let team = matches!(
+                    entry,
+                    Entry::TeamCommands
+                        | Entry::AllAllies
+                        | Entry::Ally(_)
+                        | Entry::Team(_)
+                        | Entry::TeamCancel
+                );
+                (team || !theirs).then_some((slot.0, entry))
             });
             let hovered = under.map(|(slot, entry)| {
                 let tip = Grounds {
@@ -150,14 +178,15 @@ pub fn tell(
                     sim: &sim.0,
                     looks: &looks,
                     shown: &shown,
-                    selected: &selected.0,
+                    selected: selection,
                     building,
                     refusal: &refusal,
                     bindings: &bindings,
+                    ally_names: &ally_names,
                 };
                 tip.of(slot, entry)
             });
-            prompted(hovered, *page, &sim.0, &selected.0, local.0, *focus)
+            prompted(hovered, *page, &sim.0, selection, local.0, *focus)
         }
         false => None,
     };
@@ -176,6 +205,7 @@ struct Grounds<'a> {
     building: Option<usize>,
     refusal: &'a Refusal,
     bindings: &'a Bindings,
+    ally_names: &'a [String],
 }
 
 impl Grounds<'_> {
@@ -204,6 +234,10 @@ impl Grounds<'_> {
         // A greyed technology's tooltip says only what it wants.
         let mut only = None;
         let look = look_of(entry, sim, looks, building, &builds);
+        let name = match entry {
+            Entry::Ally(n) => self.ally_names.get(n).map_or("", String::as_str),
+            _ => look.name.as_str(),
+        };
         let ready = shown.faces[slot].as_ref().is_some_and(|f| f.ready);
         match entry {
             Entry::Research(i) => {
@@ -257,14 +291,14 @@ impl Grounds<'_> {
         let why = match (ready, why, refused) {
             (_, _, Some(_)) if unaffordable.is_some() => unaffordable.map(|(said, cost)| {
                 let cost = cost.ceil().to_string();
-                fill(said, &[&look.name, &cost])
+                fill(said, &[name, &cost])
             }),
             (_, _, Some(refused)) => Some(refused_why(refused).to_string()),
             (true, _, _) => None,
             (false, Some(why), _) => Some(why),
             (false, None, _) => Some(look.disabled.clone().unwrap_or("Not yet".into())),
         };
-        let names = bound(entry, slot, page, (menu, &builds), list);
+        let names = bound(entry, slot, page, (menu, &builds, &looks.team), list);
         let key = names.iter().find_map(|action| self.bindings.key(action));
         let help = match (entry, building) {
             (Entry::Sell, Some(b)) => {
@@ -279,8 +313,8 @@ impl Grounds<'_> {
             },
             None => Tip {
                 title: match key {
-                    Some(key) => key.mark(&look.name),
-                    None => Marked::plain(look.name.as_str()),
+                    Some(key) => key.mark(name),
+                    None => Marked::plain(name),
                 },
                 help,
                 table,

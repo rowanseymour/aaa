@@ -32,6 +32,53 @@ pub struct Command {
     pub alone: bool,
 }
 
+/// An action button that isn't a command, such as the one opening the
+/// team commands, as the layouts describe it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ActionButton {
+    pub name: Option<String>,
+    pub tooltip: Option<String>,
+    /// Which button it takes, numbered across then down.
+    pub slot: Option<usize>,
+    /// Archive path of its icon.
+    pub icon: Option<String>,
+}
+
+/// The template the layouts' action buttons are written with.
+const BUTTON: &str = "ActionButtonInfo";
+
+/// The block among `block`'s descendants describing the action button
+/// `name`.
+fn button_block<'a>(block: &'a tgi::Block, name: &str) -> Option<&'a tgi::Block> {
+    (block.blocks()).find_map(|b| {
+        let info = b
+            .attr("Template")
+            .is_some_and(|t| t.eq_ignore_ascii_case(BUTTON));
+        match info && b.kind().is_some_and(|k| k.eq_ignore_ascii_case(name)) {
+            true => Some(b),
+            false => button_block(b, name),
+        }
+    })
+}
+
+/// A command block as the button it shows; none without an id.
+fn command(strings: &crate::Strings, c: defs::ActorCommand) -> Option<Command> {
+    let ids = c.ids?;
+    Some(Command {
+        name: localized(strings, c.name.as_deref()).unwrap_or(ids.to_string()),
+        ids,
+        tooltip: localized(strings, c.tooltip.as_deref()).filter(|t| !t.is_empty()),
+        disabled: localized(strings, c.description_disabled.as_deref()).filter(|t| !t.is_empty()),
+        icon: c.icon.as_deref().and_then(ui_path),
+        slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
+        high_importance: c.high_importance,
+        cursor: not_null(c.cursor_ids),
+        marker: c.command_vfx_ids_location,
+        group_offset: c.apply_group_offset.unwrap_or(true),
+        alone: c.non_group_command,
+    })
+}
+
 /// The images the connection dialog draws, by archive path.
 #[derive(Debug, Clone, Default)]
 pub struct ConnectionLook {
@@ -324,27 +371,42 @@ impl GameData {
             n.starts_with("game/actor_commands") || n.starts_with("game/actorcommands/")
         });
         let files = scoped(&files);
-        files
-            .iter()
+        (files.iter())
             .flat_map(|f| f.read::<defs::ActorCommand>("ActorCommand"))
-            .filter_map(|c| {
-                let ids = c.ids?;
-                Some(Command {
-                    name: localized(&strings, c.name.as_deref()).unwrap_or(ids.to_string()),
-                    ids,
-                    tooltip: localized(&strings, c.tooltip.as_deref()).filter(|t| !t.is_empty()),
-                    disabled: localized(&strings, c.description_disabled.as_deref())
-                        .filter(|t| !t.is_empty()),
-                    icon: c.icon.as_deref().and_then(ui_path),
-                    slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
-                    high_importance: c.high_importance,
-                    cursor: not_null(c.cursor_ids),
-                    marker: c.command_vfx_ids_location,
-                    group_offset: c.apply_group_offset.unwrap_or(true),
-                    alone: c.non_group_command,
-                })
-            })
+            .filter_map(|c| command(&strings, c))
             .collect()
+    }
+
+    /// The requests the player can make of allies, such as `team_attack`,
+    /// in the order the files list them.
+    pub fn team_commands(&self) -> Vec<Command> {
+        let strings = self.strings();
+        let files = self.parse_tgis(|n| n.starts_with("game/team_commands"));
+        let files = scoped(&files);
+        (files.iter())
+            .flat_map(|f| f.read::<defs::ActorCommand>("TeamCommand"))
+            .filter_map(|c| command(&strings, c))
+            .collect()
+    }
+
+    /// The action button the in-match layouts describe by `name`, such as
+    /// `GoToTeamCommands`, for one that isn't a command.
+    pub fn action_button(&self, name: &str) -> Option<ActionButton> {
+        let strings = self.strings();
+        // The interface's layouts aren't in the load lists.
+        let names = self.entry_names(|n| n.starts_with("ui/game/") && n.ends_with(".tgi"));
+        let files = self.parse_named(names.iter().map(String::as_str));
+        let block = files
+            .iter()
+            .rev()
+            .find_map(|(_, f)| button_block(&f.root, name))?;
+        let said = |key| localized(&strings, block.value(key)).filter(|t| !t.is_empty());
+        Some(ActionButton {
+            name: said("name"),
+            tooltip: said("tooltip"),
+            slot: block.parse_value("index"),
+            icon: block.value("texture").and_then(ui_path),
+        })
     }
 
     /// The mouse cursors whose frames are all there, by id.
@@ -475,6 +537,17 @@ mod tests {
         let panel = descendant(&parsed.root, "LANOptionsPanel").unwrap();
         assert_eq!(labelled(panel), Some("#nickname"));
         assert!(descendant(&parsed.root, "Elsewhere").is_none());
+    }
+
+    #[test]
+    fn an_action_button_is_found_by_name_among_the_layout_s_blocks() {
+        let parsed = tgi::parse(
+            "[ActionButtons Inherit=PanelWidget]\n{\n\t[GoToTeamCommands]\n\t{\n\t}\n\
+             \t[GoToTeamCommands Template = ActionButtonInfo]\n\t{\n\t\tindex = 8\n\t}\n}\n",
+        );
+        let block = button_block(&parsed.root, "gototeamcommands").unwrap();
+        assert_eq!(block.parse_value::<usize>("index"), Some(8));
+        assert!(button_block(&parsed.root, "ActionButtons").is_none());
     }
 }
 

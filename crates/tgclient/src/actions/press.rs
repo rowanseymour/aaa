@@ -13,12 +13,13 @@ use crate::messages::{About, Failed};
 use crate::{Local, Orders, Screen, Selected, SelectedBuilding, Sim};
 
 use super::card_buttons::{AimedFor, CARD_BUTTON, CardOrder, card_order};
-use super::layout::builds;
-use super::looks::{Looks, Recruit};
+use super::layout::{allies, builds};
+use super::looks::{Looks, Recruit, TeamCommand};
 use super::tips::fill;
 use super::{
     AIR_ATTACK, Aim, CANCEL_LOOK, CONSTRUCT, DEPLOY, DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON,
-    Entry, Give, Menu, ORDERS, PACK, Page, RALLY, RESEARCH, Refusal, SELL, SLOTS, Shown, WIDGET,
+    Entry, Give, Menu, ORDERS, PACK, Page, RALLY, RESEARCH, Refusal, SELECT_ALLY, SELL, SLOTS,
+    Shown, TEAM_CANCEL, TEAM_CHAT, TEAM_COMMANDS, Target, WIDGET,
 };
 
 /// What the game's hotkeys call what a button does, and the button
@@ -27,7 +28,7 @@ pub(crate) fn bound(
     entry: Entry,
     slot: usize,
     page: Page,
-    (menu, builds): (&[Recruit], &[Id]),
+    (menu, builds, team): (&[Recruit], &[Id], &[TeamCommand]),
     researches: &[tgmap::Research],
 ) -> Vec<String> {
     let command = |ids: &str| format!("ActorCommand {ids}");
@@ -59,6 +60,15 @@ pub(crate) fn bound(
             vec![format!("ActorDataSelectCommand {template}")]
         }
         Entry::CancelSite => vec![command(CANCEL_LOOK)],
+        Entry::TeamCommands => vec![TEAM_COMMANDS.into()],
+        Entry::AllAllies => vec![SELECT_ALLY.into()],
+        // Keys reach only the first nine.
+        Entry::Ally(n) => vec![format!("{SELECT_ALLY} {}", n + 1)],
+        Entry::Team(i) => {
+            let ids = team.get(i).map_or("", |t| t.ids.as_str());
+            vec![format!("TeamCommand {ids}")]
+        }
+        Entry::TeamCancel => vec![TEAM_CANCEL.into()],
     };
     names.push(widget(slot));
     names
@@ -80,6 +90,7 @@ pub struct Presser<'w, 's> {
     time: Res<'w, Time>,
     sounds: ResMut<'w, crate::sound::Sounds>,
     refusal: ResMut<'w, Refusal>,
+    chat: ResMut<'w, crate::chat::Chat>,
     failed: MessageWriter<'w, Failed>,
     words: Res<'w, crate::confirm::Words>,
     questions: Query<'w, 's, (), With<crate::confirm::Question>>,
@@ -194,7 +205,33 @@ impl Presser<'_, '_> {
                     }
                 }
             }
-            Entry::Cancel => *self.page = Page::Orders,
+            Entry::Cancel | Entry::TeamCancel => *self.page = Page::Orders,
+            Entry::TeamCommands => *self.page = Page::Allies,
+            Entry::AllAllies => *self.page = Page::Team(Target::All),
+            Entry::Ally(n) => {
+                if let Some(&side) = allies(sim, Some(player)).get(n) {
+                    *self.page = Page::Team(Target::Side(side));
+                }
+            }
+            Entry::Team(i) => {
+                let Page::Team(target) = *self.page else {
+                    return;
+                };
+                // Chat is all the sim lets be asked; the rest stay up.
+                if self
+                    .looks
+                    .team
+                    .get(i)
+                    .is_some_and(|t| t.ids.as_str() == TEAM_CHAT)
+                {
+                    let filter = match target {
+                        Target::All => crate::chat::Filter::Allies,
+                        Target::Side(side) => crate::chat::Filter::To(side),
+                    };
+                    self.chat.ask(filter);
+                    *self.page = Page::Orders;
+                }
+            }
             Entry::Open(menu) => *self.page = Page::Menu(menu),
             Entry::Rally => *self.page = Page::Rally,
             Entry::AirAttack => *self.page = Page::AirAttack,
@@ -363,12 +400,15 @@ pub fn act(mut intents: MessageReader<Intent>, mut presser: Presser) {
     let menu = presser.looks.menu(&presser.sim.0, building);
     let list = building.map_or(&[][..], |b| presser.sim.0.research_list(b));
     let builds = builds(&presser.sim.0, &presser.selected.0);
+    let team = &presser.looks.team;
     let page = *presser.page;
     let slot = (0..SLOTS).find(|&slot| {
         let names = presser.shown.entries[slot]
             .filter(|e| !matches!(e, Entry::Recruit(i) if *i >= menu.len()))
             .filter(|e| !matches!(e, Entry::Research(i) if *i >= list.len()))
-            .map_or(Vec::new(), |e| bound(e, slot, page, (menu, &builds), list));
+            .map_or(Vec::new(), |e| {
+                bound(e, slot, page, (menu, &builds, team), list)
+            });
         names.iter().any(|name| wanted(name))
     });
     if let Some(slot) = slot {
@@ -426,7 +466,7 @@ mod tests {
     fn buttons_go_by_the_names_the_hotkeys_bind() {
         let attach = ORDERS.iter().position(|(i, _)| *i == "hq_attach");
         let attach = Entry::Order(attach.unwrap());
-        let names = |entry, page| bound(entry, 4, page, (&[], &[]), &[]);
+        let names = |entry, page| bound(entry, 4, page, (&[], &[], &[]), &[]);
         assert_eq!(
             names(attach, Page::Orders),
             ["ActorCommand hq_attach", "ActionButtonsButton_4"]
