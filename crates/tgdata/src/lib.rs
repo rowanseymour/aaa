@@ -1394,6 +1394,16 @@ mod tests {
     }
 
     #[test]
+    fn this_projects_own_resource_icons_are_there() {
+        let game = own_data();
+        let icons = game.resource_icons();
+        assert!(!icons.is_empty());
+        for (resource, texture) in icons {
+            assert!(game.exists(&texture), "{resource}: no {texture}");
+        }
+    }
+
+    #[test]
     fn a_system_face_is_stood_in_for_by_the_file_named_for_it() {
         let dir = folder(
             "system-face",

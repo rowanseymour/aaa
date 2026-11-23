@@ -315,6 +315,9 @@ pub struct Looks {
     pub(crate) listings: Arc<HashMap<Id, tgdata::Listing>>,
     /// Each resource's glyph, by the resource's id.
     pub(crate) glyphs: HashMap<Id, Handle<Image>>,
+    /// The paths of our own interface's icons for resources, by the
+    /// resource's id, drawn in place of their glyphs.
+    pub(crate) icons: HashMap<Id, String>,
     pub(crate) strings: Arc<tgdata::Strings>,
     /// The map's own text, for the names it gives things and sides.
     pub(crate) map: Arc<tgdata::Strings>,
@@ -457,6 +460,7 @@ pub fn setup(
         names: names.collect(),
         listings: listings.clone(),
         glyphs,
+        icons: crate::ui::resource_icons(game),
         strings: game.strings(),
         map: loaded.map.strings.clone(),
         properties,

@@ -1,6 +1,5 @@
 //! Our chat button, a glyph on the minimap's rim.
 
-use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use super::displays::{Glyph, Lighting, Quadrant, RimLook, light, rim_button};
@@ -16,14 +15,7 @@ use crate::ui::{Click, Hint, Theme};
 pub struct ChatButton;
 
 /// Spawns the chat button.
-pub fn spawn(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    bindings: Res<Bindings>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-    mut icons: ResMut<displays::Icons>,
-) {
+pub fn spawn(mut commands: Commands, loaded: Res<Loaded>, bindings: Res<Bindings>) {
     let strings = loaded.game.strings();
     let said = crate::ui::said(&strings);
     let name = said("control_panel_ButtonChat_ToolTip", "Chat");
@@ -31,12 +23,7 @@ pub fn spawn(
         "control_panel_ButtonChat_tooltip_2",
         "Allows you to send messages to other players.",
     );
-    let glyph = icons.get(
-        &loaded.game,
-        &displays::icon("chat"),
-        &mut images,
-        formats.0,
-    );
+    let glyph = displays::icon("chat");
     commands.spawn((
         rim_button(Quadrant::TopLeft.first(), glyph, Click::TOGGLE),
         Named::new(&bindings, ACTIVATE, name),

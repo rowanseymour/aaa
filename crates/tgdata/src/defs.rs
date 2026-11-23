@@ -1229,6 +1229,15 @@ pub struct Emblem {
     pub texture: Option<String>,
 }
 
+/// A resource's icon, as this project's own interface draws the resource
+/// in place of its glyph.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourceIcon {
+    pub resource_ids: Option<Id>,
+    /// Its image, beside the file unless it starts with `/`.
+    pub texture: Option<String>,
+}
+
 /// How this project's own interface looks for a game. Colours are sRGB,
 /// each part from 0 to 1.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]

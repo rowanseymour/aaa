@@ -13,6 +13,7 @@ use tgdata::Id;
 use tgrender::textures;
 use tgsim::Target;
 
+use crate::displays::Icon;
 use crate::hud::original::Cards;
 use crate::object_display::*;
 use crate::ui::Blocks;
@@ -906,15 +907,15 @@ pub fn economy(
                     ..default()
                 };
                 row.spawn((item, Pickable::IGNORE)).with_children(|item| {
-                    if let Some(glyph) = looks.glyphs.get(kind) {
-                        item.spawn((
-                            ImageNode::new(glyph.clone()),
-                            Node {
-                                width: px(14),
-                                height: px(14),
-                                ..default()
-                            },
-                        ));
+                    let node = Node {
+                        width: px(14),
+                        height: px(14),
+                        ..default()
+                    };
+                    if let Some(path) = looks.icons.get(kind) {
+                        item.spawn((Icon::new(path.as_str()), node));
+                    } else if let Some(glyph) = looks.glyphs.get(kind) {
+                        item.spawn((ImageNode::new(glyph.clone()), node));
                     }
                     item.spawn(label(figure.clone(), Font::Hud, Ink::Body));
                 });

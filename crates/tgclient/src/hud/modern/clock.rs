@@ -1,6 +1,5 @@
 //! Our pause button, a glyph on the minimap's rim.
 
-use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use super::displays::{Glyph, Lighting, Quadrant, RimLook, light, rim_button};
@@ -16,24 +15,12 @@ use crate::ui::{Click, Hint, Theme};
 pub struct PauseButton;
 
 /// Spawns the pause button.
-pub fn spawn(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    bindings: Res<Bindings>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-    mut icons: ResMut<displays::Icons>,
-) {
+pub fn spawn(mut commands: Commands, loaded: Res<Loaded>, bindings: Res<Bindings>) {
     let strings = loaded.game.strings();
     let said = crate::ui::said(&strings);
     let name = said("control_panel_ButtonPause_ToolTip", "Pause Game");
     let help = said("control_panel_ButtonPause_tooltip_2", "Pauses the game.");
-    let glyph = icons.get(
-        &loaded.game,
-        &displays::icon("pause"),
-        &mut images,
-        formats.0,
-    );
+    let glyph = displays::icon("pause");
     commands.spawn((
         rim_button(Quadrant::BottomRight.first(), glyph, Click::TOGGLE),
         Named::new(&bindings, PAUSE, name),

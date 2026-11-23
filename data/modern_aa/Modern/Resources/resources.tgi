@@ -1,0 +1,45 @@
+;; The icons this project's own interface draws each resource with, on its
+;; resource bar and object display, in colour so each is told apart at a
+;; glance. A limit's room and what's taken of it share an icon.
+
+[ResourceIcon]
+{
+	resource_ids = money
+	texture = money.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = ammo
+	texture = ammo.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = oil
+	texture = oil.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = unit_limit_provided
+	texture = units.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = unit_limit_consumed
+	texture = units.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = building_limit_provided
+	texture = buildings.svg
+}
+
+[ResourceIcon]
+{
+	resource_ids = building_limit_consumed
+	texture = buildings.svg
+}

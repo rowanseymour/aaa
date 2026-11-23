@@ -144,6 +144,7 @@ impl Theme {
             Ink::Muted => mix(self.tint, self.light, 0.45),
             Ink::Warn => Color::srgb(1.0, 0.75, 0.3),
             Ink::Short => self.short.unwrap_or_else(|| self.ink(Ink::Warn)),
+            Ink::Gain => Color::srgb(0.62, 0.75, 0.42),
             Ink::Key => self.key.unwrap_or(Color::srgb(1.0, 1.0, 0.0)),
         }
     }
@@ -230,6 +231,8 @@ pub enum Ink {
     Warn,
     /// A figure that's gone short, such as a negative rate.
     Short,
+    /// A figure that's growing, such as a positive rate.
+    Gain,
     /// The key for what a name names, marked in it.
     Key,
 }
@@ -341,9 +344,9 @@ impl Font {
     }
 
     /// The face it's set in: the logo's lettering, its stencil where it's
-    /// big enough to keep its letters whole, and the same family's plain cut,
-    /// drawn for small sizes, elsewhere. The interface over the map has a
-    /// handle of its own, for an interface to set in a face of its own.
+    /// big enough to keep its letters whole, a face drawn to stay readable
+    /// at the small sizes of the interface over the map and of hints, and
+    /// the same family's plain cut elsewhere.
     fn source(self) -> FontSource {
         match self {
             Font::Heading | Font::Large | Font::Title => FontSource::Handle(STENCIL),
@@ -355,20 +358,22 @@ impl Font {
 
 const STENCIL: Handle<Face> = uuid_handle!("8ce28202-5c4b-41aa-b4eb-656a8714c917");
 const PLAIN: Handle<Face> = uuid_handle!("f5c773eb-4ca7-4c04-80e4-2f691862ea4e");
-/// The face of the interface over the map: [`PLAIN`]'s, unless an interface
-/// sets its text in another.
+/// The face of small text: the interface over the map's, which an interface
+/// may set in another in place of, and hints'.
 pub const HUD: Handle<Face> = uuid_handle!("c36b3287-1c7b-4378-b32a-61c4bce2710a");
 
-/// The faces [`STENCIL`] and [`PLAIN`] are, from this project's own data,
-/// as the `[Font]`s of these `ids`.
+/// The faces [`STENCIL`], [`PLAIN`] and [`HUD`] are, from this project's
+/// own data, as the `[Font]`s of these `ids`.
 const STENCIL_IDS: &str = "modern_stencil";
 const PLAIN_IDS: &str = "modern_plain";
+const HUD_IDS: &str = "modern_hud";
 
 /// The interface's faces, as their files' bytes.
 #[derive(Resource)]
 pub struct Faces {
     stencil: Vec<u8>,
     plain: Vec<u8>,
+    hud: Vec<u8>,
 }
 
 impl Faces {
@@ -382,6 +387,7 @@ impl Faces {
         Ok(Faces {
             stencil: face(STENCIL_IDS)?,
             plain: face(PLAIN_IDS)?,
+            hud: face(HUD_IDS)?,
         })
     }
 }
@@ -390,7 +396,7 @@ fn faces(faces: Res<Faces>, mut fonts: ResMut<Assets<Face>>) {
     let faces = [
         (STENCIL, &faces.stencil),
         (PLAIN, &faces.plain),
-        (HUD, &faces.plain),
+        (HUD, &faces.hud),
     ];
     for (handle, bytes) in faces {
         // Never fails for a fixed handle.
@@ -1401,6 +1407,20 @@ pub(crate) fn glyphs(
         Some((r.id.clone(), cache.get(game, images, &path)?))
     });
     glyphs.collect()
+}
+
+/// The paths of our own interface's icons for resources, by the
+/// resource's id: those the data names that are there to draw.
+pub(crate) fn resource_icons(game: &GameData) -> HashMap<Id, String> {
+    let mut icons = game.resource_icons();
+    icons.retain(|resource, path| {
+        let there = game.exists(path);
+        if !there {
+            warn!("{resource}'s icon: no {path} in the data");
+        }
+        there
+    });
+    icons
 }
 
 /// Part of the interface that takes clicks, so they don't go to the map

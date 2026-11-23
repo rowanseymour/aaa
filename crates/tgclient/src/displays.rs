@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use bevy::image::CompressedImageFormats;
+use bevy::image::{CompressedImageFormats, TRANSPARENT_IMAGE_HANDLE};
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::ScrollArea;
@@ -144,6 +144,7 @@ impl Plugin for DisplaysPlugin {
         app.init_resource::<Displays>()
             .init_resource::<Icons>()
             .add_systems(OnEnter(Screen::Match), reset)
+            .add_systems(PostUpdate, draw_icons.after(bevy::ui::UiSystems::Layout))
             .add_systems(
                 Update,
                 keys.in_set(Keys)
@@ -335,29 +336,85 @@ pub fn icon(name: &str) -> String {
     format!("UI/Modern/Icons/{name}.svg")
 }
 
-/// The icons decoded so far, by path, kept from one match to the next.
+/// An image node showing the icon at a path in the data, an SVG drawn
+/// again whenever its size on screen changes, so it's never scaled.
+#[derive(Component)]
+#[require(ImageNode)]
+pub struct Icon {
+    path: String,
+    /// The height in physical pixels it was last drawn at.
+    drawn: u32,
+}
+
+impl Icon {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            drawn: 0,
+        }
+    }
+}
+
+/// The icons drawn so far, by path, each at the height it was last drawn
+/// at, kept from one match to the next. Only the last is kept, so scaling
+/// the interface through many sizes doesn't keep a drawing at each.
 #[derive(Resource, Default)]
-pub struct Icons(HashMap<String, Handle<Image>>);
+pub struct Icons(HashMap<String, (u32, Handle<Image>)>);
 
 impl Icons {
-    /// The image at `path` in `game`, blank if it isn't there or won't
-    /// decode.
+    /// The image at `path` in `game`, an SVG drawn `height` texels down
+    /// and anything else at its own size, blank if it isn't there or
+    /// won't decode.
     pub fn get(
         &mut self,
         game: &GameData,
         path: &str,
+        height: u32,
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
     ) -> Handle<Image> {
-        let image = self.0.entry(path.to_string()).or_insert_with(|| {
-            if !game.exists(path) {
+        let svg = path.to_ascii_lowercase().ends_with(".svg");
+        let height = if svg { height } else { 0 };
+        if let Some((drawn, image)) = self.0.get(path)
+            && *drawn == height
+        {
+            return image.clone();
+        }
+        let image = match game.read(path) {
+            None => {
                 warn!("no {path} in the data");
+                None
             }
-            (textures::read(game, path, formats, true))
-                .map(|i| images.add(i))
-                .unwrap_or_default()
-        });
-        image.clone()
+            Some(bytes) if svg => (textures::svg(&bytes, Some(height), true))
+                .map_err(|e| warn!("{path}: {e}"))
+                .ok(),
+            Some(bytes) => textures::decode(&bytes, path, formats, true),
+        };
+        let image = image.map_or(TRANSPARENT_IMAGE_HANDLE, |i| images.add(i));
+        self.0.insert(path.to_string(), (height, image.clone()));
+        image
+    }
+}
+
+/// Draws each [`Icon`] at its size on screen, once it's laid out and
+/// again whenever that changes, as when the interface is scaled.
+fn draw_icons(
+    loaded: Option<Res<crate::Loaded>>,
+    formats: Res<bevy::image::CompressedImageFormatSupport>,
+    mut cache: ResMut<Icons>,
+    mut images: ResMut<Assets<Image>>,
+    mut icons: Query<(&mut Icon, &ComputedNode, &mut ImageNode), Changed<ComputedNode>>,
+) {
+    let Some(loaded) = loaded else {
+        return;
+    };
+    for (mut icon, node, mut image) in &mut icons {
+        let height = node.size().y.round() as u32;
+        if height == 0 || height == icon.drawn {
+            continue;
+        }
+        icon.drawn = height;
+        image.image = cache.get(&loaded.game, &icon.path, height, &mut images, formats.0);
     }
 }
 

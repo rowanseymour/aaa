@@ -7,7 +7,7 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::Arc;
 
 use crate::strings::{glyph_image, localized};
-use crate::{GameData, Id, Strings, defs, not_null, scoped};
+use crate::{GameData, Id, Strings, beside, defs, not_null, scoped};
 
 /// The interface layout that places the resource bar's cells.
 const BAR_LAYOUT: &str = "UI/Game/template_game.tgi";
@@ -416,6 +416,25 @@ impl GameData {
 
     fn read_resources(&self) -> Vec<ResourceKind> {
         resource_kinds(&self.parse_tgis(|_| true), &self.strings(), &self.glyphs())
+    }
+
+    /// Each resource's icon, by the resource's id, as this project's own
+    /// interface draws it: from the `[ResourceIcon]` blocks of the `.tgi`
+    /// files under `Modern/`, the first for a resource winning.
+    pub fn resource_icons(&self) -> HashMap<Id, String> {
+        let files = self.modern_files();
+        let mut icons = HashMap::new();
+        for file in scoped(&files) {
+            for icon in file.read::<defs::ResourceIcon>("ResourceIcon") {
+                let (Some(resource), Some(texture)) = (not_null(icon.resource_ids), icon.texture)
+                else {
+                    continue;
+                };
+                let texture = beside(file.file, texture.trim());
+                icons.entry(resource).or_insert(texture);
+            }
+        }
+        icons
     }
 
     /// The resources the resource bar has a cell for, left to right: all
