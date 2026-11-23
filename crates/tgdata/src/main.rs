@@ -16,6 +16,7 @@ usage:
   tgdata resources <game dir>         the resources, with what each is for and what a shortfall of it costs, and the resource bar's cells
   tgdata campaigns <game dir>         the campaigns and their missions, in the order they're played
   tgdata factions <game dir>          each nation's factions, their computer players and their special operations as tooltips show them
+  tgdata profile  <game dir> <id>     a computer player profile and its moods, as the game reads them
   tgdata widgets  <game dir> [name]   the in-match interface's widgets, or one by name, as trees with their bounds on the screen";
 
 /// Prints the library's warnings, such as data blocks that don't read.
@@ -61,6 +62,7 @@ fn main() -> ExitCode {
         ["messages", dir] => messages(dir),
         ["campaigns", dir] => campaigns(dir),
         ["factions", dir] => factions(dir),
+        ["profile", dir, id] => profile(dir, id),
         ["resources", dir] => resources(dir),
         ["widgets", dir] => widgets(dir, None),
         ["widgets", dir, name] => widgets(dir, Some(name)),
@@ -335,6 +337,15 @@ fn campaigns(dir: &str) -> Res {
             outln!("  {:?}: {kind} {path}{missing}{pictures}{last}", m.name);
         }
     }
+    Ok(())
+}
+
+fn profile(dir: &str, id: &str) -> Res {
+    let game = GameData::open(std::path::Path::new(dir))?;
+    let profile = game
+        .profile(&tgdata::Id::from(id))
+        .ok_or(format!("no profile {id}"))?;
+    writeln!(std::io::stdout(), "{profile:#?}")?;
     Ok(())
 }
 

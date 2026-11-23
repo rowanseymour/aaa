@@ -70,10 +70,12 @@ impl Lineup {
 pub struct Computers(pub BTreeMap<u32, Id>);
 
 /// The player a person plays unless they choose another: the side asked for
-/// on the command line, else the first a person may play.
+/// on the command line, else the first a person may play; none for side 0.
 pub fn default_person(players: &[Player], asked: Side) -> Option<u32> {
     let mut sides = tgmap::sides(players);
     let side = match asked.0 {
+        // Nobody's: computer players play every side.
+        Some(0) => None,
         Some(n) => sides.nth(n - 1),
         None => sides.find(|p| p.playable),
     };

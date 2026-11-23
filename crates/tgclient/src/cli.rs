@@ -26,7 +26,8 @@ options:
                             unless given
   --name <name>             what others in the match know this player as
   --side <n>                play the map's nth player instead of the first one
-                            a person may play
+                            a person may play; 0 to watch computer players play
+                            every side
   --exec <script.txt>       run a file of console commands once the match starts,
                             or from the first menu without a map; may be given
                             more than once
@@ -95,7 +96,7 @@ pub(crate) struct Options {
 /// Takes the options out of `args`; `None` if any is malformed.
 pub(crate) fn parse(args: &mut Vec<String>) -> Option<Options> {
     let side = match take_option(args, "--side")? {
-        Some(n) => Some(n.parse().ok().filter(|&n| n >= 1)?),
+        Some(n) => Some(n.parse().ok()?),
         None => None,
     };
     let mut scripts = Vec::new();

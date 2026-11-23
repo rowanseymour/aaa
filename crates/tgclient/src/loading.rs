@@ -148,6 +148,8 @@ pub(crate) struct Prepared {
     person: Option<u32>,
     leaders: Leaders,
     computers: lobby::Computers,
+    /// What the computer players a host here runs play by.
+    profiles: tgserver::Profiles,
     effects: effects::Effects,
 }
 
@@ -215,6 +217,7 @@ pub(crate) fn prepare(
         world: sim,
         factions,
         computers,
+        profiles,
     } = tgserver::start(&game, &setup, || reached(Stage::Objects))?;
     let person = match (&joined, from_menu) {
         // Its host says who the game plays.
@@ -228,7 +231,8 @@ pub(crate) fn prepare(
         None => (person.into_iter().collect(), name.clone()),
     };
     let leaders = Leaders(factions, Some(own));
-    if !from_menu && side.0.is_some() && person.is_none() {
+    // Side 0 is nobody's.
+    if !from_menu && side.0.is_some_and(|n| n > 0) && person.is_none() {
         warn!("{}: no such side to play", map.title);
     }
     let effects = effects::Effects::new(&game, &map);
@@ -242,12 +246,17 @@ pub(crate) fn prepare(
         loaded: Loaded { game, map },
         // The host's copy, made here to keep it off the window's thread.
         // A host elsewhere is heard from while the match is set up.
-        orders: (!elsewhere).then(|| Orders::hosting(setup, sim.clone(), person, &name)),
+        orders: (!elsewhere).then(|| {
+            let mut orders = Orders::hosting(setup, sim.clone(), person, &name);
+            orders.computers_from(profiles.clone());
+            orders
+        }),
         sim,
         raising,
         person,
         leaders,
         computers: lobby::Computers(computers),
+        profiles,
         effects,
     })
 }
@@ -263,6 +272,7 @@ pub(crate) fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
         leaders,
         computers,
         effects,
+        profiles: _,
     } = prepared;
     let lineup = lobby::Lineup::new(&loaded.map.players, person);
     for &(id, control) in &lineup.0 {
@@ -434,6 +444,7 @@ pub(crate) fn load(world: &mut bevy::ecs::world::World) {
         Ok(prepared) => {
             if let Some(mut orders) = world.get_resource_mut::<Orders>() {
                 orders.build(prepared.sim.clone());
+                orders.computers_from(prepared.profiles.clone());
             }
             // Shown this frame, before the match is set up on the next.
             show_stage(world, Stage::Resources);

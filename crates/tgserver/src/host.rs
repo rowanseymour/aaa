@@ -363,6 +363,12 @@ impl<L: Link> Host<L> {
         self.computer = Box::new(computer);
     }
 
+    /// Has computer players playing by `profiles` play the sides nobody
+    /// else does.
+    pub fn computers_from(&mut self, profiles: crate::Profiles) {
+        self.computers_by(move |setup, world, player| profiles.player(setup, world, player));
+    }
+
     /// Has it tell the time by `clock`.
     pub fn clock(&mut self, clock: Clock) {
         self.now = clock.now();
