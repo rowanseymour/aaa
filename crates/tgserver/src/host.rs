@@ -1803,11 +1803,12 @@ mod tests {
         // The host, here, says nothing more until the client has played
         // what it said, which takes longer than the host may go unheard.
         host.turn();
-        client.link().passing = Some(Duration::from_secs(5));
+        let unheard = crate::client::UNHEARD;
+        client.link().passing = Some(unheard + Duration::from_secs(5));
         assert_eq!(client.advance(&mut world, usize::MAX), Ok(()));
         assert_eq!(world.ticks, 2);
         // Gone for that long once the client has played, it's lost.
-        clock.pass(Duration::from_secs(3));
+        clock.pass(unheard);
         assert_eq!(client.advance(&mut world, usize::MAX), Err(crate::Lost));
     }
 
