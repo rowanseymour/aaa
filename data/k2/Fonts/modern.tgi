@@ -1,0 +1,33 @@
+;; K2's faces, in place of the shared file of the same path, which this one
+;; hides: its own for the logo's lettering and headings, and the shared ones
+;; for the rest.
+
+[Font]
+{
+	ids = modern_stencil
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/CinzelDecorative-700.ttf
+	}
+}
+
+[Font]
+{
+	ids = modern_plain
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/BigShouldersText-600.ttf
+	}
+}
+
+[Font]
+{
+	ids = modern_hud
+	[CharacterSet]
+	{
+		ids = base
+		font = /Fonts/TrueType/BarlowSemiCondensed-600.ttf
+	}
+}
