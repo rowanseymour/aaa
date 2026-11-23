@@ -685,15 +685,15 @@ pub(crate) fn told(
         }
         Notice::TakenOver {
             player,
-            person,
             computer,
+            by,
         } => {
             let said = look.said("sai_midgame_name_change|ss", "%s taken over by %s");
             let named = |name: String| match sim.sides.player(player) {
                 Some(p) => Fill::side_of(name, p),
                 None => Fill::from(name),
             };
-            let with = [named(person), named(computer)];
+            let with = [named(computer), Fill::from(by)];
             Told::Words("GENERIC_EVENT", fill_all(&said, &with))
         }
         Notice::ResignVote { player, team } => {

@@ -51,9 +51,13 @@ pub enum Action {
     Pausing(Pausing),
     /// Has the person playing a side resign it, as [`World::resign`].
     Resign(u32),
-    /// Has a computer player going by `name` take a side over from the
-    /// person playing it, as [`World::take_over`].
-    TakeOver { player: u32, name: String },
+    /// Has a new computer player going by `name`, playing by the profile
+    /// called `by`, take a side over, as [`World::take_over`].
+    TakeOver {
+        player: u32,
+        name: String,
+        by: String,
+    },
 }
 
 /// What came of a person asking to pause or unpause a match played
@@ -136,7 +140,7 @@ impl Action {
             Action::Name { .. } => {}
             Action::Pausing(pausing) => world.notices.push(crate::Notice::Pausing(pausing)),
             Action::Resign(player) => world.resign(player),
-            Action::TakeOver { player, name } => world.take_over(player, name),
+            Action::TakeOver { player, name, by } => world.take_over(player, name, by),
         }
         Ok(())
     }

@@ -57,17 +57,19 @@ impl World {
         self.sides.names.contains_key(&player) && !self.resigned(player)
     }
 
-    /// Has a computer player going by `name` take over a side a person
-    /// plays, as when they leave; nothing for a side nobody plays.
-    pub fn take_over(&mut self, player: u32, name: String) {
-        let Some(person) = self.sides.names.remove(&player) else {
+    /// Has a new computer player going by `name`, playing by the profile
+    /// called `by`, take over side `player` from whoever played it, as
+    /// when they leave; nothing for a side the match doesn't have.
+    pub fn take_over(&mut self, player: u32, name: String, by: String) {
+        if self.sides.player(player).is_none() {
             return;
-        };
+        }
+        self.sides.names.remove(&player);
         self.sides.computers.insert(player, name.clone());
         self.notices.push(Notice::TakenOver {
             player,
-            person,
             computer: name,
+            by,
         });
         // The side had a vote the rest of its team may have been waiting
         // on.
@@ -508,17 +510,17 @@ mod tests {
     fn a_side_taken_over_by_a_computer_player_has_no_vote_to_resign() {
         let mut w = teams();
         played(&mut w, &[1, 2]);
-        w.take_over(2, "Person 2 AI".into());
+        w.take_over(2, "Person 2 AI".into(), "Kesselring AI".into());
         assert!(!w.held(2));
         assert_eq!(w.sides.computers, [(2, "Person 2 AI".to_string())].into());
         let taken_over = Notice::TakenOver {
             player: 2,
-            person: "Person 2".into(),
             computer: "Person 2 AI".into(),
+            by: "Kesselring AI".into(),
         };
         assert_eq!(w.take_notices(), [taken_over]);
-        // Once a computer player has a side, there's nobody to take it from.
-        w.take_over(2, "Again".into());
+        // A side the match doesn't have isn't taken over.
+        w.take_over(7, "Nobody AI".into(), "Kesselring AI".into());
         assert_eq!(w.take_notices(), []);
         w.resign(1);
         assert_eq!(outcomes(&w)[..2], [Lost, Playing]);
@@ -531,7 +533,7 @@ mod tests {
         played(&mut w, &[1, 2]);
         w.resign(1);
         assert_eq!(told(&mut w), [Notice::ResignVote { player: 1, team: 0 }]);
-        w.take_over(2, "Person 2 AI".into());
+        w.take_over(2, "Person 2 AI".into(), "Kesselring AI".into());
         assert_eq!(outcomes(&w)[..2], [Lost, Playing]);
         assert_eq!(told(&mut w), [Notice::TeamResigned { team: 0 }]);
     }
