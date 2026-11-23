@@ -1,5 +1,6 @@
 ;; How this project's own interface looks for AA: a dark olive and a cream,
-;; to go with the logo, over the beach a match on Normandy starts on.
+;; to go with the logo, over the beach a match on Normandy starts on, with
+;; riflemen marching along it and a bomber passing over.
 
 [ModernInterface]
 {
@@ -10,4 +11,6 @@
 	accent = 0.75, 0.6, 0.3
 	backdrop_map = allies06_normandy
 	backdrop_focus = 341, 233
+	backdrop_troops = usa_infantry
+	backdrop_plane = usa_bomber
 }

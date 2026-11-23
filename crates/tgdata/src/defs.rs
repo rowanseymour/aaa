@@ -1258,6 +1258,10 @@ pub struct ModernInterface {
     pub backdrop_map: Option<String>,
     /// Where on it the menu's camera looks, in map units.
     pub backdrop_focus: Option<[f32; 2]>,
+    /// The template of the troops that march across it, over and over.
+    pub backdrop_troops: Option<String>,
+    /// The template of the plane that now and then flies over it.
+    pub backdrop_plane: Option<String>,
 }
 
 /// A bonus or penalty the lobby can give a side the computer plays.
