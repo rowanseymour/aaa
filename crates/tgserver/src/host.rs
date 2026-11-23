@@ -1719,13 +1719,41 @@ mod tests {
         let clock = Clock::stopped();
         let (mut host, mut clients) = hosted_by(&clock, &[&[1]]);
         play(&mut host, &mut clients, 2);
-        clock.pass(Duration::from_millis(2900));
+        let almost = crate::client::UNHEARD - Duration::from_millis(100);
+        clock.pass(almost);
         assert_eq!(clients[0].advance(usize::MAX), Ok(()));
         // A host with nothing to say still says so.
         host.turn();
-        clock.pass(Duration::from_millis(2900));
+        clock.pass(almost);
         assert_eq!(clients[0].advance(usize::MAX), Ok(()));
-        clock.pass(Duration::from_millis(3000));
+        clock.pass(crate::client::UNHEARD);
+        assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
+    }
+
+    #[test]
+    fn a_client_waits_out_a_host_silent_through_a_slow_tick() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2]]);
+        play(&mut host, &mut clients, 2);
+        // The host says nothing while it plays a slow tick, and its own
+        // copy then plays that tick as slowly before the host turns again,
+        // while the clients keep looking for what it says.
+        for _ in 0..3 {
+            host.turn();
+            for _ in 0..10 {
+                for client in &mut clients {
+                    assert_eq!(client.advance(usize::MAX), Ok(()));
+                }
+                clock.pass(Duration::from_secs(1));
+            }
+        }
+        assert_eq!(clients[0].world().ticks, host.world().ticks);
+        // A host that never turns again is gone, once it's gone unheard
+        // for that long since it last turned, ten seconds ago.
+        let since = Duration::from_secs(10);
+        clock.pass(crate::client::UNHEARD - since - Duration::from_millis(100));
+        assert_eq!(clients[0].advance(usize::MAX), Ok(()));
+        clock.pass(Duration::from_millis(100));
         assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
     }
 
