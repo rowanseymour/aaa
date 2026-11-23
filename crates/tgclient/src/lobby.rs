@@ -372,10 +372,11 @@ impl Lobby {
         };
         let playing: Vec<u32> = self.teams().into_iter().flat_map(|(_, t)| t).collect();
         if self.person.is_some_and(|p| !playing.contains(&p)) {
-            self.person = brief
-                .sides()
+            let to = (brief.sides())
                 .find(|p| p.playable && playing.contains(&p.id))
                 .map(|p| p.id);
+            let from = std::mem::replace(&mut self.person, to);
+            self.slots.seat(from, to);
         }
     }
 }

@@ -108,18 +108,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(teams) = &setup.teams {
         map.arrange(teams);
     }
-    // A side the map requires stays, a computer player taking it.
-    let required = |p: &u32| map.players.iter().any(|q| q.id == *p && q.required);
-    let leaving: HashSet<u32> = setup
-        .open
-        .iter()
-        .copied()
-        .filter(|p| !required(p))
-        .collect();
-    let mut computer_sides = setup.computers.clone();
-    for &p in setup.open.iter().filter(|p| required(p)) {
-        computer_sides.insert(p, None);
-    }
+    let (leaving, computer_sides) = staying(&map.players, &setup.open, &setup.computers);
     map.leave(&leaving);
     let mut world_rules = map.rules.values.clone();
     world_rules.extend(setup.rules.clone());
@@ -322,6 +311,20 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     })
 }
 
+/// The sides of `open` that leave the match, and every side a computer
+/// player plays: those of `computers`, and the open ones `players` require.
+fn staying(
+    players: &[Player],
+    open: &BTreeSet<u32>,
+    computers: &BTreeMap<u32, Option<Id>>,
+) -> (HashSet<u32>, BTreeMap<u32, Option<Id>>) {
+    let required = |p: &u32| players.iter().any(|q| q.id == *p && q.required);
+    let (stay, leave): (Vec<u32>, Vec<u32>) = open.iter().partition(|p| required(p));
+    let mut computers = computers.clone();
+    computers.extend(stay.into_iter().map(|p| (p, None)));
+    (leave.into_iter().collect(), computers)
+}
+
 /// What a side left to chance is given a profile from: each side's nation
 /// and faction, by player id, and every profile.
 type Picks<'a> = (
@@ -463,6 +466,18 @@ mod tests {
             player(12, false, true),
             player(13, false, true),
         ]
+    }
+
+    #[test]
+    fn open_sides_leave_unless_required_when_a_computer_player_takes_them() {
+        let mut players = players();
+        players[2].required = true;
+        let open = BTreeSet::from([12, 13]);
+        let chosen = BTreeMap::from([(10, Some(Id::from("konev_sai")))]);
+        let (leaving, computers) = staying(&players, &open, &chosen);
+        assert_eq!(leaving, HashSet::from([13]));
+        let expected = BTreeMap::from([(10, Some(Id::from("konev_sai"))), (12, None)]);
+        assert_eq!(computers, expected);
     }
 
     #[test]
