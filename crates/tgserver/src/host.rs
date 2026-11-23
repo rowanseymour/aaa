@@ -115,6 +115,9 @@ struct Seat<L> {
     id: u32,
     link: L,
     players: Vec<u32>,
+    /// The sides whose computer players its machine runs, giving their
+    /// orders as it does its person's.
+    computers: Vec<u32>,
     /// What the person at it goes by, unlike anyone else in the match.
     name: String,
     /// Whether it's let do anything.
@@ -274,7 +277,15 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
 impl<L> Seat<L> {
     /// Whether the host carries out `action` for it.
     fn may(&self, action: &Action) -> bool {
-        self.trusted || allows(&self.players, action)
+        let computer =
+            matches!(action, Action::Order { player, .. } if self.computers.contains(player));
+        self.trusted || computer || allows(&self.players, action)
+    }
+
+    /// Whether it gives side `player`'s orders, for its person or a
+    /// computer player.
+    fn plays(&self, player: u32) -> bool {
+        self.players.contains(&player) || self.computers.contains(&player)
     }
 
     /// Whether it's staying with a side, and so has a say in kicking out.
@@ -450,24 +461,36 @@ impl<L: Link> Host<L> {
     /// `players`, or only to watch if there are none, for a person going
     /// by `name`, numbered if anyone in the match does already. Returns
     /// what it's known as; one that isn't let in is told why.
-    pub fn admit(
+    pub fn admit(&mut self, link: L, players: Vec<u32>, name: &str) -> Result<u32, Refusal> {
+        self.admit_running(link, players, Vec::new(), name)
+    }
+
+    /// As [`Host::admit`], the client's machine also running the computer
+    /// players of `computers`, which the host then leaves to it until it
+    /// goes.
+    pub fn admit_running(
         &mut self,
         mut link: L,
         mut players: Vec<u32>,
+        mut computers: Vec<u32>,
         name: &str,
     ) -> Result<u32, Refusal> {
         players.sort_unstable();
         players.dedup();
+        computers.sort_unstable();
+        computers.dedup();
+        computers.retain(|p| !players.contains(p));
         let taken = |name: &str| self.client_named(name);
         let name = crate::name(name).map(|n| crate::unique(&n, &self.naming.numbered, taken));
         // Its name is what it asked with, so it didn't ask with a message.
-        let refused = (self.refuses(&players))
+        let refused = (self.refuses(&players, &computers))
             .or_else(|| name.is_none().then_some(Refusal::Lost))
             .or_else(|| {
                 let welcome = Welcome {
                     client: self.next,
                     setup: self.setup.clone(),
                     players: players.clone(),
+                    computers: computers.clone(),
                     name: name.clone().unwrap_or_default(),
                 };
                 let sent = link.send(encode(&ToClient::Start(welcome)));
@@ -484,6 +507,7 @@ impl<L: Link> Host<L> {
             id,
             link,
             players,
+            computers,
             name,
             trusted: false,
             diverged: false,
@@ -504,20 +528,20 @@ impl<L: Link> Host<L> {
         Ok(id)
     }
 
-    /// Why a client wouldn't be let in to give the orders of `players`,
-    /// if it wouldn't.
-    fn refuses(&self, players: &[u32]) -> Option<Refusal> {
+    /// Why a client wouldn't be let in to give the orders of `players`
+    /// and run the computer players of `computers`, if it wouldn't.
+    fn refuses(&self, players: &[u32], computers: &[u32]) -> Option<Refusal> {
         if self.begun {
             return Some(Refusal::Begun);
         }
         if self.wanted.is_some() && !self.gathering {
             return Some(Refusal::Full);
         }
-        players.iter().find_map(|&p| {
+        players.iter().chain(computers).find_map(|&p| {
             if self.world.sides.player(p).is_none() {
                 return Some(Refusal::NoPlayer(p));
             }
-            let taken = self.clients.iter().any(|c| c.players.contains(&p));
+            let taken = self.clients.iter().any(|c| c.plays(p));
             taken.then_some(Refusal::Taken(p))
         })
     }
@@ -634,9 +658,10 @@ impl<L: Link> Host<L> {
         self.clients.iter().any(|c| c.name == name)
     }
 
-    /// Whether a client gives side `player`'s orders.
+    /// Whether a client gives side `player`'s orders, for a person or a
+    /// computer player its machine runs.
     fn seated(&self, player: u32) -> bool {
-        self.clients.iter().any(|c| c.players.contains(&player))
+        self.clients.iter().any(|c| c.plays(player))
     }
 
     /// The orders of the computer player of each side still in the match
@@ -2177,6 +2202,79 @@ mod tests {
         for client in &clients {
             assert_eq!(client.world().hash(), host.world().hash());
         }
+    }
+
+    /// Lets a client into `host` giving the orders of `players` and
+    /// running the computer players of `computers`.
+    fn running(host: &mut Host<Local>, players: &[u32], computers: &[u32]) -> Copy {
+        let (ours, mut theirs) = pair();
+        let (players, computers) = (players.to_vec(), computers.to_vec());
+        host.admit_running(ours, players, computers.clone(), "Bob")
+            .unwrap();
+        let welcome = welcome(&mut theirs).unwrap().unwrap();
+        assert_eq!(welcome.computers, computers);
+        Copy {
+            client: Client::new(theirs),
+            world: fresh(),
+        }
+    }
+
+    #[test]
+    fn a_client_gives_the_orders_of_the_computer_players_its_machine_runs() {
+        let mut host = Host::new(setup(), fresh());
+        let thought = marching(&mut host);
+        let mut clients = vec![
+            running(&mut host, &[1], &[]),
+            running(&mut host, &[3], &[2]),
+        ];
+        play(&mut host, &mut clients, 1);
+        // The host thinks only for the side no machine plays.
+        assert_eq!(*thought.lock().unwrap(), [4]);
+        let to = |x| Command::Move {
+            organization: 1,
+            to: [x, 20.0],
+        };
+        let order = |x| Action::Order {
+            player: 2,
+            command: to(x),
+        };
+        clients[0].ask(order(40.0)).unwrap();
+        clients[1].ask(order(30.0)).unwrap();
+        play(&mut host, &mut clients, 1);
+        let given: Vec<_> = asked(host.schedule().record());
+        // Only the client running it gives its orders.
+        assert_eq!(
+            given.iter().map(|g| &g.action).collect::<Vec<_>>(),
+            [&order(30.0)]
+        );
+    }
+
+    #[test]
+    fn the_host_runs_the_computer_players_of_a_machine_that_leaves() {
+        let mut host = Host::new(setup(), fresh());
+        let thought = marching(&mut host);
+        let mut clients = vec![
+            running(&mut host, &[1], &[]),
+            running(&mut host, &[3], &[2]),
+        ];
+        play(&mut host, &mut clients, 1);
+        clients[1].leave().unwrap();
+        assert_eq!(host.turn(), [Event::Left(2)]);
+        clients.remove(1);
+        thought.lock().unwrap().clear();
+        play(&mut host, &mut clients, 1);
+        assert_eq!(*thought.lock().unwrap(), [2, 3, 4]);
+    }
+
+    #[test]
+    fn a_side_another_machine_runs_a_computer_player_for_is_taken() {
+        let mut host = Host::new(setup(), fresh());
+        let _bob = running(&mut host, &[], &[2]);
+        let (ours, _theirs) = pair();
+        assert_eq!(host.admit(ours, vec![2], "Al"), Err(Refusal::Taken(2)));
+        let (ours, _theirs) = pair();
+        let refused = host.admit_running(ours, vec![1], vec![2], "Al");
+        assert_eq!(refused, Err(Refusal::Taken(2)));
     }
 
     #[test]
