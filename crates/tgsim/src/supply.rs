@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use tgmap::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
+use tgmap::{Id, Operation, Supply, SupplyEffect, Tile, Weapon, Zone};
 
 use crate::{
     Building, Held, Piece, Refused, Relation, SECOND, State, TICK, Target, World, deploy_point,
@@ -117,24 +117,29 @@ impl World {
                     .get(&template)
                     .cloned()
                     .ok_or(Refused::Unable)?;
-                let spot = Obstacle {
-                    position: at,
-                    facing: dropped.facing,
-                    shape: Shape::Point,
-                    soft: Shape::Point,
+                // With no room, all it took is spent and nothing comes.
+                let Some(to) = self.drop_spot(&template, at) else {
+                    self.notices
+                        .push(crate::Notice::SummonFailed { player, template });
+                    return Ok(());
                 };
-                if !self.pathing.on_map(&spot) {
-                    return Err(Refused::NoRoom);
-                }
                 dropped.id = self.take_ids(1);
                 dropped.owner = player;
-                dropped.position = at;
-                // In the air it's in nothing's way.
-                dropped.obstacle = None;
-                let b = self.buildings.len();
-                self.add_buildings(&[dropped]);
-                // Its zone waits for its own beat.
-                self.buildings[b].supply.judged = true;
+                dropped.facing = crate::summons::FACING;
+                if self.rules.airlifts.contains_key(&template) {
+                    self.fly_in_building(player, dropped, to);
+                } else {
+                    // Put down at once, for one nothing flies.
+                    dropped.position = to;
+                    if let Some(o) = &mut dropped.obstacle {
+                        (o.position, o.facing) = (to, dropped.facing);
+                        self.pathing.block(o);
+                    }
+                    let b = self.buildings.len();
+                    self.add_buildings(&[dropped]);
+                    // Its zone waits for its own beat.
+                    self.buildings[b].supply.judged = true;
+                }
             }
             Some(Operation::Reveal { seconds }) => {
                 let until = self.ticks + (seconds / TICK).round() as u64;
@@ -155,6 +160,16 @@ impl World {
             None => return Err(Refused::Unable),
         }
         Ok(())
+    }
+
+    /// Where a crate of `template` dropped at `at` is sent: the clear
+    /// spot nearest it with room for the crate, if there's one.
+    pub(crate) fn drop_spot(&self, template: &Id, at: [f32; 2]) -> Option<[f32; 2]> {
+        let dropped = self.rules.drops.get(template)?;
+        let shape = dropped.obstacle.as_ref().map(|o| o.shape);
+        let (facing, blocking) = (crate::summons::FACING, self.blocking());
+        let spots = crate::summons::rings(at, facing, 1.0, crate::summons::RINGS);
+        self.first_clear(spots, facing, shape, &blocking)
     }
 
     /// Where a click gives `player`'s faction's `i`th operation, if
@@ -1457,13 +1472,18 @@ mod tests {
             w.operate(1, &Id::from("airlift"), [64.0, 64.0], None),
             Err(Refused::Unable)
         );
-        assert_eq!(
-            w.operate(1, &drop, [64.0, 90.0], None),
-            Err(Refused::NoRoom)
-        );
+        // Off the map there's no room, though all it took is spent.
+        assert_eq!(w.operate(1, &drop, [64.0, 900.0], None), Ok(()));
+        let failed = crate::Notice::SummonFailed {
+            player: 1,
+            template: Id::from("provisions"),
+        };
+        assert!(w.take_notices().contains(&failed));
+        let built = w.buildings.len();
         // A source of its side's and its allies' from its first look.
         w.operate(1, &drop, [64.0, 64.0], None).unwrap();
         let b = w.buildings.len() - 1;
+        assert_eq!(b, built);
         assert_eq!(w.buildings[b].owner, 1);
         assert!(w.buildings[b].supply.zone.is_none());
         run(&mut w, 1.0);
@@ -1487,6 +1507,112 @@ mod tests {
         assert!(matches!(w.buildings[b].state, State::Destroyed(_)));
         run(&mut w, 1.0);
         assert!(!w.supplied(1, [44.0, 64.0]));
+    }
+
+    /// A division whose side can drop a crate of provisions, flown in.
+    fn dropping() -> (World, Id) {
+        let mut w = supplied_division();
+        let mut provisions = building(0, 0, [0.0, 0.0]);
+        provisions.template = "provisions".into();
+        provisions.fighter.destructible = true;
+        w.rules.drops.insert(Id::from("provisions"), provisions);
+        w.rules
+            .supplies
+            .insert(Id::from("provisions"), supply(10.0, false, 0.0));
+        let drop = Id::from("drop");
+        let dropped = tgmap::Operation::Drop(Id::from("provisions"));
+        w.rules.operations.insert(drop.clone(), dropped);
+        let airlift = tgmap::Airlift {
+            transport: "plane".into(),
+            speed: 7.0,
+            turn_radius: 18.0,
+            height: 17.0,
+            taxi_height: 1.0,
+            delay: 0.4,
+        };
+        w.rules.airlifts.insert(Id::from("provisions"), airlift);
+        // Its drag cancels any lead, so it comes straight down.
+        let fall = tgmap::Fall {
+            height: 2.0,
+            drag: 10.0,
+        };
+        w.rules.falls.insert(Id::from("provisions"), fall);
+        (w, drop)
+    }
+
+    #[test]
+    fn supply_drops_are_flown_in_and_supply_on_the_way_down() {
+        let (mut w, drop) = dropping();
+        let (built, aimed) = (w.buildings.len(), [64.0, 80.0]);
+        let at = w.drop_spot(&Id::from("provisions"), aimed).unwrap();
+        w.operate(1, &drop, aimed, None).unwrap();
+        // Sent to the clear spot, with nothing on the map till it's let go.
+        assert_eq!(w.deliveries.len(), 1);
+        assert_eq!(w.deliveries[0].target, at);
+        assert_eq!(w.buildings.len(), built);
+        let mut ticks = 0;
+        while w.buildings.len() == built {
+            w.tick();
+            ticks += 1;
+            assert!(ticks < 2000, "never let go");
+        }
+        let b = built;
+        assert_eq!(w.buildings[b].owner, 1);
+        assert!(w.buildings[b].descent.is_some() && w.buildings[b].obstacle.is_none());
+        // It gives supply in the air.
+        run(&mut w, 1.0);
+        assert!(w.buildings[b].descent.is_some());
+        assert!(w.supplied(1, at));
+        while w.buildings[b].descent.is_some() {
+            w.tick();
+        }
+        // Down where it was sent, in the way from then on.
+        assert!(crate::distance(w.buildings[b].position, at) < 0.01);
+        let o = w.buildings[b].obstacle.as_ref().unwrap();
+        assert_eq!(o.position, w.buildings[b].position);
+        assert!(!w.buildings[b].gone());
+    }
+
+    #[test]
+    fn supply_drops_land_clear_of_units_standing_where_theyre_sent() {
+        let (mut w, drop) = dropping();
+        let (built, aimed) = (w.buildings.len(), [64.0, 80.0]);
+        let at = w.drop_spot(&Id::from("provisions"), aimed).unwrap();
+        w.operate(1, &drop, aimed, None).unwrap();
+        while w.buildings.len() == built {
+            w.tick();
+        }
+        // A man walks under it on its way down.
+        let u = w.organizations[1].units[0];
+        w.units[u].shape = Some(Shape::Circle { radius: 1.0 });
+        w.units[u].position = at;
+        while w.buildings[built].descent.is_some() {
+            w.units[u].position = at;
+            w.tick();
+        }
+        assert!(crate::distance(w.buildings[built].position, at) >= 1.0);
+        assert!(!w.buildings[built].gone());
+    }
+
+    #[test]
+    fn supply_drops_with_no_room_to_land_are_lost() {
+        let (mut w, drop) = dropping();
+        let built = w.buildings.len();
+        w.operate(1, &drop, [64.0, 80.0], None).unwrap();
+        while w.buildings.len() == built {
+            w.tick();
+        }
+        // Nowhere to come down by the time it's let go.
+        let side = w.pathing.side();
+        w.pathing = Pathing::uniform(side, Domain::Naval);
+        while w.buildings[built].descent.is_some() {
+            w.tick();
+        }
+        assert!(w.buildings[built].gone());
+        let failed = |n: &crate::Notice| matches!(n, crate::Notice::SummonFailed { .. });
+        assert!(!w.take_notices().iter().any(failed));
+        run(&mut w, 1.0);
+        assert!(!w.supplied(1, [64.0, 80.0]));
     }
 
     #[test]

@@ -843,6 +843,8 @@ pub struct Building {
     pub hangar: Vec<Berth>,
     /// For an airfield, whether its air attacks take an escort.
     pub escort: bool,
+    /// Its fall, for one coming down by parachute.
+    pub descent: Option<Descent>,
 }
 
 /// How a building stands.
@@ -1541,7 +1543,7 @@ digest!(Building {
     noticed, awake,
     inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
     captured, unpacked_from, zone, members, supply, properties, created, remembered, constructing,
-    hangar, escort,
+    hangar, escort, descent,
 } skip {
     // Its template's, or as the map has it.
     fighter, deploy, organization, obstacle,

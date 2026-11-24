@@ -1,5 +1,6 @@
 //! Deliveries: organizations a building recruits or an operation summons to a
-//! place, flown in from the map's edge and dropped there by parachute.
+//! place, and crates an operation drops, flown in from the map's edge and
+//! dropped there by parachute.
 
 use std::f32::consts::FRAC_PI_4;
 
@@ -72,7 +73,32 @@ impl Ramp {
     }
 }
 
-/// An aircraft bringing an organization onto the map.
+/// What a delivery brings.
+#[derive(Clone)]
+pub(crate) enum Cargo {
+    Organization(Box<tgmap::Organization>),
+    /// A single building, such as a crate.
+    Building(Box<tgmap::Building>),
+}
+
+impl Cargo {
+    fn template(&self) -> &Id {
+        match self {
+            Cargo::Organization(o) => &o.template,
+            Cargo::Building(b) => &b.template,
+        }
+    }
+
+    /// How many things it lets go one by one.
+    fn members(&self) -> usize {
+        match self {
+            Cargo::Organization(o) => o.members.len(),
+            Cargo::Building(_) => 1,
+        }
+    }
+}
+
+/// An aircraft bringing an organization or a building onto the map.
 #[derive(Clone)]
 pub struct Delivery {
     /// Its object's id.
@@ -95,10 +121,15 @@ pub struct Delivery {
     /// The organization it's dropping, by index into [`World::organizations`],
     /// once its first member is out.
     pub organization: Option<usize>,
+    /// The building it's dropped, by index into [`World::buildings`].
+    pub building: Option<usize>,
     /// The tick it left the map on.
     pub left: Option<u64>,
     /// What it's yet to begin dropping.
-    cargo: Option<Box<tgmap::Organization>>,
+    cargo: Option<Cargo>,
+    /// The ground the building it's dropped takes up once it's down,
+    /// wherever that is.
+    footprint: Option<Obstacle>,
     airlift: Airlift,
     /// Where it came in, and goes out.
     entry: [f32; 2],
@@ -149,9 +180,9 @@ impl Plunge {
 }
 
 impl Delivery {
-    /// The template of the organization it brings.
+    /// The template of what it's yet to begin dropping.
     pub fn cargo(&self) -> Option<&Id> {
-        self.cargo.as_ref().map(|c| &c.template)
+        self.cargo.as_ref().map(Cargo::template)
     }
 
     /// How steeply it's diving, as how far it sinks for each unit it goes
@@ -204,6 +235,14 @@ impl Descent {
     /// How far above the ground it was let go.
     pub fn dropped_from(&self) -> f32 {
         self.from
+    }
+
+    /// Where it is over the ground, `t` of the way from the last tick to
+    /// this one.
+    pub fn over(&self, t: f32) -> [f32; 2] {
+        let done = 1.0 - self.left(t);
+        let ([sx, sy], [lx, ly]) = (self.start, self.lands);
+        [sx + (lx - sx) * done, sy + (ly - sy) * done]
     }
 
     /// How much of its fall is still ahead of it, `t` of the way from
@@ -321,7 +360,10 @@ impl World {
     pub(crate) fn delivery_ledger(&self, d: usize) -> crate::Ledger {
         let delivery = &self.deliveries[d];
         let cargo = delivery.cargo.as_ref().filter(|_| delivery.left.is_none());
-        let upkeep = cargo.map(|c| self.commission_ledger(c).upkeep);
+        let upkeep = match cargo {
+            Some(Cargo::Organization(o)) => Some(self.commission_ledger(o).upkeep),
+            _ => None,
+        };
         crate::Ledger {
             upkeep: upkeep.unwrap_or_default(),
             ..Default::default()
@@ -340,7 +382,8 @@ impl World {
         let (player, from, facing) = (building.owner, building.position, building.facing);
         let (entry, hq) = (self.entry(from, to), self.hq_of(b));
         let template = organization.template.clone();
-        let Some(d) = self.airlift(player, organization, entry, to, facing, hq) else {
+        let cargo = Cargo::Organization(Box::new(organization));
+        let Some(d) = self.airlift(player, cargo, entry, to, facing, hq) else {
             return false;
         };
         // Heard as it sets off, not as it lands.
@@ -364,30 +407,49 @@ impl World {
     ) -> bool {
         let entry = self.farthest_edge(to);
         let facing = crate::summons::FACING;
-        (self.airlift(player, organization, entry, to, facing, None)).is_some()
+        let cargo = Cargo::Organization(Box::new(organization));
+        (self.airlift(player, cargo, entry, to, facing, None)).is_some()
     }
 
-    /// Sends an aircraft in from `entry` to drop `organization` at `to`,
+    /// Sends an aircraft in to drop `building` at `to` for `player`, coming
+    /// in from the edge farthest from there; false for a building nothing
+    /// flies.
+    pub(crate) fn fly_in_building(
+        &mut self,
+        player: u32,
+        building: tgmap::Building,
+        to: [f32; 2],
+    ) -> bool {
+        let entry = self.farthest_edge(to);
+        let facing = crate::summons::FACING;
+        let cargo = Cargo::Building(Box::new(building));
+        (self.airlift(player, cargo, entry, to, facing, None)).is_some()
+    }
+
+    /// Sends an aircraft in from `entry` to drop `cargo` at `to`,
     /// holding a place for it at `hq`, returning its index.
     fn airlift(
         &mut self,
         owner: u32,
-        organization: tgmap::Organization,
+        cargo: Cargo,
         entry: [f32; 2],
         to: [f32; 2],
         facing: [f32; 2],
         hq: Option<u32>,
     ) -> Option<usize> {
-        let airlift = self.rules.airlifts.get(&organization.template).cloned()?;
+        let airlift = self.rules.airlifts.get(cargo.template()).cloned()?;
         let top = self.plane_speed(owner, &airlift);
         let line = normalised([to[0] - entry[0], to[1] - entry[1]]).unwrap_or(facing);
         // The drop is centred on the target as if it were flown at half
         // speed throughout, one let go every `delay`.
         let pace = top / 2.0;
-        let lead = (organization.members.iter())
-            .map(|m| self.carry(&m.template, airlift.height, pace))
-            .fold(0.0, f32::max);
-        let before = (organization.members.len().saturating_sub(1) / 2) as f32;
+        let lead = match &cargo {
+            Cargo::Organization(o) => (o.members.iter())
+                .map(|m| self.carry(&m.template, airlift.height, pace))
+                .fold(0.0, f32::max),
+            Cargo::Building(b) => self.carry(&b.template, airlift.height, pace),
+        };
+        let before = (cargo.members().saturating_sub(1) / 2) as f32;
         let (d, id) = (self.deliveries.len(), self.take_ids(1));
         let mark = distance(entry, to) - lead - airlift.delay * pace * before;
         self.deliveries.push(Delivery {
@@ -401,8 +463,10 @@ impl World {
             target: to,
             hq,
             organization: None,
+            building: None,
             left: None,
-            cargo: Some(Box::new(organization)),
+            cargo: Some(cargo),
+            footprint: None,
             entry,
             line,
             flown: 0.0,
@@ -507,6 +571,7 @@ impl World {
             }
         }
         self.descend();
+        self.descend_buildings();
         for d in 0..self.deliveries.len() {
             let delivery = &self.deliveries[d];
             let Some(r) = delivery.organization else {
@@ -591,10 +656,11 @@ impl World {
 
     fn fly(&mut self, d: usize) {
         let delivery = &self.deliveries[d];
-        let members = match (&delivery.cargo, delivery.organization) {
-            (Some(cargo), _) => cargo.members.len(),
-            (None, Some(r)) => self.organizations[r].units.len(),
-            (None, None) => 0,
+        let members = match (&delivery.cargo, delivery.organization, delivery.building) {
+            (Some(cargo), ..) => cargo.members(),
+            (None, Some(r), _) => self.organizations[r].units.len(),
+            (None, None, Some(_)) => 1,
+            (None, None, None) => 0,
         };
         let speed = self.plane_speed(delivery.owner, &delivery.airlift);
         if delivery.released < members {
@@ -657,7 +723,11 @@ impl World {
     /// of where the tick has it, putting its organization on the map with the
     /// first.
     fn release(&mut self, d: usize, past: f32) {
-        if let Some(mut cargo) = self.deliveries[d].cargo.take() {
+        if let Some(Cargo::Building(_)) = self.deliveries[d].cargo {
+            self.release_building(d, past);
+            return;
+        }
+        if let Some(Cargo::Organization(mut cargo)) = self.deliveries[d].cargo.take() {
             let delivery = &self.deliveries[d];
             let (target, line, hq) = (delivery.target, delivery.line, delivery.hq);
             cargo.owner = delivery.owner;
@@ -729,12 +799,124 @@ impl World {
         }
     }
 
+    /// Lets go the building the delivery at `d` brings, `past` short of
+    /// where the tick has it: on the map from here, in nothing's way until
+    /// it's down.
+    fn release_building(&mut self, d: usize, past: f32) {
+        let Some(Cargo::Building(mut building)) = self.deliveries[d].cargo.take() else {
+            return;
+        };
+        let delivery = &mut self.deliveries[d];
+        delivery.released += 1;
+        let along = (delivery.flown - past).max(0.0);
+        let line = delivery.line;
+        let at = [
+            delivery.entry[0] + line[0] * along,
+            delivery.entry[1] + line[1] * along,
+        ];
+        let (height, pace) = (delivery.airlift.height, delivery.ramp.speed());
+        let own = self
+            .rules
+            .falls
+            .get(&building.template)
+            .map_or(0.0, |f| f.height);
+        let from = (height - own).max(0.0);
+        let on = self.carry(&building.template, from, pace);
+        let lands = (self.pathing).inside([at[0] + line[0] * on, at[1] + line[1] * on]);
+        (building.owner, building.position, building.facing) = (self.deliveries[d].owner, at, line);
+        let footprint = building.obstacle.take();
+        let b = self.buildings.len();
+        self.add_buildings(&[*building]);
+        // Its zone waits for its own beat.
+        self.buildings[b].supply.judged = true;
+        self.buildings[b].descent = Some(Descent {
+            height: from,
+            previous: from,
+            from,
+            start: at,
+            lands,
+        });
+        let delivery = &mut self.deliveries[d];
+        (delivery.building, delivery.footprint) = (Some(b), footprint);
+        log::debug!(
+            "{} {} dropping from {} {}",
+            self.buildings[b].template,
+            self.buildings[b].id,
+            delivery.template,
+            delivery.id
+        );
+    }
+
+    /// Brings down the buildings deliveries have dropped. Each looks for
+    /// room as it lands, and one that finds none is taken off the map.
+    fn descend_buildings(&mut self) {
+        let fallen = self.rules.gravity / GAME_TICKS * TICK;
+        for d in 0..self.deliveries.len() {
+            let Some(b) = self.deliveries[d].building else {
+                continue;
+            };
+            let building = &mut self.buildings[b];
+            let Some(mut descent) = building.descent else {
+                continue;
+            };
+            // One destroyed on the way down stays where it was hit.
+            if building.gone() {
+                building.descent = None;
+                continue;
+            }
+            descent.previous = descent.height;
+            descent.height = (descent.height - fallen).max(0.0);
+            if descent.height > 0.0 {
+                let done = 1.0 - descent.height / descent.from;
+                let ([sx, sy], [lx, ly]) = (descent.start, descent.lands);
+                building.position = [sx + (lx - sx) * done, sy + (ly - sy) * done];
+                building.descent = Some(descent);
+                continue;
+            }
+            building.descent = None;
+            let (line, footprint) = (self.deliveries[d].line, self.deliveries[d].footprint.take());
+            let shape = footprint.as_ref().map(|o| o.shape);
+            // What it lands on stays in its way, so units count against it.
+            let units = self.unit_spots(|_| true);
+            let clear = |at: [f32; 2]| {
+                let spot = spot(at, line, shape);
+                self.clear(&spot) && self.pathing.room_for(&spot, Domain::Land, &units)
+            };
+            let Some(at) = self.landing_where(descent.lands, line, clear) else {
+                log::debug!(
+                    "{} {} found no room to land",
+                    self.buildings[b].template,
+                    self.buildings[b].id
+                );
+                self.remove(b, crate::State::Sold(self.ticks));
+                continue;
+            };
+            let building = &mut self.buildings[b];
+            building.position = at;
+            if let Some(mut o) = footprint {
+                (o.position, o.facing) = (at, building.facing);
+                self.pathing.block(&o);
+                self.buildings[b].obstacle = Some(o);
+            }
+        }
+    }
+
     /// The clear spot nearest `aimed` for something of `shape` to land
     /// on: there, else the first clear of the points on rings around it,
     /// nearest ring first, each ring's from the one along `line` round
     /// clockwise seen from above.
     fn landing(&self, aimed: [f32; 2], line: [f32; 2], shape: Option<Shape>) -> Option<[f32; 2]> {
-        let clear = |at: [f32; 2]| self.clear(&spot(at, line, shape)).then_some(at);
+        self.landing_where(aimed, line, |at| self.clear(&spot(at, line, shape)))
+    }
+
+    /// As [`World::landing`], for spots `clear` says are clear.
+    fn landing_where(
+        &self,
+        aimed: [f32; 2],
+        line: [f32; 2],
+        clear: impl Fn([f32; 2]) -> bool,
+    ) -> Option<[f32; 2]> {
+        let clear = |at: [f32; 2]| clear(at).then_some(at);
         let rings = (1..=RINGS).flat_map(|ring| (0..RING).map(move |i| (ring as f32, i as f32)));
         let around = rings.map(|(radius, i)| {
             let angle = i * FRAC_PI_4;
@@ -803,11 +985,11 @@ crate::hash::digest!(Ramp {
 });
 
 crate::hash::digest!(Delivery {
-    id, template, owner, position, previous, facing, height, target, hq, organization, left,
-    entry, line, flown, mark, ramp, released, held, plane, plunge, down,
+    id, template, owner, position, previous, facing, height, target, hq, organization, building,
+    left, entry, line, flown, mark, ramp, released, held, plane, plunge, down,
 } skip {
     // Its template's.
-    cargo, airlift,
+    cargo, footprint, airlift,
 });
 
 crate::hash::digest!(Plunge { across, sinking });

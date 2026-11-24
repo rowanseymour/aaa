@@ -20,6 +20,8 @@ pub struct Flights {
     /// `None` for one with no model to draw.
     planes: HashMap<usize, Option<Entity>>,
     falling: HashMap<usize, Option<Entity>>,
+    /// The falling model of each building coming down, by its index.
+    crates: HashMap<usize, Option<Entity>>,
     /// Each airfield's plane out, by its sortie's index.
     sorties: HashMap<usize, Option<Entity>>,
     /// How many of the sim's deliveries, from the first, are over: gone,
@@ -62,6 +64,8 @@ pub fn show(
         (d.left.is_some() || d.down.is_some())
             && d.organization
                 .is_none_or(|r| !sim.0.organizations[r].arriving)
+            && d.building
+                .is_none_or(|b| sim.0.buildings[b].descent.is_none())
     };
     for (d, delivery) in sim.0.deliveries.iter().enumerate().skip(flights.over) {
         // Level over where it's bound, whatever it crosses.
@@ -100,6 +104,41 @@ pub fn show(
             let dip = Quat::from_axis_angle(axis.normalize_or_zero(), -delivery.dive().atan());
             let turned = dip * turned;
             if let Some(e) = plane {
+                place(e, over, turned, seen(delivery.owner, at));
+            }
+        }
+        if let Some(b) = delivery.building {
+            let building = &sim.0.buildings[b];
+            let Some(descent) = building.descent.filter(|_| !building.gone()) else {
+                if let Some(Some(e)) = flights.crates.remove(&b) {
+                    commands.entity(e).despawn();
+                }
+                continue;
+            };
+            let at = descent.over(t);
+            let falling = *flights.crates.entry(b).or_insert_with(|| {
+                let template = building.template.as_str();
+                let thing = thing_at(
+                    ground,
+                    Footing::Ground,
+                    building.id,
+                    template,
+                    at,
+                    building.facing,
+                );
+                let mut models = assets.models();
+                let e =
+                    drawn
+                        .0
+                        .spawn_falling(&mut commands, &mut models, &thing, delivery.owner)?;
+                commands.entity(e).insert(DespawnOnExit(Screen::Match));
+                Some(e)
+            });
+            let (mut over, turned) = pose(ground, at, building.facing, None, Footing::Ground);
+            let lands = ground.stand_at(Footing::Ground, descent.lands());
+            let let_go = level - delivery.height + descent.dropped_from();
+            over.y = lands + (let_go - lands) * descent.left(t);
+            if let Some(e) = falling {
                 place(e, over, turned, seen(delivery.owner, at));
             }
         }
