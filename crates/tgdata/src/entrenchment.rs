@@ -68,7 +68,7 @@ impl GameData {
 
     /// The properties the state `state` gives what's in it, as the first
     /// of the state files to define it lists them.
-    fn state_properties(&self, state: &str) -> Vec<Id> {
+    pub fn state_properties(&self, state: &str) -> Vec<Id> {
         let files = self.parse_tgis(|n| n.starts_with("game/actor_states"));
         let files = crate::scoped(&files);
         given(files.iter().flat_map(|f| f.read("ActorState")), state)

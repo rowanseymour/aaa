@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use tgmap::{Grant, Id, Research};
 
 use crate::properties::KEPT;
-use crate::{Building, Held, Notice, Refused, State, World};
+use crate::{Building, Held, Notice, Piece, Refused, State, World};
 
 /// What a recruiter would need to raise an organization but hasn't, and so
 /// whether its menu offers it, greys it or leaves it out.
@@ -125,6 +125,43 @@ impl World {
         (grants.iter().enumerate())
             .filter(|&(i, g)| !grants[..i].iter().any(|e| e.technology == g.technology))
             .map(|(_, g)| &g.technology)
+    }
+
+    /// The technologies `on`'s side holds that can be on it, each once, in
+    /// the order the side first held them, with where that first grant
+    /// came from: none for an independent side's. A regiment can hold one
+    /// when any of its places can, a dead member's counting by its
+    /// template, as its replacement will.
+    pub fn technologies_on(&self, on: Piece) -> Vec<(&Id, Source)> {
+        let (owner, templates): (u32, Vec<&Id>) = match on {
+            Piece::Organization(r) => {
+                let o = &self.organizations[r];
+                let members = o.units.iter().map(|&u| &self.units[u].template);
+                (
+                    o.owner,
+                    std::iter::once(&o.template).chain(members).collect(),
+                )
+            }
+            Piece::Building(b) => (self.buildings[b].owner, vec![&self.buildings[b].template]),
+        };
+        let playing = (self.sides.player(owner)).is_some_and(|p| !p.independent);
+        let grants = match playing {
+            true => self.technologies.get(&owner).map_or(&[][..], Vec::as_slice),
+            false => &[][..],
+        };
+        let kinds = &self.rules.kinds;
+        let fits = |p: &Id| {
+            let needs = self.rules.property_requires.get(p);
+            let needs = needs.map_or(&[][..], Vec::as_slice);
+            kinds.contains_key(templates[0])
+                && (templates.iter().filter_map(|t| kinds.get(*t)))
+                    .any(|k| needs.iter().all(|n| k.properties.contains(n)))
+        };
+        (grants.iter().enumerate())
+            .filter(|&(i, g)| !grants[..i].iter().any(|e| e.technology == g.technology))
+            .filter(|(_, g)| fits(&g.technology))
+            .map(|(_, g)| (&g.technology, g.source))
+            .collect()
     }
 
     /// The side the building at `b` gives its technologies to, if any:
@@ -413,6 +450,7 @@ mod tests {
 
     use tgmap::{Domain, Id, Pathing};
 
+    use super::Source;
     use crate::{Command, Notice, Refused, Researchable, State, World};
 
     /// The economy's HQ listing two technologies for its side, 60 and 100
@@ -485,6 +523,40 @@ mod tests {
             Researchable::Lacking(vec![Id::from("depot")])
         );
         assert_eq!(w.apply(1, research("tech_tiger")), Err(Refused::Lacking));
+    }
+
+    #[test]
+    fn things_hold_their_sides_technologies_that_can_be_on_them_once_each() {
+        let mut w = siege(&[building(9, 2, [10.0, 20.0])]);
+        w.rules.kinds.insert("house".into(), kind(&["walls"]));
+        let needs = |w: &mut World, p: &str, on: &str| {
+            (w.rules.property_requires).insert(Id::from(p), vec![Id::from(on)]);
+        };
+        needs(&mut w, "tech_mortar", "walls");
+        needs(&mut w, "tech_diesel", "tank");
+        let grant = |technology: &str, source| crate::Granted {
+            technology: Id::from(technology),
+            source,
+        };
+        let grants = vec![
+            grant("tech_diesel", Source::Given),
+            grant("tech_drop", Source::Building(3)),
+            grant("tech_mortar", Source::Given),
+            grant("tech_drop", Source::Given),
+        ];
+        w.technologies.insert(2, grants);
+        let on = w.technologies_on(crate::Piece::Building(0));
+        let drop = Id::from("tech_drop");
+        let mortar = Id::from("tech_mortar");
+        // A house has no tank, and a second grant counts as its first.
+        assert_eq!(
+            on,
+            vec![(&drop, Source::Building(3)), (&mortar, Source::Given)]
+        );
+        // An independent side's things hold none.
+        let side = w.sides.players.iter_mut().find(|p| p.id == 2).unwrap();
+        side.independent = true;
+        assert!(w.technologies_on(crate::Piece::Building(0)).is_empty());
     }
 
     #[test]

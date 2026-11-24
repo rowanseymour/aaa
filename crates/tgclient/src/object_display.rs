@@ -121,8 +121,9 @@ pub(crate) struct Detail {
     /// For each organization whose banner shows, the badge it wears and
     /// whether it's out of supply.
     pub(crate) banners: Vec<(usize, Option<banners::Worn>, bool)>,
-    /// The properties whose icons show, those held longest first.
-    pub(crate) properties: Vec<Id>,
+    /// The properties whose icons show, those held longest first, each
+    /// with what tints its icon.
+    pub(crate) properties: Vec<(Id, Tint)>,
     /// The units in each place of the organizations shown, which a
     /// replacement changes.
     pub(crate) members: Vec<usize>,
@@ -132,6 +133,21 @@ pub(crate) struct Detail {
     /// The thing shown alone, as the fog tells whether it's seen now.
     pub(crate) seen_as: Option<Target>,
 }
+
+/// What a property's icon is tinted by: where its holder has it from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Tint {
+    /// Its own, or its activity's: untinted.
+    Plain,
+    /// Its side's, such as a technology, or its own research.
+    Side,
+    /// What a building hands its side.
+    Support,
+}
+
+/// The actor state a building is in while under siege, whose properties
+/// it holds then.
+const UNDER_SIEGE: &str = "under_siege";
 
 /// Part of the display that shows only while the thing shown is seen now,
 /// not only remembered: the property icons and the supply stockpile bar.
@@ -327,6 +343,15 @@ pub struct Looks {
     /// The properties an organization in each formation holds, by the
     /// formation's id.
     pub(crate) formations: HashMap<Id, Vec<Id>>,
+    /// The property an organization of each template holds while its
+    /// formation is broken, by template, for those with one that shows.
+    pub(crate) broken: HashMap<Id, Id>,
+    /// The properties a building holds while it's under siege.
+    pub(crate) besieged: Vec<Id>,
+    /// What tints the icons of properties from a side and from a
+    /// building, by [`Tint::Side`] and [`Tint::Support`].
+    pub(crate) side_tint: Color,
+    pub(crate) support_tint: Color,
     /// How each formation shows on its button, by its id.
     pub(crate) formation_looks: Arc<HashMap<Id, tgdata::FormationLook>>,
     /// Each technology's research button icon, by id, for what's being
@@ -357,24 +382,29 @@ pub struct Looks {
 }
 
 impl Looks {
-    /// The icon and tooltip of each of `properties` that has a look, as
-    /// many as the display has places for, and a tooltip listing the rest
-    /// if there are more.
+    /// The icon, tooltip and tint of each of `properties` that has a
+    /// look, as many as the display has places for, and a tooltip listing
+    /// the rest if there are more.
     pub(crate) fn property_tips(
         &self,
-        properties: &[Id],
-    ) -> (Vec<(String, String)>, Option<String>) {
+        properties: &[(Id, Tint)],
+    ) -> (Vec<(String, String, Color)>, Option<String>) {
         let mut tips: Vec<_> = (properties.iter())
-            .filter_map(|id| self.properties.get(id))
-            .map(|look| {
+            .filter_map(|(id, tint)| Some((self.properties.get(id)?, tint)))
+            .map(|(look, tint)| {
                 let said = std::iter::once(look.name.clone()).chain(look.lines.iter().cloned());
-                (look.icon.clone(), said.collect::<Vec<_>>().join("\n"))
+                let tint = match tint {
+                    Tint::Plain => Color::WHITE,
+                    Tint::Side => self.side_tint,
+                    Tint::Support => self.support_tint,
+                };
+                (look.icon.clone(), said.collect::<Vec<_>>().join("\n"), tint)
             })
             .collect();
         let more = tips.split_off(tips.len().min(MAX_PROPERTIES));
         let more = (!more.is_empty()).then(|| {
             let tip = std::iter::once(self.said("additional_properties"));
-            tip.chain(more.into_iter().map(|(_, tip)| tip))
+            tip.chain(more.into_iter().map(|(_, tip, _)| tip))
                 .collect::<Vec<_>>()
                 .join("\n")
         });
@@ -450,6 +480,13 @@ pub fn setup(
         });
         formations.insert(formation.clone(), held.collect());
     }
+    let mut broken = HashMap::new();
+    for (template, look) in game.broken_looks() {
+        let id = Id::from(format!("{template}/broken"));
+        properties.insert(id.clone(), look);
+        broken.insert(template, id);
+    }
+    let colour = |c: Option<[f32; 3]>, or: Color| c.map_or(or, |[r, g, b]| Color::srgb(r, g, b));
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
         standing_for: standing_for.collect(),
@@ -465,6 +502,13 @@ pub fn setup(
         map: loaded.map.strings.clone(),
         properties,
         formations,
+        broken,
+        besieged: game.state_properties(UNDER_SIEGE),
+        side_tint: colour(
+            game.technology_property_colour(),
+            Color::srgb(1.0, 1.0, 0.0),
+        ),
+        support_tint: colour(game.support_property_colour(), Color::srgb(0.0, 0.0, 1.0)),
         formation_looks: game.formation_looks(),
         technologies: (technologies.iter())
             .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
@@ -563,13 +607,14 @@ fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
     })
 }
 
-/// The properties an organization or building holds that have an icon: its
-/// template's own, then for an organization its formation's, its
-/// terrain's, its stance's, its morale's and its entrenchment's, then those
-/// it has for a time. Those in `shown` come first, as they stand there, so
-/// that icons keep the order their properties came in while their holder
-/// stays selected.
-fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
+/// The properties an organization or building holds that have an icon,
+/// each with its tint: its template's own, its side's technologies, then
+/// for an organization its formation's (or its broken formation's), its
+/// terrain's, its activity's, its fight's and its entrenchment's, for a
+/// building its siege's, then those it has for a time. Those in `shown`
+/// come first, as they stand there, so that icons keep the order their
+/// properties came in while their holder stays selected.
+fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[(Id, Tint)]) -> Vec<(Id, Tint)> {
     // A thing is made with its template's properties last listed first,
     // so its own before those it inherits.
     let own = |template: &Id| {
@@ -578,53 +623,93 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
             .flat_map(|k| k.properties.iter().rev())
             .cloned()
     };
-    let all: Vec<Id> = match holder {
+    let side = sim.technologies_on(holder).into_iter().map(|(p, source)| {
+        let tint = match source {
+            tgsim::Source::Building(_) => Tint::Support,
+            _ => Tint::Side,
+        };
+        (p.clone(), tint)
+    });
+    // Research a building does for itself counts as its side's, so it's
+    // tinted as a technology is.
+    let timed = |held: &[tgsim::Held]| -> Vec<(Id, Tint)> {
+        let tint = |p: &Id| match looks.technologies.contains_key(p) {
+            true => Tint::Side,
+            false => Tint::Plain,
+        };
+        (held.iter())
+            .map(|h| (h.property.clone(), tint(&h.property)))
+            .collect()
+    };
+    let plain = |p: Id| (p, Tint::Plain);
+    let all: Vec<(Id, Tint)> = match holder {
         Piece::Organization(r) => {
             let organization = &sim.organizations[r];
             // One that's unpacked stands in no formation, and guards nothing.
             let afield = organization.unpacked_into.is_none();
-            let formation = organization
+            let formation = (organization
                 .formations
-                .get(organization.current_formation());
-            let formation = formation
-                .filter(|_| afield)
-                .and_then(|f| looks.formations.get(&Id::from(f.id.as_str())));
-            let guarding = (afield && organization.guarding()).then(|| Id::from(GUARDING));
+                .get(organization.current_formation()))
+            .filter(|_| afield)
+            .and_then(|f| looks.formations.get(&Id::from(f.id.as_str())));
+            let broken = looks.broken.get(&organization.template);
+            let formation: Vec<Id> = match (afield && organization.broken(), broken) {
+                (true, Some(b)) => vec![b.clone()],
+                (true, None) => Vec::new(),
+                (false, _) => formation.into_iter().flatten().cloned().collect(),
+            };
+            let fight = sim.fight_state(r);
+            // It does one thing at a time, so engaging stops its guarding.
+            let guards = afield && organization.guarding() && fight != Some(tgmap::ENGAGED);
+            let guarding = guards.then(|| Id::from(GUARDING));
             let mind = sim.state(r).map(Id::from);
-            let timed = organization.properties.iter().map(|h| h.property.clone());
             let entrenched = organization.entrenched.iter().flatten().cloned();
             let level = sim.level_property(r).cloned();
-            own(&organization.template)
-                .chain(level)
-                .chain(formation.into_iter().flatten().cloned())
-                .chain(organization.terrain_properties.iter().cloned())
-                .chain(guarding)
-                .chain(mind)
-                .chain(entrenched)
-                .chain(timed)
+            (own(&organization.template).chain(level).map(plain))
+                .chain(side)
+                .chain(formation.into_iter().map(plain))
+                .chain(organization.terrain_properties.iter().cloned().map(plain))
+                .chain(guarding.map(plain))
+                .chain(mind.map(plain))
+                .chain(fight.map(Id::from).map(plain))
+                .chain(entrenched.map(plain))
+                .chain(timed(&organization.properties))
                 .collect()
         }
         Piece::Building(b) => {
             let building = &sim.buildings[b];
-            let timed = building.properties.iter().map(|h| h.property.clone());
-            own(&building.template).chain(timed).collect()
+            let besieged = (looks.besieged.iter())
+                .filter(|_| building.besieged.is_some())
+                .filter(|p| sim.may_hold(holder, p))
+                .cloned();
+            (own(&building.template).map(plain))
+                .chain(side)
+                .chain(besieged.map(plain))
+                .chain(timed(&building.properties))
+                .collect()
         }
     };
-    let mut now: Vec<Id> = Vec::new();
-    for p in all {
-        if looks.properties.contains_key(&p) && !now.contains(&p) {
-            now.push(p);
+    let mut now: Vec<(Id, Tint)> = Vec::new();
+    for (p, tint) in all {
+        if looks.properties.contains_key(&p) && !now.iter().any(|(q, _)| *q == p) {
+            now.push((p, tint));
         }
     }
-    ordered(now, shown)
+    ordered(now, shown, |(p, _)| p)
 }
 
 /// The properties held `now` as their icons show: those already `shown`
-/// as they stand there, then the rest.
-fn ordered(now: Vec<Id>, shown: &[Id]) -> Vec<Id> {
-    let kept = shown.iter().filter(|p| now.contains(p)).cloned();
-    let mut out: Vec<Id> = kept.collect();
-    out.extend(now.into_iter().filter(|p| !shown.contains(p)));
+/// as they stand there, then the rest, each matched by its `key`. What a
+/// match carries comes from `now`, so a technology whose tint changes, as
+/// when one of the side's grants of it goes, keeps its place.
+fn ordered<T, K: PartialEq>(mut now: Vec<T>, shown: &[T], key: impl Fn(&T) -> &K) -> Vec<T> {
+    let mut out = Vec::with_capacity(now.len());
+    for s in shown {
+        if let Some(i) = now.iter().position(|p| key(p) == key(s)) {
+            out.push(now.remove(i));
+        }
+    }
+    out.extend(now);
     out
 }
 
@@ -634,7 +719,7 @@ fn detail(
     badges: &Badges,
     looks: &Looks,
     mode: &Mode,
-    shown: &[Id],
+    shown: &[(Id, Tint)],
 ) -> Detail {
     let queued = match mode.actor() {
         Some(Actor::Building(_, queue)) => queue.len(),
@@ -2323,12 +2408,23 @@ mod tests {
         let now = ids(&["forest", "guarding", "supplied"]);
         let shown = ids(&["guarding", "city", "forest"]);
         assert_eq!(
-            ordered(now, &shown),
+            ordered(now, &shown, |p| p),
             ids(&["guarding", "forest", "supplied"])
         );
         let many = ids(&["a", "b", "c", "d", "e", "f", "g", "h"]);
-        assert_eq!(ordered(many.clone(), &[]), many);
-        assert_eq!(ordered(many.clone(), &many[7..]).first(), many.last());
+        assert_eq!(ordered(many.clone(), &[], |p| p), many);
+        let last = ordered(many.clone(), &many[7..], |p| p);
+        assert_eq!(last.first(), many.last());
+        // One whose tint changes stays where it was, in its new tint.
+        let tinted = |of: &[(&str, Tint)]| -> Vec<(Id, Tint)> {
+            of.iter().map(|&(p, t)| (Id::from(p), t)).collect()
+        };
+        let now = tinted(&[("tech", Tint::Side), ("guarding", Tint::Plain)]);
+        let shown = tinted(&[("guarding", Tint::Plain), ("tech", Tint::Support)]);
+        assert_eq!(
+            ordered(now, &shown, |(p, _)| p),
+            tinted(&[("guarding", Tint::Plain), ("tech", Tint::Side)])
+        );
     }
 
     #[test]

@@ -778,11 +778,12 @@ impl Ui<'_, '_, '_> {
             align_items: AlignItems::Center,
             ..default()
         };
-        for (icon, tip) in tips {
+        for (icon, tip, tint) in tips {
             let icon = self.shows.image(Some(&icon));
-            let mut icon =
-                self.commands
-                    .spawn((square(), picture_node(icon), Hint(tip), ChildOf(row)));
+            let picture = picture_node(icon).with_color(tint);
+            let mut icon = self
+                .commands
+                .spawn((square(), picture, Hint(tip), ChildOf(row)));
             if let Some(seen) = seen {
                 icon.insert(seen);
             }

@@ -1701,6 +1701,13 @@ pub struct UVars {
     /// What marks the key for something in its name.
     #[serde(rename = "UIColorHighlight")]
     pub ui_color_highlight: Option<[f32; 3]>,
+    /// What tints the icon of a property a side holds, such as a
+    /// technology.
+    #[serde(rename = "UIColorPropertyTechnology")]
+    pub ui_color_property_technology: Option<[f32; 3]>,
+    /// What tints the icon of a property a building hands its side.
+    #[serde(rename = "UIColorPropertySupport")]
+    pub ui_color_property_support: Option<[f32; 3]>,
     /// The id of the [`HotkeyConfiguration`] in use.
     #[serde(rename = "HotkeyConfiguration")]
     pub hotkey_configuration: Option<Id>,

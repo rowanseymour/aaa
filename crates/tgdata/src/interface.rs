@@ -188,6 +188,17 @@ impl GameData {
         self.interface_setting(|v| v.ui_color_highlight)
     }
 
+    /// What tints the icon of a property its holder's side holds, such as
+    /// a technology.
+    pub fn technology_property_colour(&self) -> Option<[f32; 3]> {
+        self.interface_setting(|v| v.ui_color_property_technology)
+    }
+
+    /// What tints the icon of a property a building hands its side.
+    pub fn support_property_colour(&self) -> Option<[f32; 3]> {
+        self.interface_setting(|v| v.ui_color_property_support)
+    }
+
     /// The images this project's own interface draws in place of the
     /// game's, by the game's image's lower-case path from the archive root:
     /// from the `[IconStandIn]` blocks of the `.tgi` files under `Modern/`,

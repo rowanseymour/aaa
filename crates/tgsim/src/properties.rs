@@ -151,6 +151,15 @@ impl World {
         }
     }
 
+    /// Whether `property` can be on `on`, as [`World::can_carry`] says.
+    pub fn may_hold(&self, on: Piece, property: &Id) -> bool {
+        let t = match on {
+            Piece::Organization(r) => Thing::Organization(r),
+            Piece::Building(b) => Thing::Building(b),
+        };
+        self.can_carry(t, property)
+    }
+
     /// Whether `property` can be on `t`: its template has properties, and
     /// those `property` needs. A regiment has them when it or any of its
     /// living members does.
