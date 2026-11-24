@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Column: gold dots, three, one, then three, over a light diamond. -->
+  <polygon fill="none" stroke="#1c1a10" stroke-width="4.5" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <polygon fill="none" stroke="#ecebe2" stroke-width="2" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <g fill="#1c1a10">
+    <circle cx="16" cy="13" r="6.5"/>
+    <circle cx="32" cy="13" r="6.5"/>
+    <circle cx="48" cy="13" r="6.5"/>
+    <circle cx="32" cy="31" r="6.5"/>
+    <circle cx="16" cy="50" r="6.5"/>
+    <circle cx="32" cy="50" r="6.5"/>
+    <circle cx="48" cy="50" r="6.5"/>
+  </g>
+  <circle fill="#f7d35a" cx="16" cy="13" r="5.2"/>
+  <circle fill="#f7d35a" cx="32" cy="13" r="5.2"/>
+  <circle fill="#f7d35a" cx="48" cy="13" r="5.2"/>
+  <circle fill="#e6b52f" cx="32" cy="31" r="5.2"/>
+  <circle fill="#c9921f" cx="16" cy="50" r="5.2"/>
+  <circle fill="#c9921f" cx="32" cy="50" r="5.2"/>
+  <circle fill="#c9921f" cx="48" cy="50" r="5.2"/>
+  <circle fill="#fff3c4" opacity=".7" cx="14.4" cy="11.4" r="1.7"/>
+  <circle fill="#fff3c4" opacity=".7" cx="30.4" cy="11.4" r="1.7"/>
+  <circle fill="#fff3c4" opacity=".7" cx="46.4" cy="11.4" r="1.7"/>
+  <circle fill="#fff3c4" opacity=".7" cx="30.4" cy="29.4" r="1.7"/>
+  <circle fill="#fff3c4" opacity=".7" cx="14.4" cy="48.4" r="1.7"/>
+  <circle fill="#fff3c4" opacity=".7" cx="30.4" cy="48.4" r="1.7"/>
+  <circle fill="#fff3c4" opacity=".7" cx="46.4" cy="48.4" r="1.7"/>
+</svg>
