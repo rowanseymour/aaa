@@ -23,7 +23,7 @@ pub struct Command {
     pub high_importance: bool,
     /// The [`CursorLook`] shown while it waits for a place or target.
     pub cursor: Option<Id>,
-    /// The effect marking where it was given, from [`GameData::vfx`].
+    /// The effect marking an order's target, from [`GameData::vfx`].
     pub marker: Option<Id>,
     /// Whether each of a group goes to its own place, keeping its place
     /// relative to the rest, rather than all to the one place.
@@ -73,7 +73,7 @@ fn command(strings: &crate::Strings, c: defs::ActorCommand) -> Option<Command> {
         slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
         high_importance: c.high_importance,
         cursor: not_null(c.cursor_ids),
-        marker: c.command_vfx_ids_location,
+        marker: c.command_vfx_ids_actor,
         group_offset: c.apply_group_offset.unwrap_or(true),
         alone: c.non_group_command,
     })

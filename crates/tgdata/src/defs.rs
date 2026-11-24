@@ -1429,6 +1429,9 @@ pub struct ActorCommand {
     pub cursor_ids: Option<Id>,
     /// The [`Vfx`] marking where the order was given.
     pub command_vfx_ids_location: Option<Id>,
+    /// The effect marking the target of an order it gives, while the
+    /// regiment ordered is selected.
+    pub command_vfx_ids_actor: Option<Id>,
     /// Whether each of a group keeps its place relative to the rest, rather
     /// than all going to the one place; true unless set.
     pub apply_group_offset: Option<bool>,

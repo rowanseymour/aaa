@@ -31,6 +31,9 @@ pub struct Group {
     /// The building it was last sent onto, by index into
     /// [`World::buildings`].
     pub heading_for: Option<usize>,
+    /// The orders queued for it as a whole, each its regiments' together,
+    /// first first.
+    pub queue: Vec<Vec<Command>>,
 }
 
 crate::digest!(Group {
@@ -38,6 +41,7 @@ crate::digest!(Group {
     owner,
     organizations,
     heading_for,
+    queue,
 });
 
 impl World {
@@ -72,6 +76,7 @@ impl World {
                 owner: player,
                 organizations: ordered,
                 heading_for,
+                queue: Vec::new(),
             });
             id
         });

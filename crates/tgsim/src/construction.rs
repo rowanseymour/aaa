@@ -674,6 +674,27 @@ mod tests {
         assert_eq!(w.organizations[0].mending, None);
     }
 
+    #[test]
+    fn queued_builds_go_up_one_after_another() {
+        let mut w = engineers();
+        let queued = |command| Command::Queued {
+            command: Box::new(command),
+        };
+        w.apply(1, build([10.0, 20.0])).unwrap();
+        w.apply(1, queued(build([20.0, 20.0]))).unwrap();
+        assert_eq!(w.organizations[0].queue.len(), 1);
+        run_until(&mut w, 20.0, |w| !w.buildings.is_empty());
+        // The second waits on the first going up, not just being started.
+        run(&mut w, 5.0);
+        assert!(w.buildings[0].constructing && w.buildings.len() == 1);
+        assert_eq!(w.stockpile(1), 400.0);
+        run_until(&mut w, 60.0, |w| w.buildings.len() == 2);
+        assert!(!w.buildings[0].constructing);
+        assert!(near(w.buildings[1].position, [20.0, 20.0]));
+        assert_eq!(w.stockpile(1), 300.0);
+        assert!(w.organizations[0].queue.is_empty());
+    }
+
     /// Seconds an engineer regiment, six engineers and a captain whose
     /// repairs recharge at once and take a second, takes over a
     /// 1250-health site, its engineers' recharges multiplied by
