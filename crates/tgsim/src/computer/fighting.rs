@@ -7,7 +7,7 @@ use tgmap::sai::Ego;
 
 use super::liking;
 use super::picture::Picture;
-use super::planner::{Goal, Key, Planner, Wanted, Work};
+use super::planner::{Goal, Key, Member, Planner, Wanted, Work};
 use crate::{Command, Order, Piece, Seen, Target, World};
 
 /// How near a unit already sent somewhere has to be headed to the place a
@@ -26,7 +26,7 @@ pub(super) fn goals(planner: &mut Planner, picture: &Picture) -> Vec<Goal> {
 }
 
 /// What a known enemy thing is worth attacking.
-fn target_worth(ego: &Ego, picture: &Picture, piece: Piece) -> f32 {
+pub(super) fn target_worth(ego: &Ego, picture: &Picture, piece: Piece) -> f32 {
     let world = picture.world;
     let value = match piece {
         Piece::Organization(r) => world.full_value(r),
@@ -176,7 +176,7 @@ fn recover(planner: &mut Planner, picture: &Picture) -> Vec<Goal> {
         if !picture.fights(r) {
             continue;
         }
-        let under_way = planner.serving.get(&r) == Some(&Key::Recover(r));
+        let under_way = planner.serving_of(r) == Some(&Key::Recover(r));
         let retreating = planner.retreating.contains(&r);
         let health = picture.health(r);
         let morale = picture.morale(r);
@@ -234,7 +234,7 @@ fn recover_order(planner: &mut Planner, picture: &Picture, r: usize) -> Option<C
     let kept = (planner.recovering_at.get(&r).copied())
         .filter(|&at| !fought && world.supplied(picture.player, at));
     // Leaving a fight, it's measured from where the fight was.
-    let from = match planner.serving.get(&r) {
+    let from = match planner.serving_of(r) {
         Some(Key::Attack(g) | Key::Defend(g)) => world.regions.regions[*g].centre,
         _ => world.centre(r),
     };
@@ -354,7 +354,11 @@ pub(super) fn react(planner: &mut Planner, world: &World, player: u32) -> Vec<Co
             && world.sides.relation(player, o.owner) == tgmap::Relation::Enemy
     };
     // Retreat from fights it's losing.
-    let mut fighting: Vec<usize> = (planner.serving.keys().copied())
+    let mut fighting: Vec<usize> = (planner.serving.keys())
+        .filter_map(|m| match *m {
+            Member::Organization(r) => Some(r),
+            Member::AttackGroup(_) => None,
+        })
         .filter(|&r| owned(r))
         .collect();
     fighting.sort_unstable();
@@ -422,10 +426,7 @@ pub(super) fn react(planner: &mut Planner, world: &World, player: u32) -> Vec<Co
     // Targets near the fights units were sent to.
     let seen = world.sees_units(player);
     for &r in &fighting {
-        let fights = matches!(
-            planner.serving.get(&r),
-            Some(Key::Attack(_) | Key::Defend(_))
-        );
+        let fights = matches!(planner.serving_of(r), Some(Key::Attack(_) | Key::Defend(_)));
         let o = &world.organizations[r];
         if !fights || planner.retreating.contains(&r) || !o.engaged.is_empty() {
             continue;
@@ -433,7 +434,7 @@ pub(super) fn react(planner: &mut Planner, world: &World, player: u32) -> Vec<Co
         if matches!(o.order, Order::Pursue(_)) {
             continue;
         }
-        let region = match planner.serving.get(&r) {
+        let region = match planner.serving_of(r) {
             Some(Key::Attack(g) | Key::Defend(g)) => *g,
             _ => continue,
         };

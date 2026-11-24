@@ -8,8 +8,8 @@ use tgmap::Id;
 use tgmap::sai::{Ego, Profile};
 
 use super::picture::{Known, Picture};
-use super::{ComputerPlayer, choosing, economy, fighting};
-use crate::{Command, SECOND, World};
+use super::{ComputerPlayer, air, choosing, economy, fighting};
+use crate::{Command, Piece, SECOND, World};
 
 /// What a goal is about, which it keeps from think to think.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -23,6 +23,15 @@ pub(super) enum Key {
     Defend(usize),
     Explore(u32),
     Recover(usize),
+    AirAttack(Piece),
+}
+
+/// What serves a goal: an organization, or an airfield's attack group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Member {
+    Organization(usize),
+    /// The attack group of the building at this index.
+    AttackGroup(usize),
 }
 
 /// A goal as one planning think weighs it.
@@ -58,6 +67,13 @@ pub(super) enum Work {
     /// The organization that likes exploring best, sent to explore at
     /// `to`.
     Explore { to: [f32; 2] },
+    /// An airfield's attack group, sent at `target`, aimed at `at`: the
+    /// target itself when it's seen, else where it was last.
+    AirAttack {
+        target: Piece,
+        at: [f32; 2],
+        seen: bool,
+    },
 }
 
 /// How much strength a fight wants, and how much its worth grows with it.
@@ -101,8 +117,11 @@ pub struct Planner {
     carried: HashMap<Key, f32>,
     /// The random amount each goal weighed this think has.
     pending: HashMap<Key, f32>,
-    /// The goal each organization served last think.
-    pub(super) serving: HashMap<usize, Key>,
+    /// The goal each unit served last think.
+    pub(super) serving: HashMap<Member, Key>,
+    /// The tick until which each thing it sent an air attack at isn't
+    /// attacked from the air again.
+    pub(super) struck: HashMap<Piece, u64>,
     /// The enemy things it saw.
     memory: Vec<Known>,
     /// The region each truck was last sent to unpack in.
@@ -134,6 +153,7 @@ impl Planner {
             carried: HashMap::new(),
             pending: HashMap::new(),
             serving: HashMap::new(),
+            struck: HashMap::new(),
             memory: Vec::new(),
             unpacking: HashMap::new(),
             recovering_at: HashMap::new(),
@@ -142,6 +162,20 @@ impl Planner {
             retreating: HashSet::new(),
             warned: false,
         }
+    }
+
+    /// The goal the organization at `r` served last think.
+    pub(super) fn serving_of(&self, r: usize) -> Option<&Key> {
+        self.serving.get(&Member::Organization(r))
+    }
+
+    /// Whether goal `key` was carried out at its last planning think.
+    pub(super) fn carried_out(&self, key: &Key) -> bool {
+        self.carried.contains_key(key)
+    }
+
+    pub(super) fn sends_air_attacks(&self) -> bool {
+        self.profile.sends_air_attacks
     }
 
     /// The mood it's in.
@@ -227,6 +261,7 @@ impl Planner {
         let mut goals = Vec::new();
         goals.extend(economy::goals(self, &picture));
         goals.extend(fighting::goals(self, &picture));
+        goals.extend(air::goals(self, &picture));
         self.weigh(&mut goals);
         let mut orders = self.choose(&picture, goals);
         orders.truncate(self.profile.max_ge_commands);
@@ -279,6 +314,11 @@ impl Planner {
             .collect();
         self.pending.clear();
         self.serving = chosen.serving;
+        // What's cut from the orders given wasn't sent.
+        let given = self.profile.max_ge_commands;
+        let until = air::struck_until(self, picture.world);
+        let struck = chosen.struck.into_iter().filter(|&(_, n)| n <= given);
+        self.struck.extend(struck.map(|(p, _)| (p, until)));
         chosen.orders
     }
 

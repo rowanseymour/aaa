@@ -19,6 +19,9 @@ pub struct Profile {
     pub max_ge_commands: usize,
     pub max_rai_commands: usize,
     pub moods: Vec<Ego>,
+    /// Whether it sends air attacks, which the game decides for every
+    /// profile.
+    pub sends_air_attacks: bool,
 }
 
 /// A profile as its block holds it.
@@ -431,6 +434,7 @@ pub struct Combat {
     /// How many regions from its attack a unit is held to it.
     pub attack_commit_distance: u32,
     pub defend_priority: DefendPriority,
+    pub air_attacks: AirAttacks,
 }
 
 impl Default for Combat {
@@ -440,6 +444,51 @@ impl Default for Combat {
             linked_region_distance: 2,
             attack_commit_distance: 3,
             defend_priority: Default::default(),
+            air_attacks: Default::default(),
+        }
+    }
+}
+
+/// What an air attack on a thing is worth, by how the thing stands.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AirAttacks {
+    pub engaged_bonus: f32,
+    /// The share of its health from which a thing counts as damaged, and
+    /// up to which, not including it.
+    pub target_damage_floor: f32,
+    pub target_damage_ceiling: f32,
+    pub target_damage_bonus: f32,
+    pub support_ground_attack_bonus: f32,
+    /// What it's multiplied by when no other factor applies.
+    pub no_bonus_penalty: f32,
+    /// The share of its health below which a thing is nearly dead.
+    pub absolute_min_health: f32,
+    pub absolute_min_health_engaged_mult: f32,
+    pub absolute_min_health_unengaged_mult: f32,
+    pub resupplying_mult: f32,
+    /// Seconds before a thing attacked from the air can be again.
+    pub min_time_between_attacks: f32,
+    pub extra_planes_multiplier_max: f32,
+    pub extra_planes_multiplier_per_plane: f32,
+}
+
+impl Default for AirAttacks {
+    fn default() -> Self {
+        AirAttacks {
+            engaged_bonus: 2.0,
+            target_damage_floor: 0.5,
+            target_damage_ceiling: 0.8,
+            target_damage_bonus: 2.0,
+            support_ground_attack_bonus: 2.0,
+            no_bonus_penalty: 0.0,
+            absolute_min_health: 0.3,
+            absolute_min_health_engaged_mult: 0.0,
+            absolute_min_health_unengaged_mult: 5.0,
+            resupplying_mult: 0.0,
+            min_time_between_attacks: 120.0,
+            extra_planes_multiplier_max: 2.0,
+            extra_planes_multiplier_per_plane: 0.5,
         }
     }
 }
@@ -778,8 +827,15 @@ impl GameData {
         // The templates first, so that every profile sees them.
         files.sort_by_key(|(n, _)| !n.to_ascii_lowercase().starts_with("templates/"));
         let files = scoped(&files);
+        let sends_air_attacks = (self.svars().iter())
+            .find_map(|v| v.use_air_attacks)
+            .unwrap_or(true);
         ids.into_iter()
             .filter_map(|id| profile(&files, id))
+            .map(|p| Profile {
+                sends_air_attacks,
+                ..p
+            })
             .collect()
     }
 }
@@ -809,6 +865,7 @@ fn profile(files: &[crate::Scoped], id: &Id) -> Option<Profile> {
         max_ge_commands: block.max_ge_commands,
         max_rai_commands: block.max_rai_commands,
         moods,
+        sends_air_attacks: true,
     })
 }
 
@@ -834,6 +891,8 @@ mod tests {
             \t\t\t\tproperty_ids = ammo\n\t\t\t\tbase_priority = -850\n\t\t\t}\n\t\t}\n\
             \t\t[Research]\n\t\t{\n\t\t\tbase_priority = 20\n\
             \t\t\t[TechPriority]\n\t\t\t{\n\t\t\t\ttech = tech_a\n\t\t\t\tpriority = 50\n\t\t\t}\n\t\t}\n\
+            \t\t[Combat]\n\t\t{\n\t\t\t[AirAttacks]\n\t\t\t{\n\
+            \t\t\t\tmin_time_between_attacks = 90\n\t\t\t}\n\t\t}\n\
             \t}\n}\n";
         let profile = "[Ego template = Low]\n{\n\tIDS = low_ego\n}\n\
             [Ego template = Base]\n{\n\tIDS = main_ego\n}\n\
@@ -889,6 +948,9 @@ mod tests {
         assert_eq!(engine.recruiting.num_military_goals, 2);
         assert_eq!(engine.research.priority(&Id::from("tech_a")), 50.0);
         assert_eq!(engine.research.priority(&Id::from("tech_b")), 20.0);
+        let air = &engine.combat.air_attacks;
+        assert_eq!(air.min_time_between_attacks, 90.0);
+        assert_eq!(air.engaged_bonus, 2.0);
         assert!(p.moods[1].filters.item.is_empty());
     }
 }

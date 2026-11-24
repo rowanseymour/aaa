@@ -1462,6 +1462,9 @@ pub struct SVars {
     /// Whether a side's objectives are kept in order of their text.
     #[serde(rename = "SortObjectives")]
     pub sort_objectives: Option<bool>,
+    /// Whether computer players send air attacks.
+    #[serde(rename = "UseAirAttacks")]
+    pub use_air_attacks: Option<bool>,
     /// Whether the sides of a team win and lose together.
     #[serde(rename = "TeamVictory")]
     pub team_victory: Option<bool>,
