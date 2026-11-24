@@ -61,10 +61,11 @@ pub(crate) fn ui(world: &mut World) -> String {
 }
 
 pub(crate) fn click(world: &mut World, args: &[&str]) -> Reply {
-    let [id] = args else {
-        return Err(usage("click"));
-    };
-    crate::drive::click(world, id)?;
+    match args {
+        [id] | [id, "left"] => crate::drive::click(world, id)?,
+        [id, "right"] => crate::drive::right_click(world, id)?,
+        _ => return Err(usage("click")),
+    }
     world.resource_mut::<Console>().settling = SETTLE_FRAMES;
     Ok(String::new())
 }

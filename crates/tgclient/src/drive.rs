@@ -2,13 +2,18 @@
 //! a script can reach every screen.
 //!
 //! A button goes by its [`ButtonId`]. Clicking one activates it directly,
-//! with nothing hovered, but only where a person could: not one under
+//! with nothing hovered; right-clicking one has it take a right click
+//! where it stands. Either only where a person could: not one under
 //! whatever [`Covers`] the screen, nor one that's disabled.
 
+use bevy::camera::NormalizedRenderTarget;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::input::mouse::MouseButtonInput;
+use bevy::picking::backend::HitData;
+use bevy::picking::events::Pointer;
 use bevy::picking::hover::Hovered;
+use bevy::picking::pointer::{Location, PointerId};
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use bevy::ui_widgets::{Activate, Button};
@@ -84,21 +89,61 @@ pub fn buttons(world: &mut World) -> (Vec<Seen>, usize) {
 
 /// Activates the button with this id.
 pub fn click(world: &mut World, id: &str) -> Result<(), String> {
-    let button = seen(world, id)?;
-    if world.get::<bevy::ui::InteractionDisabled>(button).is_some() {
-        return Err(format!("button {id:?} is disabled"));
-    }
+    let (button, _) = pressable(world, id)?;
     world.trigger(Activate { entity: button });
     world.flush();
     Ok(())
 }
 
-/// The button on screen with id `id`.
-fn seen(world: &mut World, id: &str) -> Result<Entity, String> {
+/// Clicks the button with id `id` with the right mouse button, as a
+/// person would: it's pressed and clicked where it stands, with the right
+/// button just let go, so it activates as a button does for any click and
+/// whatever answers a right click gets one.
+pub fn right_click(world: &mut World, id: &str) -> Result<(), String> {
+    let (entity, middle) = pressable(world, id)?;
+    let mut mouse = (world.get_resource_mut::<ButtonInput<MouseButton>>())
+        .ok_or("there's no mouse to right-click with")?;
+    mouse.press(MouseButton::Right);
+    mouse.release(MouseButton::Right);
+    world.entity_mut(entity).insert(bevy::ui::Pressed);
+    let target = NormalizedRenderTarget::None {
+        width: 0,
+        height: 0,
+    };
+    let location = Location {
+        target,
+        position: middle,
+    };
+    world.trigger(PointerClick {
+        entity,
+        pointer: Pointer::new(PointerId::Mouse, location),
+        button: PointerButton::Secondary,
+        hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        duration: std::time::Duration::ZERO,
+        count: 1,
+    });
+    world.flush();
+    if let Ok(mut button) = world.get_entity_mut(entity) {
+        button.remove::<bevy::ui::Pressed>();
+    }
+    Ok(())
+}
+
+/// The button on screen with id `id`, and where its middle is.
+fn seen(world: &mut World, id: &str) -> Result<(Entity, Vec2), String> {
     let (seen, _) = buttons(world);
     let button = seen.iter().find(|b| b.id.eq_ignore_ascii_case(id));
     let button = button.ok_or_else(|| format!("no button {id:?} to press; ui lists them"))?;
-    Ok(button.entity)
+    Ok((button.entity, button.middle))
+}
+
+/// [`seen`], if it can be pressed.
+fn pressable(world: &mut World, id: &str) -> Result<(Entity, Vec2), String> {
+    let (button, middle) = seen(world, id)?;
+    if world.get::<bevy::ui::InteractionDisabled>(button).is_some() {
+        return Err(format!("button {id:?} is disabled"));
+    }
+    Ok((button, middle))
 }
 
 /// The button the pointer is held over, by [`hover`], as if the mouse were
@@ -109,7 +154,7 @@ pub struct Over(Option<Entity>);
 /// Holds the pointer over the button with id `id`, showing what hovering
 /// on it would, or with none, takes it off.
 pub fn hover(world: &mut World, id: Option<&str>) -> Result<(), String> {
-    let button = id.map(|id| seen(world, id)).transpose()?;
+    let button = id.map(|id| seen(world, id).map(|(b, _)| b)).transpose()?;
     world.resource_mut::<Over>().0 = button;
     Ok(())
 }
@@ -257,6 +302,31 @@ mod tests {
         assert_eq!(world.resource::<Clicked>().0, ["launch", "second"]);
         assert!(click(&mut world, "gone").is_err(), "it's hidden");
         assert!(click(&mut world, "nothing").is_err());
+    }
+
+    #[test]
+    fn a_right_click_is_the_right_buttons_and_lands_where_its_pressed() {
+        let mut world = world();
+        world.init_resource::<ButtonInput<MouseButton>>();
+        let first = buttons(&mut world).0.remove(0).entity;
+        world.entity_mut(first).observe(
+            |click: On<PointerClick>,
+             mut clicked: ResMut<Clicked>,
+             mouse: Res<ButtonInput<MouseButton>>| {
+                let right = click.button == PointerButton::Secondary;
+                let there = click.pointer.position == Vec2::new(20.0, 10.0);
+                if right && there && mouse.just_released(MouseButton::Right) {
+                    clicked.0.push("right");
+                }
+            },
+        );
+        right_click(&mut world, "first").unwrap();
+        assert_eq!(world.resource::<Clicked>().0, ["right"]);
+        assert!(
+            world.get::<bevy::ui::Pressed>(first).is_none(),
+            "let go after"
+        );
+        assert!(right_click(&mut world, "gone").is_err(), "it's hidden");
     }
 
     #[test]
