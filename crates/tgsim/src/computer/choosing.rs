@@ -279,15 +279,12 @@ impl<'p, 'w> Board<'p, 'w> {
     /// taken from counts its loss.
     fn gain(&mut self, g: usize, r: usize) -> f32 {
         let from = self.holder.get(&r).copied().filter(|&h| h != g);
-        let had = from.map(|h| self.members[h].clone());
-        if let Some(h) = from {
-            self.members[h].retain(|&m| m != r);
-        }
+        let at = from.and_then(|h| self.lift(h, r).map(|i| (h, i)));
         self.members[g].push(r);
         let gain = self.above_stored(g);
         self.members[g].pop();
-        if let (Some(h), Some(had)) = (from, had) {
-            self.members[h] = had;
+        if let Some((h, i)) = at {
+            self.members[h].insert(i, r);
         }
         gain
     }
@@ -295,11 +292,20 @@ impl<'p, 'w> Board<'p, 'w> {
     /// What taking the unit at `r` from goal `h` loses it from its stored
     /// worth, across the fights linked to it.
     fn loss(&mut self, h: usize, r: usize) -> f32 {
-        let had = self.members[h].clone();
-        self.members[h].retain(|&m| m != r);
+        let at = self.lift(h, r);
         let loss = -self.above_stored(h);
-        self.members[h] = had;
+        if let Some(i) = at {
+            self.members[h].insert(i, r);
+        }
         loss
+    }
+
+    /// Takes the unit at `r` off goal `h`'s members for a moment: where it
+    /// was among them, to put it back.
+    fn lift(&mut self, h: usize, r: usize) -> Option<usize> {
+        let i = self.members[h].iter().position(|&m| m == r)?;
+        self.members[h].remove(i);
+        Some(i)
     }
 
     /// Whether the unit at `r` is held to goal `h`: it's an attack, and the
@@ -345,6 +351,10 @@ impl<'p, 'w> Board<'p, 'w> {
             }
             if self.visits[h] < MOST_VISITS {
                 self.settled[h] = false;
+            } else if self.rank[h] <= 0.0 {
+                // Not met again, it isn't carried out, and what's left on
+                // it is free for the rest.
+                self.release(h);
             }
         }
     }
