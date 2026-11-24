@@ -172,6 +172,23 @@ impl World {
         spots.find(|&p| (self.pathing).room_for(&spot(p, facing, shape), Domain::Land, blocking))
     }
 
+    /// Where a summon aimed at `at` would come down: the clear spot nearest
+    /// it for what it brings, or for a regiment its leader; none where it
+    /// can't be aimed or there's no room.
+    pub(crate) fn summon_spot(&self, summon: &Summon, at: [f32; 2]) -> Option<[f32; 2]> {
+        if !self.summons_to(summon, at) {
+            return None;
+        }
+        let organization = self.rules.raisable.get(&summon.template)?;
+        let shape = organization.members.first()?.shape;
+        self.first_clear(
+            rings(at, FACING, 1.0, RINGS),
+            FACING,
+            shape,
+            &self.blocking(),
+        )
+    }
+
     /// Puts down what `operation` summons for `player` at the clear spot
     /// nearest `at`, telling the side if there's none.
     pub(crate) fn summon(

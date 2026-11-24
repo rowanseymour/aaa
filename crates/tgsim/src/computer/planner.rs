@@ -8,7 +8,7 @@ use tgmap::Id;
 use tgmap::sai::{Ego, Profile};
 
 use super::picture::{Known, Picture};
-use super::{ComputerPlayer, air, bombarding, choosing, economy, fighting};
+use super::{ComputerPlayer, air, bombarding, choosing, economy, fighting, operations};
 use crate::{Command, Piece, SECOND, World};
 
 /// What a goal is about, which it keeps from think to think.
@@ -25,6 +25,7 @@ pub(super) enum Key {
     Recover(usize),
     AirAttack(Piece),
     Bombard(Piece),
+    GeneralPower,
 }
 
 /// What serves a goal: an organization, or an airfield's attack group.
@@ -52,6 +53,8 @@ pub(super) struct Goal {
 pub(super) enum Work {
     /// An order for no unit of its own, such as to recruit.
     Order(Command),
+    /// Orders for no unit of its own, such as to use operations.
+    Orders(Vec<Command>),
     /// One particular organization, given this order, or held where it is.
     Unit {
         organization: usize,
@@ -130,6 +133,12 @@ pub struct Planner {
     /// The tick until which each thing it sent an air attack at isn't
     /// attacked from the air again.
     pub(super) struck: HashMap<Piece, u64>,
+    /// The order its general's operations are weighed in, by id, and where
+    /// in it to draw again at the next think.
+    pub(super) operations: Vec<Id>,
+    pub(super) redraw_from: Option<usize>,
+    /// The tick its side last saw enough of each region.
+    pub(super) explored: Vec<u64>,
     /// The enemy things it saw.
     memory: Vec<Known>,
     /// The region each truck was last sent to unpack in.
@@ -162,6 +171,9 @@ impl Planner {
             pending: HashMap::new(),
             serving: HashMap::new(),
             struck: HashMap::new(),
+            operations: Vec::new(),
+            redraw_from: None,
+            explored: Vec::new(),
             memory: Vec::new(),
             unpacking: HashMap::new(),
             recovering_at: HashMap::new(),
@@ -180,6 +192,15 @@ impl Planner {
     /// Whether goal `key` was carried out at its last planning think.
     pub(super) fn carried_out(&self, key: &Key) -> bool {
         self.carried.contains_key(key)
+    }
+
+    /// Every mood of its profile.
+    pub(super) fn moods(&self) -> &[Ego] {
+        &self.profile.moods
+    }
+
+    pub(super) fn explored_share(&self) -> f32 {
+        self.profile.explored_share
     }
 
     pub(super) fn sends_air_attacks(&self) -> bool {
@@ -271,6 +292,7 @@ impl Planner {
         goals.extend(fighting::goals(self, &picture));
         goals.extend(air::goals(self, &picture));
         goals.extend(bombarding::goals(self, &picture));
+        goals.extend(operations::goals(self, &picture));
         self.weigh(&mut goals);
         let mut orders = self.choose(&picture, goals);
         orders.truncate(self.profile.max_ge_commands);

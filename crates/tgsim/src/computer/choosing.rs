@@ -215,7 +215,7 @@ impl<'p, 'w> Board<'p, 'w> {
     /// Whether unit `r` could serve goal `g` at all.
     fn serves(&self, g: usize, r: Member) -> bool {
         match &self.goals[g].work {
-            Work::Order(_) => false,
+            Work::Order(_) | Work::Orders(_) => false,
             Work::Unit { organization, .. } => Member::Organization(*organization) == r,
             Work::Force { .. }
             | Work::Explore { .. }
@@ -237,7 +237,7 @@ impl<'p, 'w> Board<'p, 'w> {
         let goal = &self.goals[g];
         let ego = self.planner.ego();
         match &goal.work {
-            Work::Order(_) => goal.priority,
+            Work::Order(_) | Work::Orders(_) => goal.priority,
             Work::Unit { organization, .. } => {
                 match set.contains(&Member::Organization(*organization)) {
                     true => goal.priority,
@@ -354,7 +354,7 @@ impl<'p, 'w> Board<'p, 'w> {
     /// Whether goal `g` wants more units than it has.
     fn wants_more(&self, g: usize) -> bool {
         match &self.goals[g].work {
-            Work::Order(_) => false,
+            Work::Order(_) | Work::Orders(_) => false,
             Work::Unit { .. }
             | Work::Explore { .. }
             | Work::AirAttack { .. }
@@ -564,6 +564,7 @@ impl<'p, 'w> Board<'p, 'w> {
             }
             match &goal.work {
                 Work::Order(command) => given.push(command.clone()),
+                Work::Orders(commands) => given.extend(commands.iter().cloned()),
                 Work::Unit { order, .. } => given.extend(order.iter().cloned()),
                 Work::Force { to, attack, .. } => {
                     for (m, r) in organizations(&self.members[g]) {

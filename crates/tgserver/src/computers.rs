@@ -146,6 +146,7 @@ mod tests {
             max_rai_commands: 40,
             moods: Vec::new(),
             sends_air_attacks: true,
+            explored_share: 0.1,
         })
     }
 

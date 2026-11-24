@@ -22,6 +22,9 @@ pub struct Profile {
     /// Whether it sends air attacks, which the game decides for every
     /// profile.
     pub sends_air_attacks: bool,
+    /// The share of a region its side has to see for it to count as just
+    /// explored.
+    pub explored_share: f32,
 }
 
 /// A profile as its block holds it.
@@ -50,8 +53,8 @@ impl Default for SaiBlock {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-struct Named {
-    ids: Option<Id>,
+pub struct Named {
+    pub ids: Option<Id>,
 }
 
 /// A mood: everything a computer player goes by while it's in it.
@@ -121,6 +124,7 @@ pub struct GoalEngine {
     pub recruiting: Recruiting,
     pub attach: Attach,
     pub research: Research,
+    pub general_powers: GeneralPowers,
 }
 
 impl Default for GoalEngine {
@@ -152,6 +156,7 @@ impl Default for GoalEngine {
             recruiting: Default::default(),
             attach: Default::default(),
             research: Default::default(),
+            general_powers: Default::default(),
         }
     }
 }
@@ -775,6 +780,228 @@ impl Default for Attach {
     }
 }
 
+/// The general's special operations a mood uses, and how it picks where.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct GeneralPowers {
+    pub power: Vec<GeneralPower>,
+}
+
+/// One special operation a mood uses.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct GeneralPower {
+    /// The operation, by its ability's id.
+    pub ability_ids: Option<Id>,
+    pub location: PowerLocation,
+    pub priority: PowerPriority,
+}
+
+/// Where an operation is tried.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PowerLocation {
+    /// `NEAR_ACTOR`, `ON_ACTOR` or `FOG`.
+    #[serde(rename = "type")]
+    pub kind: Option<Id>,
+    /// What it's found from.
+    pub actor_requirements: ActorRequirements,
+    pub placement: Placement,
+}
+
+/// What a thing has to be to count.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ActorRequirements {
+    /// The most of its full health it has, as a share.
+    pub max_percent_health: f32,
+    pub must_be_engaged: bool,
+    pub must_not_be_engaged: bool,
+    /// Its side is the computer player's own or an ally.
+    pub must_be_friendly: bool,
+    pub must_be_enemy: bool,
+    pub must_be_owned: bool,
+    /// Properties it has to have one of, if any.
+    pub required_property: Vec<Named>,
+    /// What a thing matching it, as a category, counts for.
+    pub multiplier: f32,
+}
+
+impl Default for ActorRequirements {
+    fn default() -> Self {
+        ActorRequirements {
+            max_percent_health: 1.0,
+            must_be_engaged: false,
+            must_not_be_engaged: false,
+            must_be_friendly: false,
+            must_be_enemy: false,
+            must_be_owned: false,
+            required_property: Vec::new(),
+            multiplier: 1.0,
+        }
+    }
+}
+
+/// How spots near a thing are drawn.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Placement {
+    pub radius: f32,
+    pub num_candidates: u32,
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Placement {
+            radius: -1.0,
+            num_candidates: 3,
+        }
+    }
+}
+
+/// How a spot for an operation is scored.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PowerPriority {
+    /// What weighs its place in the order, and starts every spot's score.
+    pub base: f32,
+    pub minimum: f32,
+    pub fuzzy_factor: f32,
+    #[serde(rename = "CV")]
+    pub cv: Tally,
+    pub actor_value: Tally,
+    pub enemy_influence: EnemyInfluence,
+    pub influence_ratio: InfluenceRatio,
+    pub time_since_explored: Factor,
+    pub economy_generated: EconomyGenerated,
+}
+
+impl Default for PowerPriority {
+    fn default() -> Self {
+        PowerPriority {
+            base: 0.0,
+            minimum: 0.0,
+            fuzzy_factor: 100.0,
+            cv: Default::default(),
+            actor_value: Default::default(),
+            enemy_influence: Default::default(),
+            influence_ratio: Default::default(),
+            time_since_explored: Default::default(),
+            economy_generated: Default::default(),
+        }
+    }
+}
+
+/// A factor that adds up things in reach, each by the category it
+/// matches.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Tally {
+    pub minimum: f32,
+    /// For things matching no category.
+    pub multiplier: f32,
+    /// A cap when 0 or more.
+    pub maximum: f32,
+    pub consider_friendly: bool,
+    pub consider_enemy: bool,
+    pub consider_owned: bool,
+    pub category: Vec<ActorRequirements>,
+}
+
+impl Default for Tally {
+    fn default() -> Self {
+        Tally {
+            minimum: 0.0,
+            multiplier: 0.0,
+            maximum: -1.0,
+            consider_friendly: false,
+            consider_enemy: false,
+            consider_owned: false,
+            category: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct EnemyInfluence {
+    pub minimum: f32,
+    pub multiplier: f32,
+    pub maximum: f32,
+    pub exponent: f32,
+}
+
+impl Default for EnemyInfluence {
+    fn default() -> Self {
+        EnemyInfluence {
+            minimum: 0.0,
+            multiplier: 0.0,
+            maximum: -1.0,
+            exponent: 1.0,
+        }
+    }
+}
+
+/// Friendly over enemy influence.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct InfluenceRatio {
+    pub minimum: f32,
+    pub multiplier: f32,
+    pub maximum: f32,
+    /// Counting its own side's alone, not its allies'.
+    pub count_owned_only: bool,
+    pub exponent_over_one: f32,
+    pub exponent_under_one: f32,
+}
+
+impl Default for InfluenceRatio {
+    fn default() -> Self {
+        InfluenceRatio {
+            minimum: 0.0,
+            multiplier: 0.0,
+            maximum: -1.0,
+            count_owned_only: false,
+            exponent_over_one: 1.0,
+            exponent_under_one: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Factor {
+    pub minimum: f32,
+    pub multiplier: f32,
+    pub maximum: f32,
+}
+
+impl Default for Factor {
+    fn default() -> Self {
+        Factor {
+            minimum: 0.0,
+            multiplier: 0.0,
+            maximum: -1.0,
+        }
+    }
+}
+
+/// What an operation that gives resources makes.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct EconomyGenerated {
+    pub minimum: f32,
+    pub multiplier: f32,
+    pub resource: Vec<Generated>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Generated {
+    pub ids: Option<Id>,
+    pub amount: f32,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Research {
@@ -849,13 +1076,18 @@ impl GameData {
         // The templates first, so that every profile sees them.
         files.sort_by_key(|(n, _)| !n.to_ascii_lowercase().starts_with("templates/"));
         let files = scoped(&files);
-        let sends_air_attacks = (self.svars().iter())
+        let svars = self.svars();
+        let sends_air_attacks = (svars.iter())
             .find_map(|v| v.use_air_attacks)
             .unwrap_or(true);
+        let explored_share = (svars.iter())
+            .find_map(|v| v.reset_white_fog_timer_percent)
+            .unwrap_or(0.1);
         ids.into_iter()
             .filter_map(|id| profile(&files, id))
             .map(|p| Profile {
                 sends_air_attacks,
+                explored_share,
                 ..p
             })
             .collect()
@@ -888,6 +1120,7 @@ fn profile(files: &[crate::Scoped], id: &Id) -> Option<Profile> {
         max_rai_commands: block.max_rai_commands,
         moods,
         sends_air_attacks: true,
+        explored_share: 0.1,
     })
 }
 
