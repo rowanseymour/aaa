@@ -1241,6 +1241,15 @@ pub struct ResourceIcon {
     pub texture: Option<String>,
 }
 
+/// The icon this project's own interface draws in front of a kind of
+/// message's lines, in place of the kind's own.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MessageTypeIcon {
+    pub message_type_ids: Option<Id>,
+    /// Its image, beside the file unless it starts with `/`.
+    pub texture: Option<String>,
+}
+
 /// An image this project's own interface draws in place of one the game's
 /// data names, such as a weapon's icon.
 #[derive(Debug, Clone, Deserialize)]

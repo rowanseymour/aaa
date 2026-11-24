@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 68">
+  <!-- A speech bubble, as on the chat button, on slate. -->
+  <g transform="translate(0 2)">
+    <circle cx="32" cy="32" r="30" fill="#16150f"/>
+    <circle cx="32" cy="32" r="27" fill="#56677a"/>
+    <circle cx="32" cy="32" r="27" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2"/>
+    <g transform="translate(32 32) scale(.62) translate(-32 -32)"><g fill="#fff"><path d="M14.4,6.4 H49.6 A11.2,11.2 0 0 1 60.8,17.6 V36.8 A11.2,11.2 0 0 1 49.6,48 H27.2 L12.8,59.2 V48 A11.2,11.2 0 0 1 3.2,36.8 V17.6 A11.2,11.2 0 0 1 14.4,6.4 Z"/></g></g>
+  </g>
+</svg>

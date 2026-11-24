@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 68">
+  <!-- An "i", on blue: news. -->
+  <g transform="translate(0 2)">
+    <circle cx="32" cy="32" r="30" fill="#16150f"/>
+    <circle cx="32" cy="32" r="27" fill="#3d7bd4"/>
+    <circle cx="32" cy="32" r="27" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2"/>
+    <g transform="translate(32 32) scale(.62) translate(-32 -32)"><g fill="#fff"><circle cx="32" cy="13" r="7"/><rect x="25" y="25" width="14" height="33" rx="3"/></g></g>
+  </g>
+</svg>

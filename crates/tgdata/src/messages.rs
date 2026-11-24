@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::strings::localized;
-use crate::{GameData, Id};
+use crate::{GameData, Id, beside, defs, not_null, scoped};
 
 const MESSAGE_TYPES: &str = "game/message_types";
 const GAME_EVENTS: &str = "game/game_events";
@@ -121,6 +121,26 @@ impl GameData {
             });
         }
         out
+    }
+
+    /// The icons this project's own interface draws for kinds of message,
+    /// by the kind's id: from the `[MessageTypeIcon]` blocks of the `.tgi`
+    /// files under `Modern/`, the first for a kind winning.
+    pub fn message_kind_icons(&self) -> HashMap<Id, String> {
+        let files = self.modern_files();
+        let mut icons = HashMap::new();
+        for file in scoped(&files) {
+            for icon in file.read::<defs::MessageTypeIcon>("MessageTypeIcon") {
+                let (Some(kind), Some(texture)) = (not_null(icon.message_type_ids), icon.texture)
+                else {
+                    continue;
+                };
+                icons
+                    .entry(kind)
+                    .or_insert_with(|| beside(file.file, texture.trim()));
+            }
+        }
+        icons
     }
 
     /// The game events, by id, with their lines in the game's language.

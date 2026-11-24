@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 68">
+  <!-- A soldier, on blue: news of a unit. -->
+  <g transform="translate(0 2)">
+    <circle cx="32" cy="32" r="30" fill="#16150f"/>
+    <circle cx="32" cy="32" r="27" fill="#3d7bd4"/>
+    <circle cx="32" cy="32" r="27" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2"/>
+    <g transform="translate(32 32) scale(.62) translate(-32 -32)"><g fill="#fff"><path d="M13,24 C13,11 21,4 32,4 C43,4 51,11 51,24 H57 Q57,30 51,30 H13 Q7,30 7,24 Z"/><path d="M21,33 H43 V36 C43,43 38,47 32,47 C26,47 21,43 21,36 Z"/><path d="M5,62 Q5,48 21,47 L32,54 L43,47 Q59,48 59,62 Z"/></g></g>
+  </g>
+</svg>

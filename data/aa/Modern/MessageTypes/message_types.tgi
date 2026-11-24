@@ -1,0 +1,196 @@
+;; The icons this project's own interface draws in front of each kind of
+;; message, in place of the game's: a disc in a colour for how the news
+;; sits (blue news, green good, amber caution, red bad, charcoal gone)
+;; around what it's about.
+
+[MessageTypeIcon]
+{
+	message_type_ids = HERO_POSITIVE
+	texture = event.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = HERO_NEUTRAL
+	texture = event.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = HERO_KILLED
+	texture = event.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = COMPANY_POSITIVE
+	texture = company_positive.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = COMPANY_GENERIC
+	texture = company_generic.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = COMPANY_NEGATIVE
+	texture = company_negative.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = COMPANY_ROUTED
+	texture = company_routed.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = COMPANY_DESTROYED
+	texture = company_destroyed.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = REGIMENT_GENERIC
+	texture = company_generic.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = REGIMENT_NEGATIVE
+	texture = company_negative.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = REGIMENT_DESTROYED
+	texture = company_destroyed.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = BUILDING_GENERIC
+	texture = building_generic.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = BUILDING_NEGATIVE
+	texture = building_negative.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = BUILDING_CAPTURED
+	texture = building_captured.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = BUILDING_DESTROYED
+	texture = building_destroyed.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = GENERIC_EVENT
+	texture = event.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = GENERIC_WARNING
+	texture = warning.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = GENERIC_ERROR
+	texture = error.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = QUEST_POSITIVE
+	texture = objective_completed.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = QUEST_NEGATIVE
+	texture = objective_failed.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = QUEST_MESSAGE
+	texture = objective.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = KINGDOM_DEFEATED
+	texture = defeated.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = CHAT_SERVER
+	texture = player.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = CHAT_PUBLIC
+	texture = chat.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = CHAT_PRIVATE
+	texture = chat.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = LAN_CHAT_PUBLIC
+	texture = chat.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = LAN_CHAT_PRIVATE
+	texture = chat.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = IM_SERVER
+	texture = player.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = BUDDY_MESSAGE
+	texture = chat.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = AFK_MESSAGE
+	texture = player.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = PLAYER_JOINLEAVE
+	texture = player.svg
+}
+
+[MessageTypeIcon]
+{
+	message_type_ids = TUTORIAL
+	texture = event.svg
+}

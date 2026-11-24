@@ -71,6 +71,7 @@ mod tests {
     pub(super) fn look(vars: &[(&str, &str)]) -> Look {
         let kind = |filter: Option<&str>| Kind {
             icon: None,
+            modern: None,
             colour: Color::WHITE,
             filter: filter.map(Into::into),
             sound: None,
@@ -506,5 +507,30 @@ mod tests {
         assert_eq!(at(11.5).as_deref(), Some("a"));
         // A longer pause starts from the newest again.
         assert_eq!(at(20.0).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn only_our_interface_draws_our_icons() {
+        use bevy::ecs::world::CommandQueue;
+
+        let original = Handle::<Image>::Uuid(bevy::asset::uuid::Uuid::from_u128(7), default());
+        let mut log = MessageLog::new(look(&[]));
+        let kind = log.look.kinds.get_mut(&Id::from("GENERIC_EVENT")).unwrap();
+        kind.icon = Some(original.clone());
+        kind.modern = Some("Modern/event.svg".into());
+        assert!(log.event("hq_attach", &["HQ", "Regiment"], None, 0.0));
+        let drawn = |hud| {
+            let mut world = bevy::ecs::world::World::new();
+            let root = world.spawn_empty().id();
+            let mut queue = CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, &world);
+            spawn_row(&mut commands, root, &log.look, &log.lines[0], hud);
+            queue.apply(&mut world);
+            let ours = world.query::<&crate::displays::Icon>().iter(&world).count();
+            let theirs = (world.query::<&ImageNode>().iter(&world)).any(|i| i.image == original);
+            (ours, theirs)
+        };
+        assert_eq!(drawn(crate::hud::Hud::Modern), (1, false));
+        assert_eq!(drawn(crate::hud::Hud::Original), (0, true));
     }
 }

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 68">
+  <!-- A pennant, on red: an objective failed. -->
+  <g transform="translate(0 2)">
+    <circle cx="32" cy="32" r="30" fill="#16150f"/>
+    <circle cx="32" cy="32" r="27" fill="#cf3f35"/>
+    <circle cx="32" cy="32" r="27" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2"/>
+    <g transform="translate(32 32) scale(.62) translate(-32 -32)"><g fill="#fff"><rect x="10" y="4" width="7" height="57"/><path d="M17,5 L57,5 L45,19 L57,33 L17,33 Z"/></g></g>
+  </g>
+</svg>
