@@ -41,6 +41,7 @@ fn planner(moods: Vec<Ego>) -> Planner {
         max_rai_commands: 40,
         moods,
         sends_air_attacks: true,
+        explored_share: 0.1,
     };
     Planner::new(Arc::new(profile), 1, 0.0)
 }
@@ -527,6 +528,7 @@ fn a_side_whose_game_has_no_air_attacks_sends_none() {
         max_rai_commands: 40,
         moods: vec![likes_houses()],
         sends_air_attacks: false,
+        explored_share: 0.1,
     };
     let mut p = Planner::new(Arc::new(profile), 1, 0.0);
     assert_eq!(air_attacks(&p.think(&w, 1)), [] as [&Command; 0]);
@@ -561,6 +563,7 @@ fn an_air_attack_cut_from_its_orders_doesnt_count_as_sent() {
         max_rai_commands: 40,
         moods: vec![likes_houses()],
         sends_air_attacks: true,
+        explored_share: 0.1,
     };
     // Room for the escort, not the attack after it.
     let mut p = Planner::new(Arc::new(profile(1)), 1, 0.0);
@@ -678,4 +681,142 @@ fn a_bombard_goal_takes_its_bombarder_from_a_fight_ranked_above() {
     let goals = vec![fight(1, true, 1000.0, &w), shell_house(50.0)];
     let serving = shared_out(&p, &w, goals);
     assert_eq!(serving.get(&Member::Organization(0)), Some(&Key::Attack(1)));
+}
+
+/// A mood using operation `id` on enemy buildings, worth `base`.
+fn spies_on_buildings(ego: &mut Ego, id: &str, base: f32) {
+    use tgmap::sai::{ActorRequirements, GeneralPower, Named, PowerLocation, PowerPriority};
+    ego.goal_engine.general_powers.power.push(GeneralPower {
+        ability_ids: Some(Id::from(id)),
+        location: PowerLocation {
+            kind: Some(Id::from("ON_ACTOR")),
+            actor_requirements: ActorRequirements {
+                must_be_enemy: true,
+                required_property: vec![Named {
+                    ids: Some(Id::from("building")),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        priority: PowerPriority {
+            base,
+            fuzzy_factor: 0.0,
+            ..Default::default()
+        },
+    });
+}
+
+/// Player 1's man at 10,10 and player 2's house at 50,10, player 1's
+/// general holding `experience` and operations of `costs`, each lifting
+/// the fog.
+fn general(experience: f32, costs: &[f32]) -> World {
+    let mut w = testing::battle(&[1], vec![testing::soldier(Vec::new())], testing::at_war());
+    w.add_buildings(&[testing::building(9, 2, [50.0, 10.0])]);
+    w.rules.kinds.insert(Id::from("house"), kind(&["building"]));
+    halves(&mut w);
+    let ops = (costs.iter().enumerate())
+        .map(|(i, &cost)| {
+            let id = Id::from(format!("spy{i}").as_str());
+            w.rules
+                .operations
+                .insert(id.clone(), tgmap::Operation::Reveal { seconds: 10.0 });
+            crate::SpecialOp::new(id, cost, 60.0)
+        })
+        .collect();
+    w.lead(1, experience, None, ops);
+    w
+}
+
+fn operations(orders: &[Command]) -> Vec<&Command> {
+    (orders.iter())
+        .filter(|c| matches!(c, Command::Operate { .. }))
+        .collect()
+}
+
+#[test]
+fn it_uses_its_generals_operation_on_what_its_mood_aims_it_at() {
+    use crate::Piece;
+    let w = general(100.0, &[50.0]);
+    let mut ego = mood();
+    spies_on_buildings(&mut ego, "spy0", 200.0);
+    let orders = planner(vec![ego]).think(&w, 1);
+    let spy = Command::Operate {
+        operation: 0,
+        at: [50.0, 10.0],
+        on: Some(Piece::Building(0)),
+    };
+    assert_eq!(operations(&orders), [&spy], "{orders:?}");
+}
+
+#[test]
+fn it_stops_at_the_first_operation_it_cant_afford() {
+    let w = general(40.0, &[50.0, 10.0]);
+    let mut ego = mood();
+    // The dear one always comes first: the cheap one has no weight, but
+    // scores for the money it brings.
+    spies_on_buildings(&mut ego, "spy0", 200.0);
+    spies_on_buildings(&mut ego, "spy1", 0.0);
+    let brings = &mut ego.goal_engine.general_powers.power[1]
+        .priority
+        .economy_generated;
+    brings.multiplier = 1.0;
+    brings.resource.push(tgmap::sai::Generated {
+        ids: Some(Id::from("money")),
+        amount: 100.0,
+    });
+    let orders = planner(vec![ego.clone()]).think(&w, 1);
+    assert_eq!(operations(&orders), [] as [&Command; 0], "{orders:?}");
+    // With enough for the first, both are used.
+    let w = general(60.0, &[50.0, 10.0]);
+    assert_eq!(operations(&planner(vec![ego]).think(&w, 1)).len(), 2);
+}
+
+#[test]
+fn it_never_uses_an_operation_its_mood_doesnt_list() {
+    let w = general(100.0, &[50.0]);
+    let mut ego = mood();
+    spies_on_buildings(&mut ego, "other", 200.0);
+    let orders = planner(vec![ego]).think(&w, 1);
+    assert_eq!(operations(&orders), [] as [&Command; 0], "{orders:?}");
+}
+
+#[test]
+fn a_place_is_ruled_out_by_a_factor_below_its_minimum() {
+    use tgmap::sai::{ActorRequirements, GeneralPower, PowerLocation, PowerPriority, Tally};
+    let mut w = general(100.0, &[50.0]);
+    rate(&mut w, "soldier", 50.0);
+    // Round its own man, weighing its own strength in reach.
+    let near_its_own = |minimum: f32| {
+        let mut ego = mood();
+        ego.goal_engine.general_powers.power.push(GeneralPower {
+            ability_ids: Some(Id::from("spy0")),
+            location: PowerLocation {
+                kind: Some(Id::from("NEAR_ACTOR")),
+                actor_requirements: ActorRequirements {
+                    must_be_owned: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            priority: PowerPriority {
+                base: 100.0,
+                fuzzy_factor: 0.0,
+                cv: Tally {
+                    minimum,
+                    multiplier: 1.0,
+                    consider_owned: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        });
+        ego
+    };
+    // An operation that reaches nothing round where it's aimed counts
+    // nothing in reach.
+    let orders = planner(vec![near_its_own(0.0)]).think(&w, 1);
+    assert_eq!(operations(&orders).len(), 1, "{orders:?}");
+    let orders = planner(vec![near_its_own(1.0)]).think(&w, 1);
+    assert_eq!(operations(&orders), [] as [&Command; 0], "{orders:?}");
 }

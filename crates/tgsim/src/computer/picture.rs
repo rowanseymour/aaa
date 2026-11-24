@@ -56,6 +56,8 @@ pub(super) struct Picture<'w> {
     /// Each region's strength of buildings felt further off, which marks
     /// borders.
     pub enemy_border: Vec<f32>,
+    /// Each region's strength of its own side's alone, units and buildings.
+    pub owned: Vec<f32>,
     /// Where the side's economy stands.
     pub balance: crate::Balance,
     /// Region-to-region travel, worked out as it's asked for, and that over
@@ -96,6 +98,7 @@ impl<'w> Picture<'w> {
             friendly_static: vec![0.0; regions],
             enemy_static: vec![0.0; regions],
             enemy_border: vec![0.0; regions],
+            owned: vec![0.0; regions],
             balance: world.balance(player),
             travel: Default::default(),
             land: Default::default(),
@@ -139,6 +142,9 @@ impl<'w> Picture<'w> {
                 &mut self.enemy
             };
             spread(into, &travel, value, reach, reach);
+            if o.owner == self.player {
+                spread(&mut self.owned, &travel, value, reach, reach);
+            }
         }
         for b in 0..world.buildings.len() {
             let building = &world.buildings[b];
@@ -164,6 +170,15 @@ impl<'w> Picture<'w> {
                 &mut self.enemy_static
             };
             spread(into, &travel, value, range, range * BUILDING_FUDGE);
+            if building.owner == self.player {
+                spread(
+                    &mut self.owned,
+                    &travel,
+                    value,
+                    range,
+                    range * BUILDING_FUDGE,
+                );
+            }
             if enemy {
                 spread(
                     &mut self.enemy_border,

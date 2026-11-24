@@ -111,19 +111,32 @@ pub(super) fn worth(
     let own: Vec<&Id> = (templates.iter().copied())
         .filter(|t| Some(*t) != unpacks)
         .collect();
-    let mut economic = economic(ego, picture, &own);
+    let balance = &picture.balance;
+    let mut economic = economic(ego, picture.world, balance, &own);
     // A packed building counts what it unpacks into, if that's worth more.
     if let Some(building) = unpacks {
-        economic = economic.max(self::economic(ego, picture, &[building]));
+        economic = economic.max(self::economic(ego, picture.world, balance, &[building]));
     }
     (economic + combat_value * v.military_cv_mult) * v.scaling_mult
 }
 
-/// What `templates`' production less upkeep is worth to the side.
-fn economic(ego: &Ego, picture: &Picture, templates: &[&Id]) -> f32 {
-    let world = picture.world;
-    let rules = &world.rules.economy;
-    let management = &ego.goal_engine.resource_management;
+/// A thing of `template`'s worth to a side whose economy stands at
+/// `balance`.
+pub(super) fn worth_to(
+    ego: &Ego,
+    world: &World,
+    balance: &crate::Balance,
+    template: &Id,
+    combat_value: f32,
+) -> f32 {
+    let v = &ego.goal_engine.actor_value;
+    let economic = economic(ego, world, balance, &[template]);
+    (economic + combat_value * v.military_cv_mult) * v.scaling_mult
+}
+
+/// What `templates`' production less upkeep is worth to a side whose
+/// economy stands at `balance`.
+fn economic(ego: &Ego, world: &World, balance: &crate::Balance, templates: &[&Id]) -> f32 {
     let mut made = crate::economy::Amounts::default();
     for t in templates {
         if let Some(e) = world.rules.economies.get(*t) {
@@ -135,10 +148,23 @@ fn economic(ego: &Ego, picture: &Picture, templates: &[&Id]) -> f32 {
             }
         }
     }
+    made_worth(ego, world, balance, &made)
+}
+
+/// What a side whose economy stands at `balance` makes of gaining `made`
+/// a minute.
+pub(super) fn made_worth(
+    ego: &Ego,
+    world: &World,
+    balance: &crate::Balance,
+    made: &crate::economy::Amounts,
+) -> f32 {
+    let rules = &world.rules.economy;
+    let management = &ego.goal_engine.resource_management;
     let mut out = 0.0;
     for (resource, amount) in made.nonzero() {
         let stockpiled = rules.stockpiled().any(|s| s == resource);
-        let now = picture.balance.net.get(resource.as_str());
+        let now = balance.net.get(resource.as_str());
         let need = management.need(resource.as_str(), stockpiled);
         out += need.worth(now, now + amount);
     }

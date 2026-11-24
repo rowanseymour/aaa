@@ -1462,6 +1462,10 @@ pub struct SVars {
     /// Whether a side's objectives are kept in order of their text.
     #[serde(rename = "SortObjectives")]
     pub sort_objectives: Option<bool>,
+    /// The share of a region a side has to see for computer players to
+    /// count it as just explored.
+    #[serde(rename = "ResetWhiteFogTimerPecent")]
+    pub reset_white_fog_timer_percent: Option<f32>,
     /// Whether computer players send air attacks.
     #[serde(rename = "UseAirAttacks")]
     pub use_air_attacks: Option<bool>,

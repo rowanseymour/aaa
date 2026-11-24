@@ -6,6 +6,7 @@ mod choosing;
 mod economy;
 mod fighting;
 mod liking;
+mod operations;
 mod picture;
 mod planner;
 #[cfg(test)]
