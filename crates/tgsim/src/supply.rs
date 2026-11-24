@@ -400,9 +400,11 @@ impl World {
 
     /// Whether a shot `s` fires with `weapon` is bombardment. For what
     /// picks its own shots the order decides, whatever the weapon; a
-    /// building defending itself doesn't, so there the weapon does.
+    /// building defending itself or an aircraft on its attack run doesn't,
+    /// so there the weapon does.
     pub(crate) fn bombards(&self, s: Target, weapon: &Weapon) -> bool {
         match s {
+            Target::Unit(u) if self.units[u].aloft => weapon.bombard,
             Target::Unit(u) => self.organizations[self.units[u].organization].bombarding,
             Target::Building(b) => weapon.bombard && self.buildings[b].fighter.notice.is_some(),
         }
@@ -419,6 +421,28 @@ impl World {
         };
         let timeout = self.rules.supply_rules.bombard_timeout;
         if ordered { timeout + recharge } else { timeout }
+    }
+
+    /// Whether the unit at `u` is with its organization: its leader, or
+    /// standing on the ground in its control zone.
+    pub(crate) fn with_organization(&self, u: usize) -> bool {
+        let zone = self.members_zone(self.units[u].organization);
+        self.with_organization_in(&zone, u)
+    }
+
+    /// The ground round the leader of the organization at `r` that its
+    /// members are with it on.
+    fn members_zone(&self, r: usize) -> Zone {
+        let control = self.organizations[r].control(&self.rules.guard_rules);
+        (self.pathing).zone(self.leader_position(r), control)
+    }
+
+    /// As [`World::with_organization`], given its organization's
+    /// [`World::members_zone`].
+    fn with_organization_in(&self, zone: &Zone, u: usize) -> bool {
+        let organization = &self.organizations[self.units[u].organization];
+        let leads = organization.leader.map(|p| organization.units[p]) == Some(u);
+        leads || (self.units[u].descent.is_none() && self.in_zone(zone, Target::Unit(u)))
     }
 
     /// Notes a bombardment's hit on the organization at `r` by `from`, whose
@@ -549,14 +573,8 @@ impl World {
         let places: Vec<usize> = (organization.leader.into_iter())
             .chain((0..organization.units.len()).filter(|&p| Some(p) != organization.leader))
             .collect();
-        let zone = (self.pathing).zone(
-            self.leader_position(r),
-            organization.control(&self.rules.guard_rules),
-        );
-        let near = |&p: &usize| {
-            Some(p) == organization.leader
-                || self.in_zone(&zone, Target::Unit(organization.units[p]))
-        };
+        let zone = self.members_zone(r);
+        let near = |&p: &usize| self.with_organization_in(&zone, organization.units[p]);
         if let Some(&p) = places.iter().find(|p| hurt(p) && near(p)) {
             let (u, (rate, health)) = (organization.units[p], rate(organization.units[p]));
             let unit = &mut self.units[u];
@@ -1229,6 +1247,32 @@ mod tests {
         w.buildings[1].state = State::Destroyed(w.ticks);
         run(&mut w, 1.0);
         assert!(w.organizations[1].in_supply);
+    }
+
+    #[test]
+    fn bombardment_of_a_member_away_from_its_organization_doesnt_count_against_it() {
+        let mut w = supplied_division();
+        let mut gun = building(30, 2, [40.0, 14.0]);
+        gun.fighter.notice = Some(30.0);
+        gun.fighter.weapons = vec![Weapon {
+            bombard: true,
+            ..rifle(30.0, 10.0)
+        }];
+        w.add_buildings(&[gun]);
+        // Its leader out of the gun's reach, the rest well away from him
+        // and in it.
+        let units = w.organizations[1].units.clone();
+        let leader = units[w.organizations[1].leader.unwrap()];
+        for &u in &units {
+            w.units[u].position = match u == leader {
+                true => [10.0, 90.0],
+                false => [40.0, 30.0],
+            };
+        }
+        w.tick();
+        let hurt = |u: &&usize| w.units[**u].health == 90.0;
+        assert_eq!(units.iter().filter(hurt).count(), 1);
+        assert!(w.organizations[1].bombarded.is_empty());
     }
 
     #[test]
