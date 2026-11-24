@@ -147,6 +147,8 @@ pub(crate) enum Tint {
     Friendly,
     /// An ability's, used by an enemy.
     Enemy,
+    /// An ability's, used by a side that's neither: untinted.
+    Neutral,
 }
 
 /// The actor state a building is in while under siege, whose properties
@@ -619,7 +621,7 @@ impl Looks {
     /// The colour a property's icon is in, by where it came from.
     pub(crate) fn tint(&self, tint: Tint) -> Color {
         match tint {
-            Tint::Plain => Color::WHITE,
+            Tint::Plain | Tint::Neutral => Color::WHITE,
             Tint::Side => self.side_tint,
             Tint::Support => self.support_tint,
             Tint::Friendly => self.friendly_tint,
@@ -971,7 +973,7 @@ fn holding(sim: &World, looks: &Looks, holder: Holder) -> Vec<(Id, Tint)> {
                 let tint = match h.by.map(|by| sim.sides.relation(owner, by)) {
                     Some(Relation::Itself | Relation::Ally) => Tint::Friendly,
                     Some(Relation::Enemy) => Tint::Enemy,
-                    _ => Tint::Plain,
+                    _ => Tint::Neutral,
                 };
                 (h.property.clone(), tint)
             });
