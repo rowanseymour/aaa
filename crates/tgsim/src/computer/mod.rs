@@ -1,5 +1,6 @@
 //! What plays a side in place of a person.
 
+mod choosing;
 mod economy;
 mod fighting;
 mod liking;

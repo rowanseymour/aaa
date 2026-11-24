@@ -425,6 +425,11 @@ impl Default for ActorPriority {
 #[serde(default)]
 pub struct Combat {
     pub penalty_to_builder_cv: f32,
+    /// How many regions apart fights can be and still share their units'
+    /// strength.
+    pub linked_region_distance: u32,
+    /// How many regions from its attack a unit is held to it.
+    pub attack_commit_distance: u32,
     pub defend_priority: DefendPriority,
 }
 
@@ -432,6 +437,8 @@ impl Default for Combat {
     fn default() -> Self {
         Combat {
             penalty_to_builder_cv: 1.0,
+            linked_region_distance: 2,
+            attack_commit_distance: 3,
             defend_priority: Default::default(),
         }
     }

@@ -1,7 +1,7 @@
 //! The goals that fight: attacking and defending regions, recovering
 //! hurt units and exploring; and the reactions between plans.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use tgmap::sai::Ego;
 
@@ -335,127 +335,6 @@ fn explore(planner: &mut Planner, picture: &Picture) -> Vec<Goal> {
         });
     }
     out
-}
-
-/// Gathers free fighting units for a fight, in no particular order, while
-/// each adds to its worth and it wants more: their orders, or none if it's
-/// worth nothing with them.
-pub(super) fn gather(
-    planner: &Planner,
-    picture: &Picture,
-    goal: &Goal,
-    (region, to, attack, strength): (usize, [f32; 2], bool, Wanted),
-    taken: &mut HashSet<usize>,
-    serving: &mut HashMap<usize, Key>,
-) -> Option<Vec<Command>> {
-    let ego = planner.ego();
-    let world = picture.world;
-    let builder_share = ego.goal_engine.combat.penalty_to_builder_cv;
-    let free: Vec<(f32, usize)> = (picture.organizations.iter().copied())
-        .filter(|&r| !taken.contains(&r) && picture.fights(r))
-        .filter(|r| !planner.retreating.contains(r))
-        .map(|r| (liking::travel_time(picture, r, region), r))
-        .filter(|(t, _)| t.is_finite())
-        .collect();
-    // Builders count for little in a fight.
-    let share = |r: usize| match world.buildable(r).is_empty() {
-        true => 1.0,
-        false => builder_share,
-    };
-    let worth = |units: &[(f32, usize)]| {
-        if units.is_empty() {
-            return 0.0;
-        }
-        let (mut strength_on, mut value, mut multiplier, mut seconds) = (0.0, 0.0, 1.0, 0.0);
-        for &(t, r) in units {
-            strength_on += world.full_value(r) * share(r);
-            let (v, m) = liking::preference(ego, world, goal.kind, r);
-            value += v;
-            multiplier *= m;
-            seconds += t;
-        }
-        let travel = liking::travel_factor(ego, seconds / units.len() as f32);
-        (goal.priority * strength.factor(strength_on) + value) * multiplier * travel
-    };
-    let mut chosen: Vec<(f32, usize)> = Vec::new();
-    let mut so_far = 0.0;
-    let mut have = 0.0;
-    for unit in free {
-        // It wants no more once it has the strength it's after.
-        if have + strength.given >= strength.target {
-            break;
-        }
-        chosen.push(unit);
-        let with = worth(&chosen);
-        if with <= so_far {
-            chosen.pop();
-            continue;
-        }
-        so_far = with;
-        have += world.full_value(unit.1) * share(unit.1);
-    }
-    if so_far <= 0.0 {
-        return None;
-    }
-    let mut orders = Vec::new();
-    for &(_, r) in &chosen {
-        taken.insert(r);
-        let again = planner.serving.get(&r) == Some(&goal.key)
-            && crate::distance(world.destination(r), to) <= STILL_HEADED;
-        serving.insert(r, goal.key.clone());
-        if !again {
-            orders.push(match attack {
-                true => Command::Attack {
-                    organization: r,
-                    to,
-                },
-                false => Command::Move {
-                    organization: r,
-                    to,
-                },
-            });
-        }
-    }
-    Some(orders)
-}
-
-/// Sends the free organization that likes exploring best to explore at
-/// `to`: its order, or none if no explorer is worth it.
-pub(super) fn send_explorer(
-    planner: &Planner,
-    picture: &Picture,
-    goal: &Goal,
-    to: [f32; 2],
-    taken: &mut HashSet<usize>,
-    serving: &mut HashMap<usize, Key>,
-) -> Option<Vec<Command>> {
-    let ego = planner.ego();
-    let world = picture.world;
-    let region = picture.region(to)?;
-    let best = (picture.organizations.iter().copied())
-        .filter(|&r| !taken.contains(&r) && world.explores(r))
-        .filter(|r| world.organizations[*r].unpacks.is_none())
-        .map(|r| {
-            let (value, multiplier) = liking::preference(ego, world, goal.kind, r);
-            let travel = liking::travel_factor(ego, liking::travel_time(picture, r, region));
-            ((goal.priority + value) * multiplier * travel, r)
-        })
-        .max_by(|a, b| a.0.total_cmp(&b.0))?;
-    let (worth, r) = best;
-    if worth <= 0.0 {
-        return None;
-    }
-    taken.insert(r);
-    let again = planner.serving.get(&r) == Some(&goal.key)
-        && crate::distance(world.destination(r), to) <= STILL_HEADED * 4.0;
-    serving.insert(r, goal.key.clone());
-    Some(match again {
-        true => Vec::new(),
-        false => vec![Command::Explore {
-            organization: r,
-            to,
-        }],
-    })
 }
 
 /// The reactions between plans: pulling back from losing fights and
