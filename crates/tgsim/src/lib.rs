@@ -563,6 +563,16 @@ struct Leg {
     snapped: bool,
 }
 
+/// When a unit closing in last found no way to its target.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Unreached {
+    target: Target,
+    /// Where the target stood, and where the unit stood itself.
+    at: [f32; 2],
+    from: [f32; 2],
+    tick: u64,
+}
+
 #[derive(Clone)]
 pub struct Unit {
     /// Its object's id in the map.
@@ -622,6 +632,8 @@ pub struct Unit {
     /// While it's left its place to go after its target, the range it's
     /// going to be within of it.
     closing: Option<f32>,
+    /// When it last found no way to its target while closing in.
+    unreached: Option<Unreached>,
     /// The tick it next decides what to do: once the ability it's using
     /// is over, it's waited a while for one, or it's reacted to its
     /// organization engaging.
@@ -1487,6 +1499,13 @@ digest!(Build {
     facing
 });
 
+digest!(Unreached {
+    target,
+    at,
+    from,
+    tick
+});
+
 digest!(Leg {
     heading,
     aim,
@@ -1495,7 +1514,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
     health_factor,
     fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
