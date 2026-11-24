@@ -436,7 +436,8 @@ pub(crate) fn show_packing(
                 view.packing = Some((e, unpacking));
             }
         }
-        let shown = ui::visible(view.packing.is_none() && !gone);
+        let falling = building.descent.is_some();
+        let shown = ui::visible(view.packing.is_none() && !gone && !falling);
         if !matches!(building.state, State::Destroyed(_)) {
             visibility.set_if_neq(shown);
         }
@@ -591,6 +592,7 @@ pub(crate) fn sunk(remains: tgsim::Remains, ticks: u64, t: f32) -> Option<f32> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show_buildings(
     sim: Res<Sim>,
+    loaded: Res<Loaded>,
     fog: Res<fog::Fog>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
@@ -613,6 +615,21 @@ pub(crate) fn show_buildings(
             continue;
         }
         let building = &sim.0.buildings[view.building];
+        // What's in the air is drawn with its delivery.
+        if building.descent.is_some() {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        }
+        // One that came down somewhere other than where it was let go.
+        let [x, y] = building.position;
+        let here = world(x, y, view.placed.y);
+        if here != view.placed {
+            let height = loaded
+                .map
+                .ground
+                .stand_at(Footing::Ground, building.position);
+            view.placed = world(x, y, height);
+        }
         if let (State::Destroyed(fell), false) = (building.state, view.destroyed) {
             view.destroyed = true;
             // Not for one that fell out of sight, first seen fallen now.

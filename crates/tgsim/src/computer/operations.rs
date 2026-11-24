@@ -366,6 +366,7 @@ impl Weighing<'_, '_> {
                         ];
                         let spot = match operation {
                             Some(Operation::Summon(summon)) => world.summon_spot(summon, spot),
+                            Some(Operation::Drop(template)) => world.drop_spot(template, spot),
                             _ => Some(spot),
                         };
                         let on_map = |at: [f32; 2]| at.iter().all(|c| (0.0..=size).contains(c));

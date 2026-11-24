@@ -820,3 +820,44 @@ fn a_place_is_ruled_out_by_a_factor_below_its_minimum() {
     let orders = planner(vec![near_its_own(1.0)]).think(&w, 1);
     assert_eq!(operations(&orders), [] as [&Command; 0], "{orders:?}");
 }
+
+#[test]
+fn it_drops_a_crate_aimed_by_its_own_man_where_theres_room() {
+    use tgmap::sai::{ActorRequirements, GeneralPower, PowerLocation, PowerPriority};
+    let mut w = general(100.0, &[50.0]);
+    let crate_ = Id::from("house");
+    w.rules
+        .drops
+        .insert(crate_.clone(), testing::building(9, 1, [0.0, 0.0]));
+    let drop = tgmap::Operation::Drop(crate_.clone());
+    w.rules.operations.insert(Id::from("spy0"), drop);
+    let mut ego = mood();
+    let mut location = PowerLocation {
+        kind: Some(Id::from("NEAR_ACTOR")),
+        actor_requirements: ActorRequirements {
+            must_be_owned: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // Right on its man, who's in the crate's way.
+    location.placement.radius = 0.0;
+    location.placement.num_candidates = 1;
+    ego.goal_engine.general_powers.power.push(GeneralPower {
+        ability_ids: Some(Id::from("spy0")),
+        location,
+        priority: PowerPriority {
+            base: 100.0,
+            fuzzy_factor: 0.0,
+            ..Default::default()
+        },
+    });
+    w.units[0].shape = Some(tgmap::Shape::Circle { radius: 1.0 });
+    let man = w.units[0].position;
+    let orders = planner(vec![ego]).think(&w, 1);
+    let [Command::Operate { at, .. }] = operations(&orders)[..] else {
+        panic!("{orders:?}");
+    };
+    assert_ne!(*at, man);
+    assert_eq!(w.drop_spot(&crate_, *at), Some(*at));
+}

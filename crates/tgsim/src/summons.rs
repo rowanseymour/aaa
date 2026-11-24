@@ -15,7 +15,7 @@ pub(crate) const FACING: [f32; 2] = [0.0, -1.0];
 
 /// How far from where a single thing is aimed a clear spot is looked for,
 /// in rings a world unit apart of [`RING`] spots each.
-const RINGS: u32 = 12;
+pub(crate) const RINGS: u32 = 12;
 const RING: u32 = 8;
 
 /// The rings a regiment's members look through, each spaced by its own
