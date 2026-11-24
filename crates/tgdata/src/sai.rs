@@ -435,6 +435,7 @@ pub struct Combat {
     pub attack_commit_distance: u32,
     pub defend_priority: DefendPriority,
     pub air_attacks: AirAttacks,
+    pub bombardement: Bombardement,
 }
 
 impl Default for Combat {
@@ -445,6 +446,27 @@ impl Default for Combat {
             attack_commit_distance: 3,
             defend_priority: Default::default(),
             air_attacks: Default::default(),
+            bombardement: Default::default(),
+        }
+    }
+}
+
+/// What bombarding a thing is worth.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Bombardement {
+    /// What a target is multiplied by when it isn't fighting and isn't in
+    /// a region being attacked.
+    pub unengaged_target_multiplier: f32,
+    /// What a bombarder's combat value is divided by in its worth.
+    pub balancing_constant: f32,
+}
+
+impl Default for Bombardement {
+    fn default() -> Self {
+        Bombardement {
+            unengaged_target_multiplier: 0.1,
+            balancing_constant: 0.001,
         }
     }
 }

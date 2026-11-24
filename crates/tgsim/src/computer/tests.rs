@@ -571,3 +571,111 @@ fn an_air_attack_cut_from_its_orders_doesnt_count_as_sent() {
     std::mem::swap(&mut p.struck, &mut q.struck);
     assert_eq!(air_attacks(&q.think(&w, 1)).len(), 1);
 }
+
+/// Player 1's mortarman at 10,10 worth 50, its mortar reaching `range`, and
+/// player 2's house at 10,30, in two halves of the map.
+fn mortar_and_house(range: f32) -> World {
+    let mortar = tgmap::Weapon {
+        bombard: true,
+        area: 2.0,
+        ..testing::rifle(range, 10.0)
+    };
+    let mut w = testing::battle(
+        &[1],
+        vec![testing::soldier(vec![mortar])],
+        testing::at_war(),
+    );
+    w.add_buildings(&[testing::building(9, 2, [10.0, 30.0])]);
+    halves(&mut w);
+    rate(&mut w, "soldier", 50.0);
+    w
+}
+
+fn bombards(orders: &[Command]) -> Vec<&Command> {
+    (orders.iter())
+        .filter(|c| matches!(c, Command::Bombard { .. }))
+        .collect()
+}
+
+#[test]
+fn it_bombards_a_building_its_bombarder_already_reaches() {
+    use crate::{Piece, Shelled};
+    let mut w = mortar_and_house(50.0);
+    // Across in the other half, where the attack on it doesn't hold the
+    // mortarman.
+    w.buildings[0].position = [50.0, 10.0];
+    let mut ego = likes_houses();
+    ego.goal_engine.combat.attack_commit_distance = 0;
+    let orders = planner(vec![ego]).think(&w, 1);
+    let shell = Command::Bombard {
+        organization: 0,
+        target: Shelled::Thing(Piece::Building(0)),
+    };
+    assert_eq!(bombards(&orders), [&shell], "{orders:?}");
+}
+
+#[test]
+fn it_never_moves_anything_to_bombard() {
+    let w = mortar_and_house(10.0);
+    let orders = planner(vec![likes_houses()]).think(&w, 1);
+    assert_eq!(bombards(&orders), [] as [&Command; 0], "{orders:?}");
+}
+
+#[test]
+fn it_bombards_a_unit_only_while_its_fighting() {
+    let mortar = tgmap::Weapon {
+        bombard: true,
+        area: 2.0,
+        ..testing::rifle(30.0, 10.0)
+    };
+    let mut w = testing::battle(
+        &[1, 2],
+        vec![testing::soldier(vec![mortar]), testing::soldier(Vec::new())],
+        testing::at_war(),
+    );
+    halves(&mut w);
+    rate(&mut w, "soldier", 50.0);
+    let mut ego = mood();
+    ego.goal_engine.actor_priority.push(ActorPriority {
+        actor_ids: Some(Id::from("squad")),
+        value: 500.0,
+        ..Default::default()
+    });
+    assert!(!w.fighting(1));
+    let orders = planner(vec![ego]).think(&w, 1);
+    assert_eq!(bombards(&orders), [] as [&Command; 0], "{orders:?}");
+}
+
+/// A bombard goal on player 2's house with `priority`.
+fn shell_house(priority: f32) -> super::planner::Goal {
+    use super::planner::{Goal, Key, Work};
+    use crate::Piece;
+    Goal {
+        key: Key::Bombard(Piece::Building(0)),
+        kind: "BOMBARD",
+        priority,
+        cost: 0.0,
+        work: Work::Bombard {
+            target: Piece::Building(0),
+            at: [50.0, 10.0],
+            seen: true,
+        },
+    }
+}
+
+#[test]
+fn a_bombard_goal_takes_its_bombarder_from_a_fight_ranked_above() {
+    use super::planner::Key;
+    use crate::Piece;
+    let mut w = mortar_and_house(50.0);
+    w.buildings[0].position = [50.0, 10.0];
+    let p = planner(vec![mood()]);
+    let goals = vec![fight(0, false, 1000.0, &w), shell_house(50.0)];
+    let serving = shared_out(&p, &w, goals);
+    let shelling = Some(&Key::Bombard(Piece::Building(0)));
+    assert_eq!(serving.get(&Member::Organization(0)), shelling);
+    // But not from an attack it's held to.
+    let goals = vec![fight(1, true, 1000.0, &w), shell_house(50.0)];
+    let serving = shared_out(&p, &w, goals);
+    assert_eq!(serving.get(&Member::Organization(0)), Some(&Key::Attack(1)));
+}
