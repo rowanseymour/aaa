@@ -1204,7 +1204,7 @@ impl Holding {
                     .observe(cancel);
             }
             &Holding::Flown(_, d) => {
-                card.insert((says(Says::Delivery(d)), Pickable::default()));
+                card.insert((Button, id, says(Says::Delivery(d)), Pickable::default()));
                 centres(card, Says::Delivery(d));
             }
             Holding::Empty(said) => {
@@ -2238,9 +2238,8 @@ impl Teller<'_> {
         Some(self.row("ui_tooltip_item_title_speed", word))
     }
 
-    /// The economy rows of what `status`'s thing counts for in its side's
-    /// economy: Production and Upkeep now, each with what it would be in
-    /// full under it where that differs.
+    /// The [`economy_rows`] of what `status`'s thing counts for in its
+    /// side's economy.
     fn economy(&self, status: Status) -> Vec<String> {
         let Some(now) = counted(self.sim, self.local, status) else {
             return Vec::new();
@@ -2254,50 +2253,10 @@ impl Teller<'_> {
             },
             Status::Unit(_) => now.clone(),
         };
-        let resources = &self.sim.rules().economy.resources;
-        // Each resource's production less its upkeep, in resource order.
-        let net = |l: &Ledger| -> Vec<f32> {
-            (resources.iter())
-                .map(|r| l.production.get(r.id.as_str()) - l.upkeep.get(r.id.as_str()))
-                .collect()
-        };
-        let (now, full) = (net(&now), net(&full));
-        let listed = |nets: &[f32], made: bool| {
-            let each = resources.iter().zip(nets).filter_map(|(r, &n)| {
-                let n = (n * 1000.0).round() / 1000.0;
-                if n == 0.0 || (n > 0.0) != made {
-                    return None;
-                }
-                Some(match r.role == tgdata::ResourceRole::LimitedConsumed {
-                    true => format!("{} {}", n.abs().round(), r.name),
-                    false => format!("{n:+} {}", r.name),
-                })
-            });
-            each.collect::<Vec<_>>().join(" ")
-        };
-        let mut lines = Vec::new();
-        let sides = [
-            (
-                true,
-                "ui_tooltip_item_title_production",
-                "ui_tooltip_item_title_production_potential",
-            ),
-            (
-                false,
-                "ui_tooltip_item_title_upkeep",
-                "ui_tooltip_item_title_upkeep_potential",
-            ),
-        ];
-        for (made, title, maximum) in sides {
-            let (said, most) = (listed(&now, made), listed(&full, made));
-            if !said.is_empty() || said != most {
-                lines.push(self.row(title, said.clone()));
-            }
-            if said != most {
-                lines.push(self.row(maximum, most));
-            }
-        }
-        lines
+        let rows = economy_rows(&now, &full, &self.sim.rules().economy.resources);
+        (rows.into_iter())
+            .map(|(title, said)| self.row(title, said))
+            .collect()
     }
 
     /// A list row: its title and the names of `ids`, those with names,
@@ -2481,6 +2440,59 @@ pub(crate) fn counted(sim: &World, local: Option<u32>, status: Status) -> Option
         }
     };
     ours(sim, local, owner).then_some(ledger)
+}
+
+/// The tooltip's economy rows, by title, for a thing that counts for `now`
+/// and would in full for `full`: Production and Upkeep, each with what it
+/// would be under it where that differs.
+fn economy_rows(
+    now: &Ledger,
+    full: &Ledger,
+    resources: &[tgdata::ResourceKind],
+) -> Vec<(&'static str, String)> {
+    // Each resource's production less its upkeep, in resource order.
+    let net = |l: &Ledger| -> Vec<f32> {
+        (resources.iter())
+            .map(|r| l.production.get(r.id.as_str()) - l.upkeep.get(r.id.as_str()))
+            .collect()
+    };
+    let (now, full) = (net(now), net(full));
+    let listed = |nets: &[f32], made: bool| {
+        let each = resources.iter().zip(nets).filter_map(|(r, &n)| {
+            let n = (n * 1000.0).round() / 1000.0;
+            if n == 0.0 || (n > 0.0) != made {
+                return None;
+            }
+            Some(match r.role == tgdata::ResourceRole::LimitedConsumed {
+                true => format!("{} {}", n.abs().round(), r.name),
+                false => format!("{n:+} {}", r.name),
+            })
+        });
+        each.collect::<Vec<_>>().join(" ")
+    };
+    let sides = [
+        (
+            true,
+            "ui_tooltip_item_title_production",
+            "ui_tooltip_item_title_production_potential",
+        ),
+        (
+            false,
+            "ui_tooltip_item_title_upkeep",
+            "ui_tooltip_item_title_upkeep_potential",
+        ),
+    ];
+    let mut rows = Vec::new();
+    for (made, title, maximum) in sides {
+        let (said, most) = (listed(&now, made), listed(&full, made));
+        if !said.is_empty() || said != most {
+            rows.push((title, said.clone()));
+        }
+        if said != most {
+            rows.push((maximum, most));
+        }
+    }
+    rows
 }
 
 /// The economy line's figures for the thing a status line is of: none
@@ -3215,6 +3227,45 @@ mod tests {
         );
         assert_eq!(line(residue), ["ammo +12"]);
         assert!(line(Ledger::default()).is_empty());
+    }
+
+    #[test]
+    fn a_tooltip_gives_the_maximum_under_what_counts_for_less() {
+        use tgdata::ResourceKind as R;
+        let resources = [
+            R::upkeep("oil", Default::default()),
+            R::limited("building_limit_consumed", "building_limit_provided"),
+        ];
+        let ledger = |oil: f32| {
+            let mut ledger = Ledger::default();
+            ledger.production.set("oil", oil);
+            ledger.upkeep.set("building_limit_consumed", 1.0);
+            ledger
+        };
+        let rows = |now: f32, full: f32| -> Vec<String> {
+            let rows = economy_rows(&ledger(now), &ledger(full), &resources).into_iter();
+            rows.map(|(title, said)| format!("{title}: {said}"))
+                .collect()
+        };
+        // A relay cut off from supply earns only what its truck would.
+        assert_eq!(
+            rows(10.0, 20.0),
+            [
+                "ui_tooltip_item_title_production: +10 oil",
+                "ui_tooltip_item_title_production_potential: +20 oil",
+                "ui_tooltip_item_title_upkeep: 1 building_limit_consumed",
+            ]
+        );
+        // One that earns nothing still says so, over what it would.
+        assert_eq!(
+            rows(0.0, 20.0)[..2],
+            [
+                "ui_tooltip_item_title_production: ",
+                "ui_tooltip_item_title_production_potential: +20 oil",
+            ]
+        );
+        // In full, no Maximum.
+        assert_eq!(rows(20.0, 20.0).len(), 2);
     }
 
     #[test]
