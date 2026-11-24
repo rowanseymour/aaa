@@ -209,42 +209,116 @@ pub(crate) enum Actor {
     Unit(usize, usize),
 }
 
-/// The unit of the selected organization the display shows on its own,
-/// if one: the organization's index, then the unit's. It holds while that
-/// organization alone stays selected.
+/// What of the selected organization the display shows on its own, if
+/// anything: the organization's index, then the unit, or a Division HQ's
+/// building. It holds while that organization, or that building, alone
+/// stays selected.
 #[derive(Resource, Default)]
-pub struct ShownAlone(pub(crate) Option<(usize, usize)>);
+pub struct ShownAlone(pub(crate) Option<(usize, Target)>);
 
-/// A part that turns the display to the unit at its index on its own,
-/// with its organization still selected.
+/// A part that turns the display to a unit, or a Division HQ's
+/// building, on its own, with what's selected left as it is.
 #[derive(Component, Clone, Copy)]
-pub struct ShowAlone(pub(crate) usize);
+pub struct ShowAlone(pub(crate) Target);
 
-/// Makes `part` the button called `id`, which shows the unit at `u` on
-/// its own.
-pub(crate) fn shows_alone(part: &mut EntityCommands, u: usize, id: &str) {
-    part.insert((Button, ui::called(id), Pickable::default(), ShowAlone(u)))
+/// Makes `part` the button called `id`, which shows `of` on its own.
+pub(crate) fn shows_alone(part: &mut EntityCommands, of: Target, id: &str) {
+    part.insert((Button, ui::called(id), Pickable::default(), ShowAlone(of)))
         .observe(show_alone);
 }
 
-/// A portrait or a unit's card clicked: shows that unit on its own, if
-/// it lives and its organization alone is selected.
+/// A portrait or a unit's card clicked with the left button: shows its
+/// unit or building on its own, if that's still its organization's and
+/// the organization, or the building, alone is selected.
 pub(crate) fn show_alone(
     activate: On<Activate>,
     parts: Query<&ShowAlone>,
+    mouse: Res<ButtonInput<MouseButton>>,
     sim: Res<Sim>,
     selected: Res<Selected>,
+    chosen: Res<SelectedBuilding>,
     mut alone: ResMut<ShownAlone>,
 ) {
-    let Ok(&ShowAlone(u)) = parts.get(activate.entity) else {
+    // A button activates on any mouse button; only the left shows it.
+    if mouse.any_just_released([MouseButton::Right, MouseButton::Middle]) {
         return;
-    };
-    let Some(unit) = sim.0.units.get(u).filter(|unit| unit.alive()) else {
-        return;
-    };
-    if selected.0 == [unit.organization] {
-        alone.0 = Some((unit.organization, u));
     }
+    let Ok(&ShowAlone(of)) = parts.get(activate.entity) else {
+        return;
+    };
+    let Some(r) = owning(&sim.0, of) else {
+        return;
+    };
+    let building = match of {
+        Target::Building(b) => Some(b),
+        Target::Unit(_) => None,
+    };
+    if selected.0 == [r] || (selected.0.is_empty() && building.is_some() && chosen.0 == building) {
+        alone.0 = Some((r, of));
+    }
+}
+
+/// The organization `of` is part of, while it stands: a living unit's, or
+/// the one a building unpacked from while it's still that one's.
+fn owning(sim: &World, of: Target) -> Option<usize> {
+    match of {
+        Target::Unit(u) => (sim.units.get(u).filter(|unit| unit.alive())).map(|u| u.organization),
+        Target::Building(b) => {
+            let building = sim.buildings.get(b).filter(|b| !b.gone())?;
+            let r = building.unpacked_from?;
+            (sim.organizations[r].unpacked_into == Some(b)).then_some(r)
+        }
+    }
+}
+
+/// What a right click on a part of the display centres the camera on.
+#[derive(Component, Clone, Copy)]
+pub struct Centres(pub(crate) Says);
+
+/// Makes a right click on `part` centre the camera on `of`.
+pub(crate) fn centres(part: &mut EntityCommands, of: Says) {
+    part.insert((Centres(of), Pickable::default()))
+        .observe(centre);
+}
+
+/// Centres the camera on what a right-clicked part stands for.
+fn centre(
+    click: On<PointerClick>,
+    parts: Query<&Centres>,
+    sim: Res<Sim>,
+    loaded: Res<Loaded>,
+    mut cameras: Query<&mut tgrender::camera::RtsCamera>,
+) {
+    if click.button != PointerButton::Secondary {
+        return;
+    }
+    let Some([x, y]) = parts
+        .get(click.entity)
+        .ok()
+        .and_then(|c| centred(&sim.0, c.0))
+    else {
+        return;
+    };
+    let height = loaded.map.ground.height_at([x, y]);
+    for mut camera in &mut cameras {
+        camera.focus = tgrender::space::world(x, y, height);
+    }
+}
+
+/// Where centring on `of` looks: a unit while it lives, else its
+/// organization, which is its building while it's unpacked into one.
+fn centred(sim: &World, of: Says) -> Option<[f32; 2]> {
+    let r = match of {
+        Says::Unit(u) if sim.units[u].alive() => return Some(sim.position(Target::Unit(u))),
+        Says::Unit(u) => sim.units[u].organization,
+        Says::Organization(r) => r,
+        Says::Building(b) => return Some(sim.position(Target::Building(b))),
+        Says::Queued { .. } => return None,
+    };
+    Some(match sim.organizations[r].unpacked_into {
+        Some(b) => sim.position(Target::Building(b)),
+        None => sim.centre(r),
+    })
 }
 
 /// A bar filled to a share of its width.
@@ -317,7 +391,12 @@ pub(crate) fn says(of: Says) -> impl Bundle {
 #[derive(Component, Clone, Copy)]
 pub enum Status {
     Organization(usize),
+    /// A building, which says what its organization's doing if it's an
+    /// HQ unpacked from one.
     Building(usize),
+    /// A Division HQ's building shown on its own, which says what it's
+    /// doing itself.
+    Structure(usize),
     /// A unit shown on its own, which counts for nothing by itself.
     Unit(usize),
 }
@@ -604,18 +683,25 @@ fn wanted(
     local: Option<u32>,
     selected: &[usize],
     chosen: Option<usize>,
-    alone: Option<(usize, usize)>,
+    alone: Option<(usize, Target)>,
 ) -> Option<Mode> {
+    let building = |b: usize| {
+        // Only its side and their allies see what it's commissioning.
+        let queue =
+            (sim.buildings[b].queue.iter()).filter(|_| ours(sim, local, sim.buildings[b].owner));
+        Actor::Building(b, queue.map(|c| c.template().to_string()).collect())
+    };
     let actor = match (selected, chosen) {
-        ([], Some(b)) => {
-            // Only its side and their allies see what it's commissioning.
-            let queue = (sim.buildings[b].queue.iter())
-                .filter(|_| ours(sim, local, sim.buildings[b].owner));
-            Actor::Building(b, queue.map(|c| c.template().to_string()).collect())
+        // A Division HQ's building, selected, shows on its own once asked.
+        ([], Some(b)) if alone.is_some_and(|(_, of)| of == Target::Building(b)) => {
+            return Some(Mode::SimpleActor(building(b)));
         }
+        ([], Some(b)) => building(b),
         ([], None) => return None,
         ([r], _) => match alone {
-            Some((of, u)) if of == *r => return Some(Mode::SimpleActor(Actor::Unit(of, u))),
+            Some((of, Target::Unit(u))) if of == *r => {
+                return Some(Mode::SimpleActor(Actor::Unit(of, u)));
+            }
             _ => Actor::Organization(*r),
         },
         (rs, _) => {
@@ -909,10 +995,10 @@ pub fn choose(
 ) {
     let hqs = sim.0.hqs();
     // Any change to the selection turns the display back, even to the
-    // same organization again, as does the unit's death.
-    if let Some((r, u)) = alone.0 {
-        let unit = sim.0.units.get(u);
-        let in_it = unit.is_some_and(|unit| unit.alive() && unit.organization == r);
+    // same organization again, as does the unit's death, or its swap for
+    // the building it unpacks into or the truck it packs back into.
+    if let Some((r, of)) = alone.0 {
+        let in_it = owning(&sim.0, of) == Some(r);
         if selected.is_changed() || chosen.is_changed() || !in_it {
             alone.0 = None;
         }
@@ -1229,9 +1315,9 @@ pub(crate) trait Parts<'a> {
     /// The name over the owner, and where it has `properties`, its icons.
     fn title(&mut self, name: String, owner: u32, properties: bool);
     /// The portrait of `template`, over a bar filled as `fill` says, both
-    /// giving `of`'s tooltip, a click on the portrait showing the unit at
-    /// `alone` on its own.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<usize>);
+    /// giving `of`'s tooltip, a click on the portrait showing `alone` on
+    /// its own.
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<Target>);
     /// `target`'s weapons, each its icon with its main damage by it.
     fn attacks(&mut self, target: Target);
     /// The shield, with `target`'s defence by it, whose `template` gives
@@ -1265,7 +1351,11 @@ pub(crate) trait Parts<'a> {
             Mode::Company(Actor::Organization(r)) => self.organization(*r),
             Mode::Company(Actor::Building(b, _)) => {
                 let b = *b;
-                self.structure(b);
+                // A Division HQ's building, its captain, shows on its own
+                // from its portrait.
+                let sim = self.shows().sim;
+                let captain = sim.buildings[b].unpacked_from.filter(|&r| !lone(sim, r));
+                self.structure(b, captain.map(|_| Target::Building(b)));
                 // An HQ unpacked from an organization shows its banner.
                 if let Some(r) = self.shows().sim.buildings[b].unpacked_from {
                     self.flag(r);
@@ -1299,9 +1389,15 @@ pub(crate) trait Parts<'a> {
                 (Target::Unit(captain), unit, own, Status::Organization(r))
             }
             Actor::Building(b, _) => {
-                self.structure(b);
+                self.structure(b, None);
                 let template = sim.buildings[b].template.clone();
-                (Target::Building(b), template, None, Status::Building(b))
+                // Selected, an HQ's building is its organization's; a
+                // Division HQ's is on its own only from its portrait.
+                let status = match sim.buildings[b].unpacked_from {
+                    Some(r) if !lone(sim, r) => Status::Structure(b),
+                    _ => Status::Building(b),
+                };
+                (Target::Building(b), template, None, status)
             }
             Actor::Unit(r, u) => {
                 let shows = self.shows();
@@ -1349,7 +1445,7 @@ pub(crate) trait Parts<'a> {
         let template = shows.sim.units[captain].template.clone();
         // An organization's shows its captain on its own; a lone unit's is
         // already the whole selection, so clicking it does nothing.
-        let alone = (!lone(shows.sim, r)).then_some(captain);
+        let alone = (!lone(shows.sim, r)).then_some(Target::Unit(captain));
         self.title(name, owner, true);
         let of = Says::Unit(captain);
         self.portrait(template.as_str(), Fill::Unit(captain), of, alone);
@@ -1373,8 +1469,9 @@ pub(crate) trait Parts<'a> {
     }
 
     /// A building's name and owner, and its picture over its health and,
-    /// for a relay, its stockpile.
-    fn structure(&mut self, b: usize) {
+    /// for a relay, its stockpile; a click on the picture shows `alone`
+    /// on its own.
+    fn structure(&mut self, b: usize, alone: Option<Target>) {
         let shows = self.shows();
         let building = &shows.sim.buildings[b];
         let (template, owner) = (building.template.clone(), building.owner);
@@ -1385,7 +1482,7 @@ pub(crate) trait Parts<'a> {
             template.as_str(),
             Fill::Building(b),
             Says::Building(b),
-            None,
+            alone,
         );
         if stockpile {
             self.stockpile(b);
@@ -1695,8 +1792,13 @@ pub fn refresh(
         let ids = match *status {
             Status::Organization(r) => organization_state(sim, r),
             // Blank for a building only remembered under the fog.
-            Status::Building(b) if !seen_now(sim, fog.as_deref(), Target::Building(b)) => None,
+            Status::Building(b) | Status::Structure(b)
+                if !seen_now(sim, fog.as_deref(), Target::Building(b)) =>
+            {
+                None
+            }
             Status::Building(b) => hq_state(sim, b).unwrap_or_else(|| building_state(sim, b)),
+            Status::Structure(b) => building_state(sim, b),
             Status::Unit(u) => unit_state(sim, u),
         };
         let words = ids.map(|i| looks.state(i)).unwrap_or_default();
@@ -1719,8 +1821,7 @@ fn unit_state(sim: &World, u: usize) -> Option<&'static str> {
         _ if states.contains(&UNIT_ENGAGED) => UNIT_ENGAGED,
         _ if states.contains(&"under_siege") => "under_siege",
         _ if states.contains(&"falling") => "falling",
-        _ if unit.moving() => "mind_moving",
-        _ => "mind_resting",
+        _ => sim.unit_activity(u),
     })
 }
 
@@ -2004,7 +2105,9 @@ fn ours(sim: &World, local: Option<u32>, owner: u32) -> bool {
 pub(crate) fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
     let (owner, ledger) = match status {
         Status::Unit(_) => return None,
-        Status::Building(b) => (sim.buildings[b].owner, sim.building_ledger(b)),
+        Status::Building(b) | Status::Structure(b) => {
+            (sim.buildings[b].owner, sim.building_ledger(b))
+        }
         Status::Organization(r) => {
             let organization = &sim.organizations[r];
             let ledger = match organization.unpacked_into {
@@ -2488,17 +2591,48 @@ mod tests {
         let sim = crate::orders::testing::fresh();
         let u = sim.organizations[0].units[0];
         let shown = |selected: &[usize], alone| wanted(&sim, &[], Some(1), selected, None, alone);
+        let alone = Some((0, Target::Unit(u)));
         assert_eq!(
-            shown(&[0], Some((0, u))),
+            shown(&[0], alone),
             Some(Mode::SimpleActor(Actor::Unit(0, u)))
         );
         // Another organization's unit doesn't take its place.
         let other = sim.organizations[1].units[0];
         assert_eq!(
-            shown(&[0], Some((1, other))),
+            shown(&[0], Some((1, Target::Unit(other)))),
             Some(Mode::Company(Actor::Organization(0)))
         );
-        assert!(matches!(shown(&[0, 1], Some((0, u))), Some(Mode::Group(_))));
+        assert!(matches!(shown(&[0, 1], alone), Some(Mode::Group(_))));
+    }
+
+    #[test]
+    fn a_division_hqs_building_shows_on_its_own_while_its_unpacked() {
+        let mut sim = unpacked_hq();
+        sim.organizations[0].unpacked_into = Some(0);
+        assert_eq!(owning(&sim, Target::Building(0)), Some(0));
+        let alone = Some((0, Target::Building(0)));
+        assert!(matches!(
+            wanted(&sim, &[], Some(1), &[], Some(0), alone),
+            Some(Mode::SimpleActor(Actor::Building(0, _)))
+        ));
+        // Packed back into its truck, it's the organization's no more.
+        sim.organizations[0].unpacked_into = None;
+        assert_eq!(owning(&sim, Target::Building(0)), None);
+    }
+
+    #[test]
+    fn centring_on_an_organization_looks_at_its_building_while_unpacked() {
+        let mut sim = unpacked_hq();
+        let u = sim.organizations[0].units[0];
+        assert_eq!(
+            centred(&sim, Says::Unit(u)),
+            Some(sim.position(Target::Unit(u)))
+        );
+        assert_eq!(centred(&sim, Says::Organization(0)), Some(sim.centre(0)));
+        sim.organizations[0].unpacked_into = Some(0);
+        let building = Some(sim.position(Target::Building(0)));
+        assert_eq!(centred(&sim, Says::Organization(0)), building);
+        assert_eq!(centred(&sim, Says::Building(0)), building);
     }
 
     /// A match whose player 1 has a relay, building 0, unpacked from its

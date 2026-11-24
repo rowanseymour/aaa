@@ -4,7 +4,7 @@
 
 use tgmap::{AnimationSet, Id};
 
-use crate::{TICK, World};
+use crate::{Piece, TICK, Target, World};
 
 /// The states a unit can be in, as stances and effects name them.
 const ENGAGED: &str = "mind_engaged";
@@ -37,9 +37,49 @@ impl World {
             return false;
         }
         let bombarding = self.organizations[unit.organization].bombarding;
+        let attacking = unit.target.is_some() && !bombarding && self.mending_with(u).is_none();
         (is(FALLING) && unit.descent.is_some())
-            || (is(ENGAGED) && unit.alive() && unit.target.is_some() && !bombarding)
+            || (is(ENGAGED) && unit.alive() && attacking)
             || (is(UNDER_SIEGE) && unit.besieged.is_some())
+    }
+
+    /// What the unit at `u` is doing on its own account, as the data's
+    /// actor state id for it: its part in what its organization bombards,
+    /// unpacks, repairs or raises, which reads moving while it's still on
+    /// its way there; else moving or resting. Its organization's other
+    /// activities, and the states [`World::unit_states`] gives, aren't
+    /// its own.
+    pub fn unit_activity(&self, u: usize) -> &'static str {
+        let unit = &self.units[u];
+        let organization = &self.organizations[unit.organization];
+        let work = match self.mending_with(u) {
+            Some(Piece::Building(b)) if self.buildings[b].constructing => Some("mind_building"),
+            Some(_) => Some("mind_repairing"),
+            None if organization.bombarding && self.can_bombard(u) => Some("mind_bombard"),
+            None if organization.unpack_at.is_some() => Some("mind_unpacking"),
+            None => None,
+        };
+        match work {
+            _ if unit.moving() => "mind_moving",
+            Some(work) => work,
+            None => "mind_resting",
+        }
+    }
+
+    /// What the unit at `u` is repairing or raising for its organization,
+    /// while what it's after is that or part of it.
+    fn mending_with(&self, u: usize) -> Option<Piece> {
+        let unit = &self.units[u];
+        let organization = &self.organizations[unit.organization];
+        let piece = organization
+            .mending
+            .filter(|_| organization.engaged.is_empty())?;
+        let on = match (piece, unit.target?) {
+            (Piece::Building(b), Target::Building(t)) => b == t,
+            (Piece::Organization(g), Target::Unit(t)) => self.units[t].organization == g,
+            _ => false,
+        };
+        on.then_some(piece)
     }
 
     /// The health share and states the unit at `u`'s stance is decided by.

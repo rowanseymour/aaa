@@ -534,9 +534,11 @@ mod tests {
         assert!(w.units[0].position[1] > 10.5);
         // The organization itself stays.
         assert!(near(w.organizations[0].position, [10.0, 10.0]));
+        assert_eq!(w.unit_activity(0), "mind_moving");
         run(&mut w, 8.0);
         assert!(w.units[1].health < 100.0);
         assert!(!w.units[0].moving());
+        assert_eq!(w.unit_activity(0), "mind_bombard");
     }
 
     #[test]
