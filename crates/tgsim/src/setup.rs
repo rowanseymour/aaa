@@ -261,6 +261,7 @@ impl World {
             properties: Vec::new(),
             guard: None,
             explore: None,
+            queue: Vec::new(),
             arriving: false,
             terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),

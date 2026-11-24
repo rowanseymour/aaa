@@ -138,8 +138,8 @@ pub(crate) const VERBS: &[Verb] = &[
     .in_match(),
     verb(
         "mouse",
-        "left | right",
-        "clicks a mouse button where the cursor is",
+        "[shift-|ctrl-|alt-]left | right",
+        "clicks a mouse button where the cursor is, with those keys held",
         |world, args, _| mouse(world, args),
     ),
     verb(

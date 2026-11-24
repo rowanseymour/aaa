@@ -31,7 +31,7 @@ impl World {
 
     /// Whether the organization at `r` is carrying out no order, isn't
     /// fighting or getting over a fight, and isn't on its way anywhere.
-    fn doing_nothing(&self, r: usize) -> bool {
+    pub(crate) fn doing_nothing(&self, r: usize) -> bool {
         let organization = &self.organizations[r];
         matches!(organization.mind, Mind::Steady | Mind::Exhausted)
             && organization.order == Order::Move

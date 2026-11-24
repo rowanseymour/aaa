@@ -42,6 +42,7 @@ pub mod path;
 mod production;
 mod properties;
 mod props;
+mod queue;
 mod remains;
 mod research;
 mod rules;
@@ -365,6 +366,9 @@ pub struct Organization {
     pub guard: Option<Guard>,
     /// What it's exploring around, until it's given another order.
     pub explore: Option<Explore>,
+    /// Orders queued behind what it's doing, first first: see
+    /// [`Command::Queued`].
+    pub queue: Vec<Command>,
     /// Whether it's still being dropped: some of it yet to be let go, or
     /// to land.
     pub arriving: bool,
@@ -1122,6 +1126,12 @@ pub enum Command {
     /// Gives these orders to the regiments they're to as one group, with
     /// Group Behavior on: a fresh group of them, timed to arrive together.
     Group { orders: Vec<Command> },
+    /// Puts `command` on the end of its regiment's queue, to be carried
+    /// out once the regiment has nothing else to do, or at once if it's
+    /// idle with nothing queued already. A group's orders are each queued
+    /// for their own regiment. Only an order with a target is queued: one
+    /// without, such as Stop, is carried out at once as if not queued.
+    Queued { command: Box<Command> },
     /// Takes a building off the map for its [`World::sale_value`].
     /// Refused for one whose template can't be sold, one unpacking or
     /// packing, and one under siege where the rules say so.
@@ -1354,6 +1364,7 @@ impl World {
         self.keep_guard();
         self.keep_bombarding();
         self.keep_exploring();
+        self.take_queued();
         self.keep_idling();
         self.keep_stances();
         self.keep_entrenchment();
@@ -1481,7 +1492,7 @@ digest!(Organization {
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
     guard, arriving, terrain_properties, settled, travelling, route_end, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
-    chased, follow, build, mending, explore,
+    chased, follow, build, mending, explore, queue,
 } skip {
     // Its template's.
     formations, unpacks,

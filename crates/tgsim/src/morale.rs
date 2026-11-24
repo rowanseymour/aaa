@@ -323,6 +323,7 @@ impl World {
         let until = ticks + (self.rules.morale_rules.routing_time / TICK).round() as u64;
         let organization = &mut self.organizations[r];
         organization.take_order(Order::Move);
+        organization.queue.clear();
         organization.engaged.clear();
         organization.bombarding = false;
         organization.mind = Mind::Routing {

@@ -172,6 +172,14 @@ pub fn press(world: &mut World, chord: &str) -> Result<Vec<KeyCode>, String> {
     Ok(keys)
 }
 
+/// Holds `keys` down, with nothing typed, for [`release`] to let go.
+pub fn hold(world: &mut World, keys: &[KeyCode]) {
+    for &key in keys {
+        let logical = Key::Unidentified(NativeKey::Unidentified);
+        send(world, key, logical, ButtonState::Pressed);
+    }
+}
+
 /// Lets go of what [`press`] pressed.
 pub fn release(world: &mut World, keys: &[KeyCode]) {
     for &key in keys.iter().rev() {

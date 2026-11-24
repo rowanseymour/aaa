@@ -126,12 +126,7 @@ pub(crate) fn select(
     }
     let sim = &sim.0;
     let rank = |t| selection::rank(sim, local.0, t);
-    let adding = keys.any_pressed([
-        KeyCode::ShiftLeft,
-        KeyCode::ShiftRight,
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-    ]);
+    let adding = queuing(&keys);
     let mut selection = selection::Selection {
         organizations: &mut selected.0,
         building: &mut chosen.0,
@@ -204,13 +199,25 @@ pub(crate) fn select(
     selection.boxed(rank, inside, middle);
 }
 
+/// Whether Shift or Ctrl is held: a click on the map then adds to the
+/// selection, or queues the order it gives.
+pub(crate) fn queuing(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.any_pressed([
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+    ])
+}
+
 /// Right click sends the selected organizations where it points, each keeping
 /// its place relative to the rest, or after the enemy organization it's on,
-/// those that can't fight it going there instead. With a building that
+/// those that can't fight it going there instead; with Shift or Ctrl held,
+/// after what they've been told already. With a building that
 /// commissions selected, it sets its rally point there.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn command(
-    buttons: Res<ButtonInput<MouseButton>>,
+    (buttons, keys): (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>),
     cursor: GroundCursor,
     loaded: Res<Loaded>,
     local: Res<Local>,
@@ -249,6 +256,7 @@ pub(crate) fn command(
         return;
     }
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+    orders.queue(queuing(&keys));
     // With Group Behavior on, what each is told goes as one group.
     if groups.grouping(&selected.0) {
         orders.gather(player);

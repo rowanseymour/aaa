@@ -37,6 +37,10 @@ pub(crate) struct Orders {
     /// While orders are gathered to go as one group, whose they are and
     /// those given so far.
     gathered: Option<(u32, Vec<Command>)>,
+    /// Whether the orders given this frame go on the end of their
+    /// regiments' queues, as when Shift or Ctrl is held for a click on the
+    /// map.
+    queuing: bool,
     /// Whether the game has taken that the host ended the match.
     ended_taken: bool,
     /// What the host knows the game's client as.
@@ -77,6 +81,13 @@ enum Hosted {
         at: Option<String>,
         host: Option<Box<Host<Line>>>,
     },
+}
+
+/// `command` put on the end of its regiments' queues.
+fn queued(command: Command) -> Command {
+    Command::Queued {
+        command: Box::new(command),
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +184,7 @@ impl Orders {
             gone: false,
             quit: false,
             gathered: None,
+            queuing: false,
             ended_taken: false,
             me,
             left: Vec::new(),
@@ -344,6 +356,10 @@ impl Orders {
         player: u32,
         command: Command,
     ) -> Result<(), Refused> {
+        let command = match self.queuing && self.gathered.is_none() {
+            true => queued(command),
+            false => command,
+        };
         world.check(player, &command)?;
         let action = Action::Order { player, command };
         if !self.may(&action) {
@@ -367,6 +383,7 @@ impl Orders {
     /// Asks for the orders gathered as one group, or for one alone as it
     /// is.
     pub(crate) fn send_gathered(&mut self) {
+        let queuing = std::mem::take(&mut self.queuing);
         let Some((player, mut orders)) = self.gathered.take() else {
             return;
         };
@@ -375,7 +392,17 @@ impl Orders {
             1 => orders.remove(0),
             _ => Command::Group { orders },
         };
+        let command = match queuing {
+            true => queued(command),
+            false => command,
+        };
         self.act(Action::Order { player, command });
+    }
+
+    /// Has the orders given from now until they're sent this frame go on
+    /// the end of their regiments' queues, when `queuing`.
+    pub(crate) fn queue(&mut self, queuing: bool) {
+        self.queuing = queuing;
     }
 
     /// Asks for `action`, unless the host is known not to carry it out.
@@ -1149,5 +1176,41 @@ mod tests {
         // And one the game's copy would refuse isn't asked for.
         assert_eq!(orders.give(&world, 1, stop), Err(Refused::NotYours));
         assert_eq!(orders.record().given.len(), 2);
+    }
+
+    #[test]
+    fn orders_given_while_queuing_go_queued_until_sent() {
+        let mut world = super::testing::fresh();
+        let mut orders = Orders::hosting(Setup::default(), world.clone(), None, "Player");
+        let to = |at| Command::Move {
+            organization: 0,
+            to: at,
+        };
+        let sent = |orders: &Orders| {
+            let asked = super::testing::asked(orders.record());
+            match asked.last() {
+                Some(Action::Order { command, .. }) => command.clone(),
+                other => panic!("{other:?}"),
+            }
+        };
+        orders.queue(true);
+        orders.give(&world, 1, to([2.0, 2.0])).unwrap();
+        orders.carry_out(&mut world);
+        assert_eq!(sent(&orders), queued(to([2.0, 2.0])));
+        // Gathered, the group goes queued as a whole.
+        orders.gather(1);
+        orders.give(&world, 1, to([3.0, 3.0])).unwrap();
+        orders.give(&world, 1, to([3.0, 1.0])).unwrap();
+        orders.send_gathered();
+        orders.carry_out(&mut world);
+        let orders_given = vec![to([3.0, 3.0]), to([3.0, 1.0])];
+        let group = Command::Group {
+            orders: orders_given,
+        };
+        assert_eq!(sent(&orders), queued(group));
+        // Once sent, what's given next isn't.
+        orders.give(&world, 1, to([1.0, 1.0])).unwrap();
+        orders.carry_out(&mut world);
+        assert_eq!(sent(&orders), to([1.0, 1.0]));
     }
 }
