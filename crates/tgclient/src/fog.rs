@@ -53,6 +53,9 @@ pub struct Fog {
     buildings: Vec<Look>,
     /// Which buildings the person's side has a picture of.
     known: Vec<bool>,
+    /// Each building's health and most health when last seen, for those
+    /// seen since the start.
+    healths: Vec<Option<(f32, f32)>>,
     /// The templates of what every side has explored from the start.
     revealed: HashSet<Id>,
     /// The tick and lifting it was taken for.
@@ -85,6 +88,15 @@ impl Fog {
 
     pub fn building(&self, b: usize) -> Look {
         self.buildings.get(b).copied().unwrap_or(Look::Shown)
+    }
+
+    /// The health and most health the building at `b` had when last seen,
+    /// if it's been seen and isn't now.
+    pub fn remembered_health(&self, b: usize) -> Option<(f32, f32)> {
+        match self.building(b) {
+            Look::Shown => None,
+            _ => self.healths.get(b).copied().flatten(),
+        }
     }
 
     /// How much light the ground under each tile keeps, row-major from
@@ -142,10 +154,13 @@ pub fn look(mut fog: ResMut<Fog>, sim: Res<Sim>, local: Res<Local>) {
     fog.side = (fog.tiles.len() as f64).sqrt() as usize;
     fog.units = sim.sees_units(p);
     fog.known.resize(sim.buildings.len(), false);
+    fog.healths.resize(sim.buildings.len(), None);
     fog.buildings = (0..sim.buildings.len())
         .map(|b| {
             if sim.sees_building(p, b) {
                 fog.known[b] = true;
+                let health = (sim.buildings[b].health, sim.building_max_health(b));
+                fog.healths[b] = Some(health);
                 return Look::Shown;
             }
             match fog.known[b] && sim.building_seen(p, b) != Seen::Unexplored {

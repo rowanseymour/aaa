@@ -250,6 +250,18 @@ impl World {
     /// earns as what it packs into does, or nothing if it needs supply and
     /// doesn't pack. What its properties add or lift is judged by it.
     pub fn building_ledger(&self, building: usize) -> Ledger {
+        self.building_counting(building, false)
+    }
+
+    /// What a building would count for if nothing held it back: built,
+    /// standing and in supply, with what its properties add or lift.
+    pub fn building_full_ledger(&self, building: usize) -> Ledger {
+        self.building_counting(building, true)
+    }
+
+    /// [`World::building_ledger`], or as though it were working and in
+    /// supply when `full`.
+    fn building_counting(&self, building: usize, full: bool) -> Ledger {
         let b = &self.buildings[building];
         if b.gone() {
             return Ledger::default();
@@ -262,6 +274,7 @@ impl World {
         // Unpacking and packing aren't construction: it earns through both.
         let working = b.state == State::Standing && !b.constructing;
         let own = match self.rules.packing.get(&b.template) {
+            _ if full => Some(e.production.clone()),
             _ if !working => None,
             _ if !self.out_of_supply(building) => Some(e.production.clone()),
             Some(packs) => Some(self.commission_ledger(&packs.truck).production),
@@ -599,6 +612,8 @@ mod tests {
         // Nothing while the house earns nothing.
         w.buildings[0].state = State::Disabled;
         assert_eq!(w.building_ledger(0).production.get("oil"), 0.0);
+        // Though it would, at full.
+        assert_eq!(w.building_full_ledger(0).production.get("oil"), 10.0 + 5.0);
         // Not on a side without it.
         assert_eq!(w.balance(2).net.get("oil"), 0.0);
     }

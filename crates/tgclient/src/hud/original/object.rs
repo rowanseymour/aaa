@@ -706,9 +706,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         self.says(&parts, "", of);
         if let Some(mut button) = self.entity(&parts, "") {
             shown::centres(&mut button, of);
-            if let Some(alone) = alone {
-                shown::shows_alone(&mut button, alone, "object.portrait");
-            }
+            shown::shows_alone(&mut button, alone, "object.portrait");
         }
         let parts = self.part("Health", &["TargetPercentage"]);
         self.fill(&parts, "StatusBar", fill);
@@ -922,7 +920,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             self.says(&parts, "", Says::Unit(u));
             if let Some(mut button) = self.entity(&parts, "") {
                 let id = format!("object.unit.{}", n + 1);
-                shown::shows_alone(&mut button, Target::Unit(u), &id);
+                shown::shows_alone(&mut button, Some(Target::Unit(u)), &id);
                 shown::centres(&mut button, Says::Unit(u));
             }
         }

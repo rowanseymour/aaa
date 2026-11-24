@@ -47,6 +47,23 @@ impl GameData {
         })
     }
 
+    /// The properties each template gives others, for those that give
+    /// any: what it gives its organization as it joins, then what it gives
+    /// as a building.
+    pub fn support_properties(&self) -> HashMap<Id, Vec<Id>> {
+        self.by_template(|t| {
+            let element = t.element_component.iter().flat_map(|e| &e.support_property);
+            let structure = t
+                .structure_component
+                .iter()
+                .flat_map(|s| &s.support_property);
+            let list: Vec<Id> = (element.chain(structure))
+                .filter_map(|r| r.property_ids.clone())
+                .collect();
+            (!list.is_empty()).then_some(list)
+        })
+    }
+
     pub fn research_lists(&self) -> HashMap<Id, Vec<Research>> {
         let aliases = self.structure_aliases();
         let upgrades = self.upgrades();
@@ -105,6 +122,19 @@ mod tests {
         let refs = thing.structure_component.unwrap().technology_property;
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].property_ids, Some(Id::from("assembly_line_tech")));
+    }
+
+    #[test]
+    fn units_and_buildings_list_what_they_give_others() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = medic\n\t[ElementComponent]\n\t{\n             \t\t[SupportProperty]\n\t\tproperty_ids = healing\n\t}\n             \t[StructureComponent]\n\t{\n             \t\t[SupportProperty]\n\t\tproperty_ids = shelter\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = tgi::from_block(block).unwrap();
+        let element = thing.element_component.unwrap().support_property;
+        assert_eq!(element[0].property_ids, Some(Id::from("healing")));
+        let structure = thing.structure_component.unwrap().support_property;
+        assert_eq!(structure[0].property_ids, Some(Id::from("shelter")));
     }
 
     #[test]

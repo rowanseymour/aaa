@@ -604,6 +604,40 @@ pub fn tooltip(node: Node) -> impl Bundle {
 #[require(Hovered, Pickable)]
 pub struct Hint(pub String);
 
+/// Starts a stretch of a [`Hint`] in a colour of its own, given after it
+/// as six hex digits of red, green and blue; [`TINT_END`] ends it.
+const TINT: char = '\u{E000}';
+const TINT_END: char = '\u{E001}';
+
+/// `words` in `colour`, for a [`Hint`].
+pub fn tinted(words: &str, colour: Color) -> String {
+    let [r, g, b, _] = colour.to_srgba().to_u8_array();
+    format!("{TINT}{r:02x}{g:02x}{b:02x}{words}{TINT_END}")
+}
+
+/// A [`Hint`]'s stretches of words, each with its own colour where
+/// [`tinted`] gave it one.
+pub fn stretches(hint: &str) -> Vec<(String, Option<Color>)> {
+    let mut out: Vec<(String, Option<Color>)> = Vec::new();
+    let mut rest = hint;
+    while !rest.is_empty() {
+        let Some(at) = rest.find(TINT) else {
+            out.push((rest.to_string(), None));
+            break;
+        };
+        if at > 0 {
+            out.push((rest[..at].to_string(), None));
+        }
+        let tinted = &rest[at + TINT.len_utf8()..];
+        let colour = tinted.get(..6).and_then(|hex| Srgba::hex(hex).ok());
+        let words = tinted.get(6..).unwrap_or_default();
+        let end = words.find(TINT_END).unwrap_or(words.len());
+        out.push((words[..end].to_string(), colour.map(Color::from)));
+        rest = words.get(end + TINT_END.len_utf8()..).unwrap_or_default();
+    }
+    out
+}
+
 /// On a pane, the [`hint_box`] that the [`Hint`]s inside it are said in.
 #[derive(Component)]
 pub struct Docks(pub Entity);
@@ -633,9 +667,17 @@ struct HintBox;
 struct ByPointer;
 
 /// The parts of the hint's text after the first: a name's key, then the
-/// rest.
+/// rest of the name.
 #[derive(Component)]
 struct HintSpan(usize);
+
+/// The stretches of a hint's own words, after its name's, as last said.
+#[derive(Component, Default)]
+struct HintWords(Vec<(String, Option<Color>)>);
+
+/// One of the stretches [`HintWords`] says.
+#[derive(Component)]
+struct HintWord;
 
 /// A box, laid out as `node`, that shows while a [`Hint`] is said in it,
 /// its words wrapping at `wrap_at`.
@@ -656,6 +698,7 @@ pub fn hint_box(node: Node, wrap_at: Val) -> impl Bundle {
                 max_width: wrap_at,
                 ..default()
             },
+            HintWords::default(),
             children![span(0, Ink::Key), span(1, Ink::Body)],
         )],
     )
@@ -690,9 +733,11 @@ fn hint(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     scale: Res<UiScale>,
     mut boxes: Query<(Entity, &mut Node, &Children, Has<ByPointer>), With<HintBox>>,
-    mut texts: Query<(&mut Text, &Children)>,
+    mut texts: Query<(Entity, &mut Text, &Children, &mut HintWords)>,
     mut spans: Query<(&HintSpan, &mut TextSpan)>,
+    words: Query<(), With<HintWord>>,
     mut hinted: ResMut<Hinted>,
+    mut commands: Commands,
 ) {
     // A part counts as hovered with everything it's in, so of those with
     // something to say, the innermost.
@@ -746,12 +791,13 @@ fn hint(
             Some(name) => [
                 name.before.clone(),
                 name.key.clone(),
-                format!("{}\n{}", name.after, hint.0),
+                format!("{}\n", name.after),
             ],
-            None => [hint.0.clone(), String::new(), String::new()],
+            None => [String::new(), String::new(), String::new()],
         };
+        let said = stretches(&hint.0);
         for child in children.iter() {
-            let Ok((mut text, parts_after)) = texts.get_mut(child) else {
+            let Ok((text_entity, mut text, parts_after, mut was)) = texts.get_mut(child) else {
                 continue;
             };
             if text.0 != parts[0] {
@@ -763,6 +809,21 @@ fn hint(
                 {
                     text.0.clone_from(&parts[span.0 + 1]);
                 }
+            }
+            if was.0 != said {
+                for part in parts_after.iter().filter(|&p| words.contains(p)) {
+                    commands.entity(part).despawn();
+                }
+                commands.entity(text_entity).with_children(|text| {
+                    for (words, colour) in &said {
+                        let span = (HintWord, TextSpan::new(words.clone()), font(Font::Small));
+                        match colour {
+                            Some(colour) => text.spawn((span, TextColor(*colour))),
+                            None => text.spawn((span, Ink::Body)),
+                        };
+                    }
+                });
+                was.0 = said.clone();
             }
         }
     }
@@ -1474,6 +1535,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_hint_splits_into_its_tinted_stretches() {
+        let red = Color::srgb(1.0, 0.0, 0.0);
+        let hint = format!("Health {} now", tinted("45/60", red));
+        let said = stretches(&hint);
+        assert_eq!(said.len(), 3);
+        assert_eq!(said[0], ("Health ".to_string(), None));
+        assert_eq!(said[1].0, "45/60");
+        assert_eq!(
+            said[1].1.map(|c| c.to_srgba().to_u8_array()),
+            Some([255, 0, 0, 255])
+        );
+        assert_eq!(said[2], (" now".to_string(), None));
+        assert_eq!(stretches("plain"), [("plain".to_string(), None)]);
+    }
+
+    #[test]
     fn black_and_white_give_greys() {
         let theme = Theme {
             tint: Color::BLACK,
@@ -1530,7 +1607,11 @@ mod tests {
         assert_eq!(shown(other), Some(Display::None));
         assert_eq!(shown(by_pointer), Some(Display::None));
         let text = world.get::<Children>(docked).unwrap()[0];
-        assert_eq!(world.get::<Text>(text).unwrap().0, "Entrenched");
+        let words: String = (world.get::<Children>(text).unwrap().iter())
+            .filter(|&w| world.get::<HintWord>(w).is_some())
+            .map(|w| world.get::<TextSpan>(w).unwrap().0.clone())
+            .collect();
+        assert_eq!(words, "Entrenched");
         let hinted = world.resource::<Hinted>().0.clone();
         assert_eq!(
             hinted.map(|h| (h.dock, h.hint)),

@@ -304,6 +304,9 @@ pub struct StructureComponent {
     /// The technologies its side has while it holds the building.
     #[serde(default)]
     pub technology_property: Vec<PropertyRef>,
+    /// What the building gives others.
+    #[serde(default)]
+    pub support_property: Vec<PropertyRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -451,6 +454,9 @@ pub struct ElementComponent {
     pub required_properties: Option<String>,
     /// For a hero, whether a side may be given it at random.
     pub random_hero: Option<bool>,
+    /// What it gives its organization as it joins.
+    #[serde(default)]
+    pub support_property: Vec<PropertyRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1729,6 +1735,14 @@ pub struct UVars {
     pub ui_color_property_temporary_friendly: Option<[f32; 3]>,
     #[serde(rename = "UIColorPropertyTemporaryEnemy")]
     pub ui_color_property_temporary_enemy: Option<[f32; 3]>,
+    /// What colours a figure in a tooltip, by whether it's above, below
+    /// or at its plain value.
+    #[serde(rename = "UIColorModifierPositive")]
+    pub ui_color_modifier_positive: Option<[f32; 3]>,
+    #[serde(rename = "UIColorModifierNegative")]
+    pub ui_color_modifier_negative: Option<[f32; 3]>,
+    #[serde(rename = "UIColorModifierNeutral")]
+    pub ui_color_modifier_neutral: Option<[f32; 3]>,
     /// The id of the [`HotkeyConfiguration`] in use.
     #[serde(rename = "HotkeyConfiguration")]
     pub hotkey_configuration: Option<Id>,

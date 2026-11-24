@@ -219,6 +219,19 @@ impl GameData {
         })
     }
 
+    /// The templates that can be recruited (`recruitable = YES`), in the
+    /// order the data defines them.
+    pub fn recruitables(&self) -> Vec<Id> {
+        let renames = self.thing_renames();
+        let yes = |t: &defs::Thing| {
+            (t.recruitable.as_deref()).is_some_and(|r| r.eq_ignore_ascii_case("yes"))
+        };
+        (self.definitions().things.iter())
+            .filter(|t| yes(&t.thing))
+            .map(|t| renamed(&renames, &t.id))
+            .collect()
+    }
+
     /// What buildings recruiting each template needs, by template id, for
     /// those that need any.
     pub fn requirements(&self) -> HashMap<Id, Requires> {
@@ -343,7 +356,7 @@ impl GameData {
 
     /// What each structure template can be upgraded into, by template id,
     /// for those that can.
-    pub(crate) fn upgrades(&self) -> HashMap<Id, Vec<Id>> {
+    pub fn upgrades(&self) -> HashMap<Id, Vec<Id>> {
         self.by_template(|t| {
             let c = t.construction_component.as_ref()?;
             let ids: Vec<Id> = c.upgrade.iter().filter_map(|u| u.ids.clone()).collect();

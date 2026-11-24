@@ -211,6 +211,16 @@ impl GameData {
         self.interface_setting(|v| v.ui_color_property_temporary_enemy)
     }
 
+    /// What colours a tooltip's figure that's above, below and at its
+    /// plain value, in that order.
+    pub fn modifier_colours(&self) -> [Option<[f32; 3]>; 3] {
+        [
+            self.interface_setting(|v| v.ui_color_modifier_positive),
+            self.interface_setting(|v| v.ui_color_modifier_negative),
+            self.interface_setting(|v| v.ui_color_modifier_neutral),
+        ]
+    }
+
     /// The images this project's own interface draws in place of the
     /// game's, by the game's image's lower-case path from the archive root:
     /// from the `[IconStandIn]` blocks of the `.tgi` files under `Modern/`,
