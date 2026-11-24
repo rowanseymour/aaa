@@ -64,7 +64,7 @@ impl World {
             || (self.holds(organization.owner, p)
                 && self.keeps_side_copy(organization.owner, &on, p))
             || self.level_property(r) == Some(p)
-            || organization.properties.iter().any(|h| &h.property == p)
+            || self.handed_down(r).any(|h| &h.property == p)
             || unit.properties.iter().any(|h| &h.property == p)
     }
 

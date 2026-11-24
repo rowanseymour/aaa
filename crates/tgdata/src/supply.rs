@@ -1,7 +1,7 @@
 //! What bears on supply beyond who gives it: the settings it runs by, what
 //! properties do to it, and the special operations that give it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::combat::soft_shape;
 use crate::strikes::strike;
@@ -290,6 +290,13 @@ impl GameData {
         let mut all = self.property_effects(|p| Some(listed(p.required_properties.as_deref())));
         all.retain(|_, r| !r.is_empty());
         all
+    }
+
+    /// The properties a regiment keeps from its members when it holds
+    /// them.
+    pub fn kept_from_members(&self) -> HashSet<Id> {
+        let kept = self.property_effects(|p| (!p.pass_down_members).then_some(()));
+        kept.into_keys().collect()
     }
 
     /// What `effect` makes of each property, for those it makes anything
