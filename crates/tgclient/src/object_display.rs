@@ -276,14 +276,16 @@ pub(crate) fn commands_all(part: &mut EntityCommands, r: usize) {
     part.insert((button, CommandsAll(r))).observe(command_all);
 }
 
-/// A banner clicked with the left button: selects every organization
-/// attached to the HQ its organization is, or is attached to; one with
-/// no HQ is left as it is.
+/// A banner of the player's own clicked with the left button: selects
+/// every organization attached to the HQ its organization is, or is
+/// attached to; one with no HQ is left as it is. Another side's isn't
+/// commanded, and would give away where its others stand.
 fn command_all(
     activate: On<Activate>,
     parts: Query<&CommandsAll>,
     mouse: Res<ButtonInput<MouseButton>>,
     sim: Res<Sim>,
+    local: Res<Local>,
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
 ) {
@@ -291,6 +293,9 @@ fn command_all(
         return;
     };
     if !left(&mouse) {
+        return;
+    }
+    if local.0 != Some(sim.0.organizations[r].owner) {
         return;
     }
     let Some(hq) = hq_for(&sim.0, r) else {
