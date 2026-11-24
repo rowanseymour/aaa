@@ -525,7 +525,6 @@ pub fn run(program: Program) -> ExitCode {
         .add_observer(actions::hold_card_button)
         .add_observer(actions::press_card_button)
         .add_observer(control_groups::press)
-        .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
         .add_message::<messages::Failed>()
         .init_resource::<Selected>()
@@ -712,7 +711,7 @@ pub fn run(program: Program) -> ExitCode {
                     .before(carry_out),
                 (ghost::show, ghost::land, ghost::redden).chain(),
                 waypoints::cursor,
-                (waypoints::mark, waypoints::clear).chain().after(carry_out),
+                waypoints::mark.after(carry_out),
                 waypoints::rally,
             )
                 .run_if(in_state(Screen::Match)),

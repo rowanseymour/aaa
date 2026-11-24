@@ -132,7 +132,6 @@ pub fn aim(
     mut page: ResMut<Page>,
     time: Res<Time>,
     mut sounds: ResMut<crate::sound::Sounds>,
-    mut sent: MessageWriter<crate::waypoints::Sent>,
     (mut refused, mut failed): (MessageWriter<Refused>, MessageWriter<Failed>),
 ) {
     if !matches!(
@@ -262,11 +261,6 @@ pub fn aim(
             return;
         }
         crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
-        sent.write(crate::waypoints::Sent {
-            to: None,
-            aim,
-            organizations,
-        });
         return;
     }
     if aim == Aim::Bombard {
@@ -300,11 +294,6 @@ pub fn aim(
             return;
         }
         crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
-        sent.write(crate::waypoints::Sent {
-            to: on.is_none().then_some(point),
-            aim,
-            organizations,
-        });
         return;
     }
     if aim == Aim::Attack {
@@ -334,7 +323,7 @@ pub fn aim(
                     return;
                 }
                 // Those with nothing to fire go there as they would anywhere.
-                let organizations = crate::commanding::send(
+                crate::commanding::send(
                     &sim.0,
                     &mut orders,
                     player,
@@ -344,16 +333,6 @@ pub fn aim(
                     loaded.map.ground.size(),
                 );
                 crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
-                sent.write(crate::waypoints::Sent {
-                    to: None,
-                    aim,
-                    organizations: pursuing,
-                });
-                sent.write(crate::waypoints::Sent {
-                    to: Some(point),
-                    aim,
-                    organizations,
-                });
                 *page = Page::Orders;
                 return;
             }
@@ -386,15 +365,10 @@ pub fn aim(
             return;
         }
         crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
-        sent.write(crate::waypoints::Sent {
-            to: None,
-            aim,
-            organizations,
-        });
         *page = Page::Orders;
         return;
     }
-    let organizations = match aim {
+    match aim {
         Aim::Unpack => {
             let &[r] = &given[..] else {
                 return;
@@ -407,9 +381,7 @@ pub fn aim(
             if orders.give(&sim.0, player, unpack).is_err() {
                 return;
             }
-            let at = tgsim::unpack_site(point);
             crate::commanding::acknowledge(&sim.0, &mut sounds, &time, player, &given);
-            vec![(r, at)]
         }
         // Given above.
         Aim::Repair | Aim::Bombard => return,
@@ -423,14 +395,9 @@ pub fn aim(
                 point,
                 (aim, looks.together(aim)),
                 loaded.map.ground.size(),
-            )
+            );
         }
-    };
-    sent.write(crate::waypoints::Sent {
-        to: Some(point),
-        aim,
-        organizations,
-    });
+    }
     *page = Page::Orders;
 }
 

@@ -229,7 +229,6 @@ pub(crate) fn command(
     groups: Res<control_groups::ControlGroups>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
-    mut sent: MessageWriter<waypoints::Sent>,
 ) {
     let Some(player) = local.0 else {
         return;
@@ -263,37 +262,22 @@ pub(crate) fn command(
     }
     let mut moving = selected.0.clone();
     if let Some(e) = enemy_organization(&sim.0, player, *focus) {
-        let (pursuing, rest) = pursue(&sim.0, &mut orders, player, &selected.0, e);
-        sent.write(waypoints::Sent {
-            to: None,
-            aim: actions::Aim::Attack,
-            organizations: pursuing,
-        });
+        let (_, rest) = pursue(&sim.0, &mut orders, player, &selected.0, e);
         moving = rest;
     }
     // What can't be attacked there is repaired, by those that can, or
     // else moved onto.
     if let Some(piece) = onto(&sim.0, player, *focus) {
-        let (repairing, rest) = give_each(&sim.0, &mut orders, player, &moving, point, |r| {
+        let (_, rest) = give_each(&sim.0, &mut orders, player, &moving, point, |r| {
             tgsim::Command::Repair {
                 organization: r,
                 piece,
             }
         });
-        sent.write(waypoints::Sent {
-            to: None,
-            aim: actions::Aim::Repair,
-            organizations: repairing,
-        });
-        let (went, rest) = approach(&sim.0, &mut orders, player, &rest, piece);
-        sent.write(waypoints::Sent {
-            to: None,
-            aim: actions::Aim::Move,
-            organizations: went,
-        });
+        let (_, rest) = approach(&sim.0, &mut orders, player, &rest, piece);
         moving = rest;
     }
-    let organizations = send(
+    send(
         &sim.0,
         &mut orders,
         player,
@@ -302,11 +286,6 @@ pub(crate) fn command(
         (actions::Aim::Move, looks.together(actions::Aim::Move)),
         ground.size(),
     );
-    sent.write(waypoints::Sent {
-        to: Some(point),
-        aim: actions::Aim::Move,
-        organizations,
-    });
 }
 
 /// The enemy organization of `player`'s that `focus` is on, if it's one.

@@ -8,7 +8,6 @@ use tgrender::space::map_point;
 
 use crate::actions::Aim;
 use crate::lobby::Lineup;
-use crate::waypoints::Sent;
 use crate::{Loaded, Local, Orders, Raising, Selected, SelectedBuilding, Sim};
 use tgmap::Id;
 use tgsim::Action;
@@ -355,11 +354,6 @@ pub(crate) fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
         return Err(format!("organization {id} is destroyed"));
     }
     give(world, owner, command)?;
-    world.write_message(Sent {
-        to: Some(point),
-        aim,
-        organizations: vec![(r, point)],
-    });
     Ok(String::new())
 }
 
@@ -374,7 +368,6 @@ pub(crate) fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply
             .ok_or_else(|| format!("no organization {id}"))
     };
     let (r, e) = (find(id)?, find(enemy)?);
-    let there = sim.centre(e);
     let owner = sim.organizations[r].owner;
     let command = match aim {
         Aim::Guard => tgsim::Command::GuardPiece {
@@ -395,11 +388,6 @@ pub(crate) fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply
         },
     };
     give(world, owner, command)?;
-    world.write_message(Sent {
-        to: None,
-        aim,
-        organizations: vec![(r, there)],
-    });
     Ok(String::new())
 }
 
@@ -718,11 +706,6 @@ pub(crate) fn unpack(world: &mut World, args: &[&str]) -> Reply {
     };
     give(world, player, command)?;
     let at = tgsim::unpack_site(point);
-    world.write_message(crate::waypoints::Sent {
-        to: Some(at),
-        aim: crate::actions::Aim::Unpack,
-        organizations: vec![(r, at)],
-    });
     Ok(format!("unpacking at {:.0} {:.0}", at[0], at[1]))
 }
 

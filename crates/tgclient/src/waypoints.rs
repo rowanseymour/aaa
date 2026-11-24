@@ -1,8 +1,7 @@
-//! How orders given at a place show: the order's cursor while it's being
-//! aimed, and its waypoints, such as Move's flags, until the organizations sent
-//! there have arrived or been ordered elsewhere. Orders that send each
-//! organization to its own spot mark each spot; those that send all to the one
-//! place mark it once. A selected building's rally point is marked too.
+//! How orders show on the map: the order's cursor while it's being aimed,
+//! a marker at the target of each order a selected regiment has, the one
+//! it's carrying out and those waiting, numbered while any wait, and a
+//! selected building's rally point.
 
 use std::collections::HashMap;
 
@@ -12,6 +11,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow, SystemCursorIcon};
 use tgdata::Id;
 use tgrender::MapAssets;
+use tgrender::camera::RtsCamera;
 use tgrender::space::world;
 
 use crate::actions::{self, Aim, Page};
@@ -20,18 +20,6 @@ use crate::{Drawn, Loaded, Screen, SelectedBuilding, Sim};
 
 /// The effect marking a building's rally point.
 const RALLY_MARKER: &str = "recruit_marker_rally_point";
-
-/// Organizations, each with the spot it was sent to.
-type Spots = Vec<(usize, [f32; 2])>;
-
-/// Organizations sent to a place, each to its own spot around it, or after an
-/// enemy, which marks nowhere.
-#[derive(Message)]
-pub struct Sent {
-    pub to: Option<[f32; 2]>,
-    pub aim: Aim,
-    pub organizations: Spots,
-}
 
 /// A cursor's frames, which loop.
 struct Frames {
@@ -46,7 +34,9 @@ struct Frames {
 pub struct Looks {
     cursors: HashMap<Aim, Frames>,
     rally_cursor: Option<Frames>,
-    waypoints: HashMap<Aim, Marking>,
+    /// The archive path of each command's order marker's model, by the
+    /// command's id.
+    markers: HashMap<Id, String>,
     /// The archive path of the rally point marker's model.
     rally: Option<String>,
     /// The orders that send every organization to the very place pointed at,
@@ -61,18 +51,17 @@ impl Looks {
     }
 }
 
-/// How an order marks where it sends organizations.
-struct Marking {
-    /// The archive path of its waypoint's model.
-    model: String,
-    /// Whether each organization's spot gets its own.
-    each: bool,
-}
-
-/// A waypoint, there while any of its organizations is still on its way to
-/// its spot.
+/// The marker at the target of one of a selected regiment's orders: the
+/// regiment, the order's place among them, and how it's marked.
 #[derive(Component)]
-pub struct Waypoint(Spots);
+pub struct OrderMarker {
+    organization: usize,
+    index: usize,
+    command: Id,
+    at: tgsim::Aimed,
+    /// The number shown over it, while orders are waiting.
+    number: Option<Entity>,
+}
 
 /// The marker on a building's rally point, by index into
 /// [`tgsim::World::buildings`].
@@ -142,15 +131,13 @@ pub fn load(
         if !c.group_offset {
             looks.together.push(aim);
         }
-        if let Some(model) = c.marker.as_ref().and_then(|m| models.get(m)) {
-            let marking = Marking {
-                model: model.clone(),
-                each: c.group_offset,
-            };
-            looks.waypoints.insert(aim, marking);
-        }
         if let Some(frames) = frames_of(c) {
             looks.cursors.insert(aim, frames);
+        }
+    }
+    for (id, c) in &by_id {
+        if let Some(model) = c.marker.as_ref().and_then(|m| models.get(m)) {
+            looks.markers.insert(id.clone(), model.clone());
         }
     }
     commands.insert_resource(looks);
@@ -195,58 +182,216 @@ pub fn cursor(
     }
 }
 
-/// Puts down waypoints where organizations were sent, taking them off any they
-/// were headed for before.
+/// How high over a thing its order's marker sits.
+const OVER_THING: f32 = 4.0;
+
+/// The game's camera, for placing numbers over markers.
+type Viewing<'w, 's> =
+    Query<'w, 's, (&'static Camera, &'static Transform), (With<RtsCamera>, Without<OrderMarker>)>;
+
+/// A marker one of the selected regiments' orders wants.
+struct Wanted {
+    organization: usize,
+    index: usize,
+    command: Id,
+    at: tgsim::Aimed,
+    /// Where it shows.
+    shown: Vec3,
+    number: Option<usize>,
+}
+
+impl Wanted {
+    fn is(&self, marker: &OrderMarker) -> bool {
+        (self.organization, self.index, &self.command, self.at)
+            == (
+                marker.organization,
+                marker.index,
+                &marker.command,
+                marker.at,
+            )
+    }
+}
+
+/// Keeps a marker at the target of each order the selected regiments of
+/// the player's own or allies' have, each numbered in the order they'll be
+/// carried out while any are waiting. An order aimed at an enemy shows the
+/// attack marker; one at a thing that can move and isn't seen has none.
+#[allow(clippy::too_many_arguments)]
 pub fn mark(
     mut commands: Commands,
-    mut sent: MessageReader<Sent>,
-    mut earlier: Query<&mut Waypoint>,
+    (sim, fog, local, selected): (
+        Res<Sim>,
+        Res<crate::fog::Fog>,
+        Res<crate::Local>,
+        Res<crate::Selected>,
+    ),
     looks: Res<Looks>,
+    mut markers: Query<(Entity, &mut OrderMarker, &mut Transform)>,
+    mut numbers: Query<(&mut Node, &mut Visibility), With<MarkerNumber>>,
+    cameras: Viewing,
+    ui: Res<UiScale>,
     mut drawn: ResMut<Drawn>,
     loaded: Res<Loaded>,
     mut assets: MapAssets,
 ) {
-    for s in sent.read() {
-        for mut w in &mut earlier {
-            w.0.retain(|(r, _)| !s.organizations.iter().any(|(sent, _)| sent == r));
+    let sim = &sim.0;
+    let ground = &loaded.map.ground;
+    let on_ground = |[x, y]: [f32; 2], over: f32| world(x, y, ground.height_at([x, y]) + over);
+    let mut wanted: Vec<Wanted> = Vec::new();
+    for &r in &selected.0 {
+        let owner = sim.organizations[r].owner;
+        let friendly = local.0.is_some_and(|p| {
+            matches!(
+                sim.sides.relation(p, owner),
+                tgsim::Relation::Itself | tgsim::Relation::Ally
+            )
+        });
+        if !friendly {
+            continue;
         }
-        let Some(marking) = looks.waypoints.get(&s.aim) else {
+        let orders = sim.marked_orders(r);
+        let numbered = orders.len() > 1;
+        for (i, order) in orders.into_iter().enumerate() {
+            let enemy = |owner| {
+                sim.sides.relation(owner, sim.organizations[r].owner) == tgsim::Relation::Enemy
+            };
+            let (command, shown) = match order.at {
+                tgsim::Aimed::Place(p) => (order.command, on_ground(p, 0.0)),
+                tgsim::Aimed::Thing(tgsim::Piece::Organization(o)) => {
+                    if !fog.shows_organization(sim, o) || sim.destroyed(o) {
+                        continue;
+                    }
+                    let command = match enemy(sim.organizations[o].owner) {
+                        true => "kill",
+                        false => order.command,
+                    };
+                    (command, on_ground(sim.centre(o), OVER_THING))
+                }
+                tgsim::Aimed::Thing(tgsim::Piece::Building(b)) => {
+                    let building = &sim.buildings[b];
+                    if fog.building(b) == crate::fog::Look::Hidden || building.gone() {
+                        continue;
+                    }
+                    let command = match enemy(building.owner) {
+                        true => "kill",
+                        false => order.command,
+                    };
+                    (command, on_ground(building.position, OVER_THING))
+                }
+            };
+            wanted.push(Wanted {
+                organization: r,
+                index: i,
+                command: Id::from(command),
+                at: order.at,
+                shown,
+                number: numbered.then_some(i + 1),
+            });
+        }
+    }
+    let camera = cameras.single().ok();
+    let mut kept = vec![false; wanted.len()];
+    for (e, mut marker, mut transform) in &mut markers {
+        let found = (wanted.iter().enumerate()).position(|(k, w)| !kept[k] && w.is(&marker));
+        let Some(k) = found else {
+            if let Some(n) = marker.number {
+                commands.entity(n).despawn();
+            }
+            commands.entity(e).despawn();
             continue;
         };
-        for (at, organizations) in places(s, marking.each) {
-            let [x, y] = at;
-            let at = world(x, y, loaded.map.ground.height_at([x, y]));
-            let mut models = assets.models();
-            let spawned = drawn.0.spawn_effect(
-                &mut commands,
-                &mut models,
-                &marking.model,
-                &[],
-                Transform::from_translation(at),
-            );
-            if let Some(e) = spawned {
-                commands
-                    .entity(e)
-                    .insert((Waypoint(organizations), DespawnOnExit(Screen::Match)));
+        kept[k] = true;
+        let Wanted { shown, number, .. } = &wanted[k];
+        transform.translation = *shown;
+        let label = marker.number.and_then(|n| numbers.get_mut(n).ok());
+        match (number, label) {
+            (Some(_), Some((mut node, mut visibility))) => {
+                let over = *shown + Vec3::Y * NUMBER_RAISE;
+                let shown = camera
+                    .and_then(|(c, t)| c.world_to_viewport(&GlobalTransform::from(*t), over).ok());
+                match shown {
+                    Some(p) => {
+                        crate::ui_scale::place_on_map(
+                            &mut node,
+                            p - NUMBER_SIZE / 2.0,
+                            NUMBER_SIZE,
+                            &ui,
+                        );
+                        visibility.set_if_neq(Visibility::Inherited);
+                    }
+                    None => {
+                        visibility.set_if_neq(Visibility::Hidden);
+                    }
+                }
             }
+            (Some(_), None) => {
+                let n = commands.spawn(number_label(number.unwrap_or(0))).id();
+                marker.number = Some(n);
+            }
+            (None, Some(_)) => {
+                if let Some(n) = marker.number.take() {
+                    commands.entity(n).despawn();
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    for (k, w) in wanted.into_iter().enumerate() {
+        if kept[k] {
+            continue;
+        }
+        let Some(model) = looks.markers.get(&w.command) else {
+            continue;
+        };
+        let mut models = assets.models();
+        let spawned = drawn.0.spawn_effect(
+            &mut commands,
+            &mut models,
+            model,
+            &[],
+            Transform::from_translation(w.shown),
+        );
+        if let Some(e) = spawned {
+            let number = w.number.map(|n| commands.spawn(number_label(n)).id());
+            commands.entity(e).insert((
+                OrderMarker {
+                    organization: w.organization,
+                    index: w.index,
+                    command: w.command,
+                    at: w.at,
+                    number,
+                },
+                DespawnOnExit(Screen::Match),
+            ));
         }
     }
 }
 
-/// Where to put waypoints for organizations sent somewhere, each with the
-/// organizations it's for: at each one's spot, or once where they were sent.
-fn places(sent: &Sent, each: bool) -> Vec<([f32; 2], Spots)> {
-    let Some(to) = sent.to.filter(|_| !sent.organizations.is_empty()) else {
-        return Vec::new();
-    };
-    match each {
-        true => sent
-            .organizations
-            .iter()
-            .map(|&(r, to)| (to, vec![(r, to)]))
-            .collect(),
-        false => vec![(to, sent.organizations.clone())],
-    }
+/// How far over its marker's foot an order's number shows: the stock
+/// markers' height, about that of a flag, and `UIWaypointNumberZOffset`
+/// over that.
+const NUMBER_RAISE: f32 = 3.5 + 1.0;
+
+/// The room an order's number takes on screen, in pixels.
+const NUMBER_SIZE: Vec2 = Vec2::new(16.0, 16.0);
+
+/// The number over an order's marker.
+#[derive(Component)]
+pub struct MarkerNumber;
+
+/// An order's number `n`, placed over its marker once that's seen.
+fn number_label(n: usize) -> impl Bundle {
+    (
+        MarkerNumber,
+        Text::new(n.to_string()),
+        TextLayout::new(Justify::Center, LineBreak::NoWrap),
+        Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        },
+        Visibility::Hidden,
+        DespawnOnExit(Screen::Match),
+    )
 }
 
 /// Keeps a marker on the selected building's rally point, if it has one.
@@ -290,53 +435,5 @@ pub fn rally(
         commands
             .entity(e)
             .insert((RallyMarker(b, [x, y]), DespawnOnExit(Screen::Match)));
-    }
-}
-
-/// Takes up waypoints once none of their organizations is still headed for
-/// them.
-pub fn clear(mut commands: Commands, sim: Res<Sim>, waypoints: Query<(Entity, &Waypoint)>) {
-    for (e, w) in &waypoints {
-        if !w.0.iter().any(|&(r, to)| headed(&sim.0, r, to)) {
-            commands.entity(e).despawn();
-        }
-    }
-}
-
-/// Whether an organization is still on its way to `to`.
-fn headed(sim: &tgsim::World, organization: usize, [x, y]: [f32; 2]) -> bool {
-    let [dx, dy] = sim.destination(organization);
-    !sim.destroyed(organization) && sim.underway(organization) && (dx - x).hypot(dy - y) < 0.5
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn waypoints_mark_each_spot_or_the_one_place() {
-        let sent = Sent {
-            to: Some([10.0, 10.0]),
-            aim: Aim::Move,
-            organizations: vec![(0, [8.0, 10.0]), (1, [12.0, 10.0])],
-        };
-        let each = places(&sent, true);
-        assert_eq!(each.len(), 2);
-        assert_eq!(each[1], ([12.0, 10.0], vec![(1, [12.0, 10.0])]));
-        assert_eq!(
-            places(&sent, false),
-            vec![([10.0, 10.0], sent.organizations.clone())]
-        );
-        let after = Sent {
-            to: None,
-            aim: Aim::Attack,
-            organizations: sent.organizations.clone(),
-        };
-        assert!(places(&after, false).is_empty());
-        let none = Sent {
-            organizations: Vec::new(),
-            ..sent
-        };
-        assert!(places(&none, true).is_empty());
     }
 }

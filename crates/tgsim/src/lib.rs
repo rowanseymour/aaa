@@ -89,6 +89,7 @@ pub use outcome::Fate;
 pub use packing::unpack_site;
 pub use properties::Held;
 pub use props::Prop;
+pub use queue::{Aimed, Marked};
 pub use remains::Remains;
 pub use research::{Granted, Lacking, Researchable, Source};
 pub use rules::Rules;
@@ -1128,8 +1129,10 @@ pub enum Command {
     Group { orders: Vec<Command> },
     /// Puts `command` on the end of its regiment's queue, to be carried
     /// out once the regiment has nothing else to do, or at once if it's
-    /// idle with nothing queued already. A group's orders are each queued
-    /// for their own regiment. Only an order with a target is queued: one
+    /// idle with nothing queued already. A group's orders to every
+    /// regiment of one group go on that group's queue, to be carried out
+    /// together once all of them are done; others are each queued for
+    /// their own regiment. Only an order with a target is queued: one
     /// without, such as Stop, is carried out at once as if not queued.
     Queued { command: Box<Command> },
     /// Takes a building off the map for its [`World::sale_value`].
