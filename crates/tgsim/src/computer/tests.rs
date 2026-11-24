@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tgmap::sai::{ActorPriority, Ego, Filter, GoalPriority, Profile, RecruitRequest, TechPriority};
 use tgmap::{Id, Region, Regions};
 
-use super::planner::Wanted;
+use super::planner::{Member, Wanted};
 use crate::testing::{self, kind, rate};
 use crate::{Command, ComputerPlayer, Planner, SECOND, World};
 
@@ -40,6 +40,7 @@ fn planner(moods: Vec<Ego>) -> Planner {
         max_ge_commands: 100,
         max_rai_commands: 40,
         moods,
+        sends_air_attacks: true,
     };
     Planner::new(Arc::new(profile), 1, 0.0)
 }
@@ -391,7 +392,7 @@ fn shared_out(
     p: &Planner,
     w: &World,
     goals: Vec<super::planner::Goal>,
-) -> std::collections::HashMap<usize, super::planner::Key> {
+) -> std::collections::HashMap<Member, super::planner::Key> {
     let mut memory = Vec::new();
     let picture = super::picture::Picture::new(w, 1, &mut memory);
     super::choosing::choose(p, &picture, goals).serving
@@ -420,7 +421,7 @@ fn a_goal_takes_a_unit_from_one_ranked_above_that_gains_less_from_it() {
         &w,
         vec![fight(0, false, 1000.0, &w), fight(1, true, 900.0, &w)],
     );
-    assert_eq!(serving.get(&0), Some(&Key::Attack(1)));
+    assert_eq!(serving.get(&Member::Organization(0)), Some(&Key::Attack(1)));
 }
 
 #[test]
@@ -431,9 +432,12 @@ fn a_unit_stays_on_its_attack_when_one_nearby_is_ranked_higher() {
     rate(&mut w, "soldier", 50.0);
     let goals = |w: &World| vec![fight(0, true, 1000.0, w), fight(1, true, 500.0, w)];
     let mut p = planner(vec![mood()]);
-    p.serving.insert(0, Key::Attack(1));
+    p.serving.insert(Member::Organization(0), Key::Attack(1));
     // It's locked on to its own.
-    assert_eq!(shared_out(&p, &w, goals(&w)).get(&0), Some(&Key::Attack(1)));
+    assert_eq!(
+        shared_out(&p, &w, goals(&w)).get(&Member::Organization(0)),
+        Some(&Key::Attack(1))
+    );
     // Not locked, it stays while the higher shares its strength, and goes
     // where it's worth more once that doesn't.
     for (linked, goes) in [(2, Key::Attack(1)), (0, Key::Attack(0))] {
@@ -441,7 +445,129 @@ fn a_unit_stays_on_its_attack_when_one_nearby_is_ranked_higher() {
         ego.goal_engine.combat.linked_region_distance = linked;
         ego.goal_engine.combat.attack_commit_distance = 0;
         let mut p = planner(vec![ego]);
-        p.serving.insert(0, Key::Attack(1));
-        assert_eq!(shared_out(&p, &w, goals(&w)).get(&0), Some(&goes));
+        p.serving.insert(Member::Organization(0), Key::Attack(1));
+        assert_eq!(
+            shared_out(&p, &w, goals(&w)).get(&Member::Organization(0)),
+            Some(&goes)
+        );
     }
+}
+
+/// [`crate::airfields::tests::field`], cut into halves, with player 2's
+/// house at 80,50 worth attacking and at `health` of its 100.
+fn airfield(health: f32) -> World {
+    let mut w = crate::airfields::tests::field();
+    halves(&mut w);
+    w.buildings[2].health = health;
+    w
+}
+
+/// A mood that likes attacking houses.
+fn likes_houses() -> Ego {
+    let mut ego = mood();
+    ego.goal_engine.actor_priority.push(ActorPriority {
+        actor_ids: Some(Id::from("house")),
+        value: 500.0,
+        ..Default::default()
+    });
+    ego
+}
+
+fn air_attacks(orders: &[Command]) -> Vec<&Command> {
+    (orders.iter())
+        .filter(|c| matches!(c, Command::AirAttack { .. }))
+        .collect()
+}
+
+#[test]
+fn it_air_attacks_a_damaged_target_with_its_escort_on() {
+    use crate::Piece;
+    use crate::airfields::tests::FIELD;
+    // Whole, alone and in no region it attacks, the house isn't worth it.
+    let w = airfield(100.0);
+    assert_eq!(
+        air_attacks(&planner(vec![likes_houses()]).think(&w, 1)),
+        [] as [&Command; 0]
+    );
+    let w = airfield(60.0);
+    let mut p = planner(vec![likes_houses()]);
+    let orders = p.think(&w, 1);
+    let escort = Command::Escort {
+        building: FIELD,
+        on: true,
+    };
+    let strike = Command::AirAttack {
+        building: FIELD,
+        at: [80.0, 50.0],
+        on: Some(Piece::Building(2)),
+    };
+    let at = |c: &Command| orders.iter().position(|o| o == c);
+    assert!(at(&escort).unwrap() < at(&strike).unwrap(), "{orders:?}");
+}
+
+#[test]
+fn it_waits_before_air_attacking_the_same_target_again() {
+    let mut w = airfield(60.0);
+    let mut p = planner(vec![likes_houses()]);
+    assert_eq!(air_attacks(&p.think(&w, 1)).len(), 1);
+    // Nothing went, but it plans again before 120 seconds are out.
+    w.ticks += 90 * SECOND;
+    assert_eq!(air_attacks(&p.think(&w, 1)), [] as [&Command; 0]);
+    w.ticks += 30 * SECOND;
+    assert_eq!(air_attacks(&p.think(&w, 1)).len(), 1);
+}
+
+#[test]
+fn a_side_whose_game_has_no_air_attacks_sends_none() {
+    let w = airfield(60.0);
+    let profile = Profile {
+        id: Id::from("test_sai"),
+        ego_fuzziness: 0.0,
+        max_ge_commands: 100,
+        max_rai_commands: 40,
+        moods: vec![likes_houses()],
+        sends_air_attacks: false,
+    };
+    let mut p = Planner::new(Arc::new(profile), 1, 0.0);
+    assert_eq!(air_attacks(&p.think(&w, 1)), [] as [&Command; 0]);
+}
+
+#[test]
+fn an_airfield_sends_nothing_else_while_its_attack_is_out() {
+    let mut w = airfield(60.0);
+    let mut other = w.buildings[2].clone();
+    other.position = [80.0, 90.0];
+    w.buildings.push(other);
+    let mut p = planner(vec![likes_houses()]);
+    // One airfield, one attack.
+    let orders = p.think(&w, 1);
+    assert_eq!(air_attacks(&orders).len(), 1);
+    for order in orders {
+        w.apply(1, order).unwrap();
+    }
+    // The bomber and its escort.
+    assert_eq!(w.sorties.len(), 3);
+    w.ticks += 30 * SECOND;
+    assert_eq!(air_attacks(&p.think(&w, 1)), [] as [&Command; 0]);
+}
+
+#[test]
+fn an_air_attack_cut_from_its_orders_doesnt_count_as_sent() {
+    let mut w = airfield(60.0);
+    let profile = |most: usize| Profile {
+        id: Id::from("test_sai"),
+        ego_fuzziness: 0.0,
+        max_ge_commands: most,
+        max_rai_commands: 40,
+        moods: vec![likes_houses()],
+        sends_air_attacks: true,
+    };
+    // Room for the escort, not the attack after it.
+    let mut p = Planner::new(Arc::new(profile(1)), 1, 0.0);
+    assert_eq!(air_attacks(&p.think(&w, 1)), [] as [&Command; 0]);
+    w.ticks += 30 * SECOND;
+    // With room again, it sends it at the next think.
+    let mut q = Planner::new(Arc::new(profile(100)), 1, 0.0);
+    std::mem::swap(&mut p.struck, &mut q.struck);
+    assert_eq!(air_attacks(&q.think(&w, 1)).len(), 1);
 }

@@ -513,7 +513,7 @@ impl Organization {
 
 /// An organization or a building: what a side owns on the map, and so what a
 /// organization engages or guards, what holds properties and what's destroyed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Piece {
     /// Index into [`World::organizations`].
     Organization(usize),

@@ -3,10 +3,10 @@
 
 use std::collections::HashMap;
 
-use super::liking;
 use super::picture::Picture;
-use super::planner::{Goal, Key, Planner, Work};
-use crate::Command;
+use super::planner::{Goal, Key, Member, Planner, Work};
+use super::{air, liking};
+use crate::{Command, Piece};
 
 /// How near a unit already sent somewhere has to be headed to the place a
 /// goal wants it for the order not to be given again.
@@ -20,9 +20,12 @@ const MOST_VISITS: u8 = 2;
 pub(super) struct Chosen {
     pub orders: Vec<Command>,
     /// The goal each unit serves.
-    pub serving: HashMap<usize, Key>,
+    pub serving: HashMap<Member, Key>,
     /// The goals carried out.
     pub carried: Vec<Key>,
+    /// What it sent air attacks at, each with how many orders go out up
+    /// to its own.
+    pub struck: Vec<(Piece, usize)>,
 }
 
 /// Shares the units out among `goals`, highest first, and carries out
@@ -41,9 +44,9 @@ struct Board<'p, 'w> {
     /// Where each goal stands in the order: its priority until it's
     /// settled, then its worth with the units it has.
     rank: Vec<f32>,
-    members: Vec<Vec<usize>>,
+    members: Vec<Vec<Member>>,
     /// The goal holding each unit.
-    holder: HashMap<usize, usize>,
+    holder: HashMap<Member, usize>,
     /// Each goal's stored worth: with the units it held at the start of
     /// the think, then with those it ends up with once it's settled.
     stored: Vec<f32>,
@@ -52,10 +55,12 @@ struct Board<'p, 'w> {
     /// For each fight, those of its kind near enough to share its units'
     /// strength.
     linked: Vec<Vec<usize>>,
-    /// Each unit's place in `units`.
-    slot: HashMap<usize, usize>,
+    /// Every unit, and each one's place in it.
+    all: Vec<Member>,
+    slot: HashMap<Member, usize>,
     units: Vec<Facts>,
-    /// For each fight and explore goal, how each unit in `units` fits it.
+    /// For each goal that takes any unit it fits, how each unit in `units`
+    /// fits it.
     fits: Vec<Vec<Fit>>,
     visits: Vec<u8>,
     /// Whether each goal is settled for now.
@@ -75,7 +80,7 @@ struct Facts {
     region: Option<usize>,
 }
 
-/// How a unit fits a fight or explore goal.
+/// How a unit fits a goal.
 #[derive(Clone, Copy, Default)]
 struct Fit {
     serves: bool,
@@ -114,55 +119,49 @@ impl<'p, 'w> Board<'p, 'w> {
                 (0..n).filter(|&h| h != g && near(h)).collect()
             })
             .collect();
-        let ego = planner.ego();
-        let units: Vec<Facts> = (picture.organizations.iter())
-            .map(|&r| {
-                let builder = !world.buildable(r).is_empty();
-                // Builders count for little in a fight.
-                let share = match builder {
-                    true => combat.penalty_to_builder_cv,
-                    false => 1.0,
-                };
-                Facts {
-                    strength: world.full_value(r) * share,
-                    builder,
-                    region: picture.region(world.centre(r)),
+        let airfields = air::airfields(picture);
+        let all: Vec<Member> = (picture.organizations.iter())
+            .map(|&r| Member::Organization(r))
+            .chain(airfields.iter().map(|&(b, _)| Member::AttackGroup(b)))
+            .collect();
+        let units: Vec<Facts> = (all.iter())
+            .map(|&m| match m {
+                Member::Organization(r) => {
+                    let builder = !world.buildable(r).is_empty();
+                    // Builders count for little in a fight.
+                    let share = match builder {
+                        true => combat.penalty_to_builder_cv,
+                        false => 1.0,
+                    };
+                    Facts {
+                        strength: world.full_value(r) * share,
+                        builder,
+                        region: picture.region(world.centre(r)),
+                    }
                 }
+                Member::AttackGroup(b) => Facts {
+                    strength: 0.0,
+                    builder: false,
+                    region: picture.region(world.buildings[b].position),
+                },
             })
             .collect();
-        let slot = (picture.organizations.iter().enumerate())
-            .map(|(i, &r)| (r, i))
-            .collect();
+        let slot = (all.iter().enumerate()).map(|(i, &m)| (m, i)).collect();
         let fits = (goals.iter())
-            .map(|goal| {
-                let (region, explore) = match &goal.work {
-                    Work::Force { region, .. } => (*region, false),
-                    Work::Explore { to } => match picture.region(*to) {
-                        Some(region) => (region, true),
-                        None => return vec![Fit::default(); units.len()],
-                    },
-                    _ => return Vec::new(),
-                };
-                (picture.organizations.iter())
-                    .map(|&r| {
-                        let seconds = liking::travel_time(picture, r, region);
-                        let serves = match explore {
-                            true => world.explores(r) && world.organizations[r].unpacks.is_none(),
-                            false => {
-                                picture.fights(r)
-                                    && !planner.retreating.contains(&r)
-                                    && seconds.is_finite()
-                            }
-                        };
-                        let (value, multiplier) = liking::preference(ego, world, goal.kind, r);
-                        Fit {
-                            serves,
-                            seconds,
-                            value,
-                            multiplier,
-                        }
-                    })
-                    .collect()
+            .map(|goal| match &goal.work {
+                Work::Force { region, .. } => (all.iter())
+                    .map(|&m| fight_fit(planner, picture, goal, *region, m))
+                    .collect(),
+                Work::Explore { to } => match picture.region(*to) {
+                    Some(region) => (all.iter())
+                        .map(|&m| explore_fit(planner, picture, goal, region, m))
+                        .collect(),
+                    None => vec![Fit::default(); all.len()],
+                },
+                Work::AirAttack { at, .. } => (all.iter())
+                    .map(|&m| air_fit(planner, picture, goal, *at, &airfields, m))
+                    .collect(),
+                _ => Vec::new(),
             })
             .collect();
         let mut board = Board {
@@ -174,6 +173,7 @@ impl<'p, 'w> Board<'p, 'w> {
             stored: vec![0.0; n],
             steps,
             linked,
+            all,
             slot,
             units,
             fits,
@@ -189,12 +189,12 @@ impl<'p, 'w> Board<'p, 'w> {
         let index: HashMap<Key, usize> = (board.goals.iter().enumerate())
             .map(|(g, goal)| (goal.key.clone(), g))
             .collect();
-        for &r in &picture.organizations {
-            let held = planner.serving.get(&r).and_then(|k| index.get(k));
+        for m in board.all.clone() {
+            let held = planner.serving.get(&m).and_then(|k| index.get(k));
             if let Some(&g) = held
-                && board.serves(g, r)
+                && board.serves(g, m)
             {
-                board.take(g, r);
+                board.take(g, m);
             }
         }
         for g in 0..n {
@@ -203,34 +203,40 @@ impl<'p, 'w> Board<'p, 'w> {
         board
     }
 
-    /// Whether the unit at `r` could serve goal `g` at all.
-    fn serves(&self, g: usize, r: usize) -> bool {
+    /// Whether unit `r` could serve goal `g` at all.
+    fn serves(&self, g: usize, r: Member) -> bool {
         match &self.goals[g].work {
             Work::Order(_) => false,
-            Work::Unit { organization, .. } => *organization == r,
-            Work::Force { .. } | Work::Explore { .. } => self.fit(g, r).serves,
+            Work::Unit { organization, .. } => Member::Organization(*organization) == r,
+            Work::Force { .. } | Work::Explore { .. } | Work::AirAttack { .. } => {
+                self.fit(g, r).serves
+            }
         }
     }
 
-    fn fit(&self, g: usize, r: usize) -> Fit {
+    fn fit(&self, g: usize, r: Member) -> Fit {
         self.fits[g][self.slot[&r]]
     }
 
-    fn strength(&self, r: usize) -> f32 {
+    fn strength(&self, r: Member) -> f32 {
         self.units[self.slot[&r]].strength
     }
 
     /// Goal `g`'s worth with the units `set` on it.
-    fn worth(&self, g: usize, set: &[usize]) -> f32 {
+    fn worth(&self, g: usize, set: &[Member]) -> f32 {
         let goal = &self.goals[g];
         let ego = self.planner.ego();
         match &goal.work {
             Work::Order(_) => goal.priority,
-            Work::Unit { organization, .. } => match set.contains(organization) {
-                true => goal.priority,
-                false => 0.0,
-            },
-            Work::Explore { .. } => (set.iter())
+            Work::Unit { organization, .. } => {
+                match set.contains(&Member::Organization(*organization)) {
+                    true => goal.priority,
+                    false => 0.0,
+                }
+            }
+            // What one unit alone carries out is worth what the best on it
+            // makes it.
+            Work::Explore { .. } | Work::AirAttack { .. } => (set.iter())
                 .map(|&r| {
                     let fit = self.fit(g, r);
                     let travel = liking::travel_factor(ego, fit.seconds);
@@ -258,7 +264,7 @@ impl<'p, 'w> Board<'p, 'w> {
 
     /// The strength of the units on the fights linked to `g`, leaving out
     /// those in `set`.
-    fn linked_strength(&self, g: usize, set: &[usize]) -> f32 {
+    fn linked_strength(&self, g: usize, set: &[Member]) -> f32 {
         (self.linked[g].iter())
             .flat_map(|&h| &self.members[h])
             .filter(|r| !set.contains(r))
@@ -274,10 +280,10 @@ impl<'p, 'w> Board<'p, 'w> {
             .sum()
     }
 
-    /// What moving the unit at `r` to goal `g` gains it over its stored
-    /// worth, across the fights linked to it, among which a fight it's
-    /// taken from counts its loss.
-    fn gain(&mut self, g: usize, r: usize) -> f32 {
+    /// What moving unit `r` to goal `g` gains it over its stored worth,
+    /// across the fights linked to it, among which a fight it's taken from
+    /// counts its loss.
+    fn gain(&mut self, g: usize, r: Member) -> f32 {
         let from = self.holder.get(&r).copied().filter(|&h| h != g);
         let at = from.and_then(|h| self.lift(h, r).map(|i| (h, i)));
         self.members[g].push(r);
@@ -289,9 +295,9 @@ impl<'p, 'w> Board<'p, 'w> {
         gain
     }
 
-    /// What taking the unit at `r` from goal `h` loses it from its stored
-    /// worth, across the fights linked to it.
-    fn loss(&mut self, h: usize, r: usize) -> f32 {
+    /// What taking unit `r` from goal `h` loses it from its stored worth,
+    /// across the fights linked to it.
+    fn loss(&mut self, h: usize, r: Member) -> f32 {
         let at = self.lift(h, r);
         let loss = -self.above_stored(h);
         if let Some(i) = at {
@@ -300,17 +306,17 @@ impl<'p, 'w> Board<'p, 'w> {
         loss
     }
 
-    /// Takes the unit at `r` off goal `h`'s members for a moment: where it
-    /// was among them, to put it back.
-    fn lift(&mut self, h: usize, r: usize) -> Option<usize> {
+    /// Takes unit `r` off goal `h`'s members for a moment: where it was
+    /// among them, to put it back.
+    fn lift(&mut self, h: usize, r: Member) -> Option<usize> {
         let i = self.members[h].iter().position(|&m| m == r)?;
         self.members[h].remove(i);
         Some(i)
     }
 
-    /// Whether the unit at `r` is held to goal `h`: it's an attack, and the
-    /// unit is near enough to have locked on to it.
-    fn locked(&self, h: usize, r: usize) -> bool {
+    /// Whether unit `r` is held to goal `h`: it's an attack, and the unit
+    /// is near enough to have locked on to it.
+    fn locked(&self, h: usize, r: Member) -> bool {
         let Work::Force { attack: true, .. } = self.goals[h].work else {
             return false;
         };
@@ -327,7 +333,9 @@ impl<'p, 'w> Board<'p, 'w> {
     fn wants_more(&self, g: usize) -> bool {
         match &self.goals[g].work {
             Work::Order(_) => false,
-            Work::Unit { .. } | Work::Explore { .. } => self.members[g].is_empty(),
+            Work::Unit { .. } | Work::Explore { .. } | Work::AirAttack { .. } => {
+                self.members[g].is_empty()
+            }
             Work::Force { strength, .. } => {
                 let on: f32 = self.members[g].iter().map(|&r| self.strength(r)).sum();
                 on + self.linked_strength(g, &[]) + strength.given < strength.target
@@ -335,9 +343,9 @@ impl<'p, 'w> Board<'p, 'w> {
         }
     }
 
-    /// Moves the unit at `r` to goal `g`, from the goal holding it, which
-    /// is met again if it was settled.
-    fn take(&mut self, g: usize, r: usize) {
+    /// Moves unit `r` to goal `g`, from the goal holding it, which is met
+    /// again if it was settled.
+    fn take(&mut self, g: usize, r: Member) {
         let Some(h) = self.holder.insert(r, g) else {
             self.members[g].push(r);
             return;
@@ -383,7 +391,7 @@ impl<'p, 'w> Board<'p, 'w> {
         if let Work::Unit { organization, .. } = self.goals[g].work {
             // It takes its one unit from wherever it is, when it's worth
             // more here than there.
-            let r = organization;
+            let r = Member::Organization(organization);
             let take = match self.holder.get(&r) {
                 None => true,
                 Some(&h) => h != g && self.goals[g].priority > self.loss(h, r),
@@ -393,10 +401,11 @@ impl<'p, 'w> Board<'p, 'w> {
             }
             return;
         }
-        if !self.wants_more(g) {
+        // Nothing to look for when nothing could serve it.
+        if !self.wants_more(g) || !self.all.iter().any(|&m| self.serves(g, m)) {
             return;
         }
-        let free: Vec<usize> = (self.picture.organizations.iter().copied())
+        let free: Vec<Member> = (self.all.iter().copied())
             .filter(|r| !self.holder.contains_key(r) && self.serves(g, *r))
             .collect();
         self.take_any(g, free);
@@ -411,7 +420,7 @@ impl<'p, 'w> Board<'p, 'w> {
             if !self.wants_more(g) {
                 return;
             }
-            let theirs: Vec<usize> = (self.members[h].iter().copied())
+            let theirs: Vec<Member> = (self.members[h].iter().copied())
                 .filter(|&r| self.serves(g, r) && !self.locked(h, r))
                 .collect();
             self.take_any(g, theirs);
@@ -440,7 +449,7 @@ impl<'p, 'w> Board<'p, 'w> {
 
     /// Takes units from `candidates` that gain goal `g` anything, while it
     /// wants more.
-    fn take_any(&mut self, g: usize, candidates: Vec<usize>) {
+    fn take_any(&mut self, g: usize, candidates: Vec<Member>) {
         for r in candidates {
             if !self.wants_more(g) {
                 return;
@@ -522,9 +531,11 @@ impl<'p, 'w> Board<'p, 'w> {
         let mut orders = Vec::new();
         let mut serving = HashMap::new();
         let mut carried = Vec::new();
+        let mut struck = Vec::new();
         for g in order {
             let goal = &self.goals[g];
             let mut given: Vec<Command> = Vec::new();
+            let mut sent_at = None;
             for &r in &self.members[g] {
                 serving.insert(r, goal.key.clone());
             }
@@ -532,8 +543,8 @@ impl<'p, 'w> Board<'p, 'w> {
                 Work::Order(command) => given.push(command.clone()),
                 Work::Unit { order, .. } => given.extend(order.iter().cloned()),
                 Work::Force { to, attack, .. } => {
-                    for &r in &self.members[g] {
-                        let again = self.planner.serving.get(&r) == Some(&goal.key)
+                    for (m, r) in organizations(&self.members[g]) {
+                        let again = self.planner.serving.get(&m) == Some(&goal.key)
                             && crate::distance(world.destination(r), *to) <= STILL_HEADED;
                         if again {
                             continue;
@@ -551,8 +562,8 @@ impl<'p, 'w> Board<'p, 'w> {
                     }
                 }
                 Work::Explore { to } => {
-                    for &r in &self.members[g] {
-                        let again = self.planner.serving.get(&r) == Some(&goal.key)
+                    for (m, r) in organizations(&self.members[g]) {
+                        let again = self.planner.serving.get(&m) == Some(&goal.key)
                             && crate::distance(world.destination(r), *to) <= STILL_HEADED * 4.0;
                         if !again {
                             given.push(Command::Explore {
@@ -560,6 +571,25 @@ impl<'p, 'w> Board<'p, 'w> {
                                 to: *to,
                             });
                         }
+                    }
+                }
+                Work::AirAttack { target, at, seen } => {
+                    // It waits to strike again whether or not the airfield
+                    // sends anything.
+                    sent_at = Some(*target);
+                    for &m in &self.members[g] {
+                        let Member::AttackGroup(b) = m else { continue };
+                        if !world.buildings[b].escort {
+                            given.push(Command::Escort {
+                                building: b,
+                                on: true,
+                            });
+                        }
+                        given.push(Command::AirAttack {
+                            building: b,
+                            at: *at,
+                            on: seen.then_some(*target),
+                        });
                     }
                 }
             }
@@ -578,11 +608,13 @@ impl<'p, 'w> Board<'p, 'w> {
             );
             carried.push(goal.key.clone());
             orders.extend(given);
+            struck.extend(sent_at.map(|p| (p, orders.len())));
         }
         Chosen {
             orders,
             serving,
             carried,
+            struck,
         }
     }
 }
@@ -594,5 +626,68 @@ fn queue_at(goal: &Goal) -> Option<usize> {
             Some(*building)
         }
         _ => None,
+    }
+}
+
+/// The organizations among `members`, each with it as a member.
+fn organizations(members: &[Member]) -> impl Iterator<Item = (Member, usize)> + '_ {
+    members.iter().filter_map(|&m| match m {
+        Member::Organization(r) => Some((m, r)),
+        Member::AttackGroup(_) => None,
+    })
+}
+
+/// How unit `m` fits fight `goal` in `region`.
+fn fight_fit(planner: &Planner, picture: &Picture, goal: &Goal, region: usize, m: Member) -> Fit {
+    let Member::Organization(r) = m else {
+        return Fit::default();
+    };
+    let seconds = liking::travel_time(picture, r, region);
+    let (value, multiplier) = liking::preference(planner.ego(), picture.world, goal.kind, r);
+    Fit {
+        serves: picture.fights(r) && !planner.retreating.contains(&r) && seconds.is_finite(),
+        seconds,
+        value,
+        multiplier,
+    }
+}
+
+/// How unit `m` fits explore `goal` in `region`.
+fn explore_fit(planner: &Planner, picture: &Picture, goal: &Goal, region: usize, m: Member) -> Fit {
+    let Member::Organization(r) = m else {
+        return Fit::default();
+    };
+    let world = picture.world;
+    let (value, multiplier) = liking::preference(planner.ego(), world, goal.kind, r);
+    Fit {
+        serves: world.explores(r) && world.organizations[r].unpacks.is_none(),
+        seconds: liking::travel_time(picture, r, region),
+        value,
+        multiplier,
+    }
+}
+
+/// How unit `m` fits air attack `goal` on what's at `at`: an airfield's
+/// attack group, by how long its planes take to fly there. One whose
+/// attack is still out stays with the goal it went for.
+fn air_fit(
+    planner: &Planner,
+    picture: &Picture,
+    goal: &Goal,
+    at: [f32; 2],
+    airfields: &[(usize, f32)],
+    m: Member,
+) -> Fit {
+    let Member::AttackGroup(b) = m else {
+        return Fit::default();
+    };
+    let world = picture.world;
+    let speed = (airfields.iter().find(|&&(a, _)| a == b)).map_or(0.0, |&(_, s)| s);
+    let out = air::attack_out(world, b) && planner.serving.get(&m) != Some(&goal.key);
+    Fit {
+        serves: !out,
+        seconds: crate::distance(world.buildings[b].position, at) / speed.max(f32::MIN_POSITIVE),
+        value: 0.0,
+        multiplier: 1.0,
     }
 }

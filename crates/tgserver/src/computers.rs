@@ -145,6 +145,7 @@ mod tests {
             max_ge_commands: 100,
             max_rai_commands: 40,
             moods: Vec::new(),
+            sends_air_attacks: true,
         })
     }
 
