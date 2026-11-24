@@ -20,6 +20,11 @@
   the reading crate's module docs. Elsewhere, link to them.
 - Intentional differences from the original go in `docs/divergences.md`.
 
+## UI
+
+- When playing in original interface mode, the goal is a pixel perfect copy
+  as much as is feasible.
+
 ## Running
 
 - Run the game with `--headless` when driving it from the console, so it
