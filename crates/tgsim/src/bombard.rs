@@ -142,6 +142,20 @@ impl World {
         })
     }
 
+    /// Whether some member of the organization at `r` is already in reach
+    /// to shell `target` where it stands.
+    pub(crate) fn bombards_from_here(&self, r: usize, target: Shelled) -> bool {
+        let b = Bombardment {
+            target,
+            spot: self.spot(target),
+        };
+        self.survivors(r).any(|u| {
+            self.shell_aim(u, b).is_some_and(|aimed| {
+                (self.shelling_weapons(u, aimed).iter()).any(|&(_, near)| near)
+            })
+        })
+    }
+
     /// Whether `player` may have the organization at `r` bombard `target`.
     pub(crate) fn may_bombard(
         &self,

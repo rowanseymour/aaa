@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use super::picture::Picture;
 use super::planner::{Goal, Key, Member, Planner, Work};
 use super::{air, liking};
-use crate::{Command, Piece};
+use crate::{Command, Piece, Shelled};
 
 /// How near a unit already sent somewhere has to be headed to the place a
 /// goal wants it for the order not to be given again.
@@ -89,6 +89,8 @@ struct Fit {
     /// What the goal's preferences add for it, and multiply by.
     value: f32,
     multiplier: f32,
+    /// Its combat value, for a goal whose worth grows with it.
+    combat: f32,
 }
 
 impl<'p, 'w> Board<'p, 'w> {
@@ -120,6 +122,7 @@ impl<'p, 'w> Board<'p, 'w> {
             })
             .collect();
         let airfields = air::airfields(picture);
+        let reaches = bombard_reaches(picture);
         let all: Vec<Member> = (picture.organizations.iter())
             .map(|&r| Member::Organization(r))
             .chain(airfields.iter().map(|&(b, _)| Member::AttackGroup(b)))
@@ -161,6 +164,12 @@ impl<'p, 'w> Board<'p, 'w> {
                 Work::AirAttack { at, .. } => (all.iter())
                     .map(|&m| air_fit(planner, picture, goal, *at, &airfields, m))
                     .collect(),
+                Work::Bombard { target, at, seen } => {
+                    let shelled = shelled(*target, *at, *seen);
+                    (all.iter())
+                        .map(|&m| bombard_fit(planner, picture, goal, shelled, *at, &reaches, m))
+                        .collect()
+                }
                 _ => Vec::new(),
             })
             .collect();
@@ -208,9 +217,10 @@ impl<'p, 'w> Board<'p, 'w> {
         match &self.goals[g].work {
             Work::Order(_) => false,
             Work::Unit { organization, .. } => Member::Organization(*organization) == r,
-            Work::Force { .. } | Work::Explore { .. } | Work::AirAttack { .. } => {
-                self.fit(g, r).serves
-            }
+            Work::Force { .. }
+            | Work::Explore { .. }
+            | Work::AirAttack { .. }
+            | Work::Bombard { .. } => self.fit(g, r).serves,
         }
     }
 
@@ -233,6 +243,18 @@ impl<'p, 'w> Board<'p, 'w> {
                     true => goal.priority,
                     false => 0.0,
                 }
+            }
+            // Its one bombarder's worth grows with its strength.
+            Work::Bombard { .. } => {
+                let balancing = ego.goal_engine.combat.bombardement.balancing_constant;
+                (set.iter())
+                    .map(|&r| {
+                        let fit = self.fit(g, r);
+                        let travel = liking::travel_factor(ego, fit.seconds);
+                        let scaled = goal.priority * fit.combat / balancing.max(f32::MIN_POSITIVE);
+                        (scaled + fit.value) * fit.multiplier * travel
+                    })
+                    .fold(0.0, f32::max)
             }
             // What one unit alone carries out is worth what the best on it
             // makes it.
@@ -333,9 +355,10 @@ impl<'p, 'w> Board<'p, 'w> {
     fn wants_more(&self, g: usize) -> bool {
         match &self.goals[g].work {
             Work::Order(_) => false,
-            Work::Unit { .. } | Work::Explore { .. } | Work::AirAttack { .. } => {
-                self.members[g].is_empty()
-            }
+            Work::Unit { .. }
+            | Work::Explore { .. }
+            | Work::AirAttack { .. }
+            | Work::Bombard { .. } => self.members[g].is_empty(),
             Work::Force { strength, .. } => {
                 let on: f32 = self.members[g].iter().map(|&r| self.strength(r)).sum();
                 on + self.linked_strength(g, &[]) + strength.given < strength.target
@@ -573,6 +596,19 @@ impl<'p, 'w> Board<'p, 'w> {
                         }
                     }
                 }
+                Work::Bombard { target, at, seen } => {
+                    let target = shelled(*target, *at, *seen);
+                    for (_, r) in organizations(&self.members[g]) {
+                        let already = world.organizations[r].bombard;
+                        if already.is_some_and(|b| b.target == target) {
+                            continue;
+                        }
+                        given.push(Command::Bombard {
+                            organization: r,
+                            target,
+                        });
+                    }
+                }
                 Work::AirAttack { target, at, seen } => {
                     // It waits to strike again whether or not the airfield
                     // sends anything.
@@ -649,6 +685,7 @@ fn fight_fit(planner: &Planner, picture: &Picture, goal: &Goal, region: usize, m
         seconds,
         value,
         multiplier,
+        combat: 0.0,
     }
 }
 
@@ -664,6 +701,7 @@ fn explore_fit(planner: &Planner, picture: &Picture, goal: &Goal, region: usize,
         seconds: liking::travel_time(picture, r, region),
         value,
         multiplier,
+        combat: 0.0,
     }
 }
 
@@ -689,5 +727,80 @@ fn air_fit(
         seconds: crate::distance(world.buildings[b].position, at) / speed.max(f32::MIN_POSITIVE),
         value: 0.0,
         multiplier: 1.0,
+        combat: 0.0,
+    }
+}
+
+/// What a bombard order on `target` shells: the thing itself when it's
+/// seen, else where it was last. A building is shelled where it stood
+/// while it's out of sight, by the order itself.
+fn shelled(target: Piece, at: [f32; 2], seen: bool) -> Shelled {
+    match (target, seen) {
+        (_, true) | (Piece::Building(_), false) => Shelled::Thing(target),
+        (Piece::Organization(_), false) => Shelled::Place(at),
+    }
+}
+
+/// How far a thing can be from each of its side's organizations that
+/// bombard and still perhaps be in reach: its members' longest bombarding
+/// reach, from the farthest of them, with room for the thing's size.
+fn bombard_reaches(picture: &Picture) -> HashMap<usize, f32> {
+    /// Room for the size of what's shelled, which ranges are measured to
+    /// the edge of.
+    const SIZE: f32 = 30.0;
+    let world = picture.world;
+    (picture.organizations.iter().copied())
+        .filter(|&r| world.bombards_at_all(r))
+        .map(|r| {
+            let centre = world.centre(r);
+            let reach = (world.survivors(r))
+                .filter_map(|u| {
+                    let fighter = world.units[u].fighter.as_ref()?;
+                    let ranges = world.ranges(u);
+                    let longest = (fighter.weapons.iter().zip(ranges))
+                        .filter(|(w, _)| w.bombard)
+                        .map(|(_, range)| range)
+                        .fold(0.0, f32::max);
+                    Some(longest + crate::distance(centre, world.units[u].position))
+                })
+                .fold(0.0, f32::max);
+            (r, reach + SIZE)
+        })
+        .collect()
+}
+
+/// How unit `m` fits bombard `goal` on `target`, at `at`: an organization
+/// already in reach of it, by its combat value.
+fn bombard_fit(
+    planner: &Planner,
+    picture: &Picture,
+    goal: &Goal,
+    target: Shelled,
+    at: [f32; 2],
+    reaches: &HashMap<usize, f32>,
+    m: Member,
+) -> Fit {
+    let Member::Organization(r) = m else {
+        return Fit::default();
+    };
+    let world = picture.world;
+    let near =
+        (reaches.get(&r)).is_some_and(|&reach| crate::distance(world.centre(r), at) <= reach);
+    let serves = near && !planner.retreating.contains(&r) && world.bombards_from_here(r, target);
+    if !serves {
+        return Fit::default();
+    }
+    let (value, multiplier) = liking::preference(planner.ego(), world, goal.kind, r);
+    let speed = world.organizations[r].speed;
+    let seconds = match speed > 0.0 {
+        true => crate::distance(world.centre(r), at) / speed,
+        false => 0.0,
+    };
+    Fit {
+        serves,
+        seconds,
+        value,
+        multiplier,
+        combat: world.full_value(r),
     }
 }

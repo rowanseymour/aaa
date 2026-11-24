@@ -8,7 +8,7 @@ use tgmap::Id;
 use tgmap::sai::{Ego, Profile};
 
 use super::picture::{Known, Picture};
-use super::{ComputerPlayer, air, choosing, economy, fighting};
+use super::{ComputerPlayer, air, bombarding, choosing, economy, fighting};
 use crate::{Command, Piece, SECOND, World};
 
 /// What a goal is about, which it keeps from think to think.
@@ -24,6 +24,7 @@ pub(super) enum Key {
     Explore(u32),
     Recover(usize),
     AirAttack(Piece),
+    Bombard(Piece),
 }
 
 /// What serves a goal: an organization, or an airfield's attack group.
@@ -70,6 +71,13 @@ pub(super) enum Work {
     /// An airfield's attack group, sent at `target`, aimed at `at`: the
     /// target itself when it's seen, else where it was last.
     AirAttack {
+        target: Piece,
+        at: [f32; 2],
+        seen: bool,
+    },
+    /// A bombarder already in reach of `target`, given the bombard order on
+    /// it, or where it was last seen when it isn't.
+    Bombard {
         target: Piece,
         at: [f32; 2],
         seen: bool,
@@ -262,6 +270,7 @@ impl Planner {
         goals.extend(economy::goals(self, &picture));
         goals.extend(fighting::goals(self, &picture));
         goals.extend(air::goals(self, &picture));
+        goals.extend(bombarding::goals(self, &picture));
         self.weigh(&mut goals);
         let mut orders = self.choose(&picture, goals);
         orders.truncate(self.profile.max_ge_commands);

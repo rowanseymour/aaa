@@ -92,7 +92,7 @@ fn aloft(world: &World, piece: Piece) -> bool {
 
 /// Whether a thing is in a fight: an organization engaging or engaged, a
 /// building shooting at something or under attack.
-fn fighting(world: &World, piece: Piece) -> bool {
+pub(super) fn fighting(world: &World, piece: Piece) -> bool {
     match piece {
         Piece::Organization(r) => world.fighting(r),
         Piece::Building(b) => {
