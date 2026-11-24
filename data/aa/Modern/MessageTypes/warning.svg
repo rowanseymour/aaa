@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 68">
+  <!-- A warning triangle, on amber. -->
+  <g transform="translate(0 2)">
+    <circle cx="32" cy="32" r="30" fill="#16150f"/>
+    <circle cx="32" cy="32" r="27" fill="#e3a72a"/>
+    <circle cx="32" cy="32" r="27" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2"/>
+    <g transform="translate(32 32) scale(.62) translate(-32 -32)"><path fill="#fff" d="M32,4 L62,57 Q63,60 59,60 H5 Q1,60 2,57 Z"/><g fill="#e3a72a"><rect x="28" y="22" width="8" height="21" rx="2"/><circle cx="32" cy="51" r="4.5"/></g></g>
+  </g>
+</svg>

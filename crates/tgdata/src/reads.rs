@@ -60,6 +60,7 @@ static READS: LazyLock<HashMap<&str, Vec<Read>>> = LazyLock::new(|| {
         ("iconstandin", vec![read::<defs::IconStandIn>()]),
         ("kingdomcolor", vec![read::<defs::KingdomColor>()]),
         ("mainmenuinterface", vec![read::<defs::Interface>()]),
+        ("messagetypeicon", vec![read::<defs::MessageTypeIcon>()]),
         ("minimap", vec![read::<defs::Minimap>()]),
         ("moderninterface", vec![read::<defs::ModernInterface>()]),
         ("nation", vec![read::<defs::Nation>()]),

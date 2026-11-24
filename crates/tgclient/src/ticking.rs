@@ -201,6 +201,7 @@ mod tests {
             .insert_state(Screen::Loading)
             .insert_resource(orders)
             .insert_resource(messages::testing::log())
+            .init_resource::<crate::hud::Hud>()
             .insert_resource(sound::Sounds::of(Default::default(), &[]));
         app.update();
         other.say("hurry up".into()).unwrap();

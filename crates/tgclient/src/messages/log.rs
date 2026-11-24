@@ -17,6 +17,9 @@ use super::{CYCLE_TIMEOUT, FADE_SECONDS, KEPT, SHOWN, UP_MS};
 /// A kind of message, as its lines look.
 pub(crate) struct Kind {
     pub(crate) icon: Option<Handle<Image>>,
+    /// The path of the icon this project's own interface draws instead,
+    /// if it has one.
+    pub(crate) modern: Option<String>,
     pub(crate) colour: Color,
     pub(crate) filter: Option<String>,
     pub(crate) sound: Option<String>,
@@ -498,6 +501,14 @@ impl Look {
         formats: CompressedImageFormats,
         gem: &crate::ui::Gem,
     ) -> Look {
+        let mut modern = game.message_kind_icons();
+        modern.retain(|kind, path| {
+            let there = game.exists(path);
+            if !there {
+                warn!("{kind}'s icon: no {path} in the data");
+            }
+            there
+        });
         let kinds = game
             .message_kinds()
             .into_iter()
@@ -509,6 +520,7 @@ impl Look {
                 let [r, g, b] = k.colour;
                 let kind = Kind {
                     icon,
+                    modern: modern.remove(&k.id),
                     colour: Color::srgb(r, g, b),
                     filter: k.filter,
                     sound: k.sound,
@@ -516,6 +528,9 @@ impl Look {
                 (k.id, kind)
             })
             .collect();
+        for kind in modern.keys() {
+            warn!("{kind} has an icon but isn't a kind of message");
+        }
         let strings = game.strings();
         Look {
             kinds,

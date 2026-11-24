@@ -2,12 +2,14 @@
 //! and the icons that look at where a line happened.
 
 use bevy::ecs::system::SystemParam;
+use bevy::image::TRANSPARENT_IMAGE_HANDLE;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 use tgrender::camera::RtsCamera;
 use tgrender::space::world;
 
 use crate::displays::{self, Contents, Displays, Panel, Window};
+use crate::hud::Hud;
 use crate::ui::{Font, Hint, font};
 use crate::{Loaded, Local, Screen, Sim};
 
@@ -84,7 +86,7 @@ pub fn log_node() -> Node {
 pub fn show(
     mut commands: Commands,
     time: Res<Time>,
-    log: Res<MessageLog>,
+    (log, hud): (Res<MessageLog>, Res<Hud>),
     root: Single<(Entity, Option<&Children>), With<LogBox>>,
     rows: Query<(&Row, &Children)>,
     tree: Query<&Children>,
@@ -98,12 +100,12 @@ pub fn show(
         .filter_map(|&c| Some(rows.get(c).ok()?.0.0))
         .collect();
     let wanted: Vec<u64> = shown.iter().map(|(l, _)| l.serial).collect();
-    if laid != wanted {
+    if laid != wanted || hud.is_changed() {
         for &c in children {
             commands.entity(c).despawn();
         }
         for &(line, _) in &shown {
-            spawn_row(&mut commands, root, &log.look, line);
+            spawn_row(&mut commands, root, &log.look, line, *hud);
         }
         return;
     }
@@ -145,6 +147,7 @@ pub fn list(
     mut listed: bevy::prelude::Local<Listed>,
     displays: Res<Displays>,
     log: Res<MessageLog>,
+    hud: Res<Hud>,
     mut contents: Query<(Entity, &Contents, &mut ScrollPosition)>,
 ) {
     if !displays.is_open(Panel::MessageLog) {
@@ -154,7 +157,7 @@ pub fn list(
     let span = (log.lines.front())
         .zip(log.lines.back())
         .map(|(a, b)| (a.serial, b.serial));
-    if listed.0 == Some(span) {
+    if listed.0 == Some(span) && !hud.is_changed() {
         return;
     }
     let Some((list, _, mut scroll)) = contents
@@ -163,7 +166,7 @@ pub fn list(
     else {
         return;
     };
-    list_all(&mut commands, list, &log, &mut scroll);
+    list_all(&mut commands, list, &log, &mut scroll, *hud);
     listed.0 = Some(span);
 }
 
@@ -177,33 +180,48 @@ pub struct WholeLog(Option<Option<(u64, u64)>>);
 pub fn relist(
     mut commands: Commands,
     log: Res<MessageLog>,
+    hud: Res<Hud>,
     mut lists: Query<(Entity, &mut WholeLog, &mut ScrollPosition)>,
 ) {
     let span = (log.lines.front())
         .zip(log.lines.back())
         .map(|(a, b)| (a.serial, b.serial));
     for (list, mut shown, mut scroll) in &mut lists {
-        if shown.0 != Some(span) {
-            list_all(&mut commands, list, &log, &mut scroll);
+        if shown.0 != Some(span) || hud.is_changed() {
+            list_all(&mut commands, list, &log, &mut scroll, *hud);
             shown.0 = Some(span);
         }
     }
 }
 
 /// Lists every line of the log in `list`, scrolled to the newest.
-fn list_all(commands: &mut Commands, list: Entity, log: &MessageLog, scroll: &mut ScrollPosition) {
+fn list_all(
+    commands: &mut Commands,
+    list: Entity,
+    log: &MessageLog,
+    scroll: &mut ScrollPosition,
+    hud: Hud,
+) {
     commands.entity(list).despawn_children();
     for line in &log.lines {
-        spawn_row(commands, list, &log.look, line);
+        spawn_row(commands, list, &log.look, line, hud);
     }
     // Layout holds it to the bottom of the list.
     scroll.y = f32::MAX;
 }
 
-fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
+/// Spawns a line in `root`, its icon the one `hud` draws for its kind.
+pub(super) fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line, hud: Hud) {
     let kind = look.kinds.get(&line.kind);
     let colour = kind.map_or(Color::WHITE, |k| k.colour);
-    let icon = kind.and_then(|k| k.icon.clone()).unwrap_or_default();
+    let modern = kind
+        .and_then(|k| k.modern.clone())
+        .filter(|_| hud == Hud::Modern);
+    let icon = match modern {
+        Some(_) => None,
+        None => kind.and_then(|k| k.icon.clone()),
+    };
+    let icon = icon.unwrap_or(TRANSPARENT_IMAGE_HANDLE);
     commands
         .spawn((
             Row(line.serial),
@@ -227,6 +245,9 @@ fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
                     ..default()
                 },
             ));
+            if let Some(path) = modern {
+                icon.insert(displays::Icon::new(path));
+            }
             match line.place {
                 Some(_) => {
                     let id = crate::ui::called(format!("message.{}.look", line.serial));

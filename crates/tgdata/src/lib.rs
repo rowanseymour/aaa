@@ -1416,6 +1416,16 @@ mod tests {
     }
 
     #[test]
+    fn this_projects_own_message_kind_icons_are_there() {
+        let game = own_data();
+        let icons = game.message_kind_icons();
+        assert!(icons.contains_key(&Id::from("GENERIC_EVENT")));
+        for (kind, texture) in icons {
+            assert!(game.exists(&texture), "{kind}: no {texture}");
+        }
+    }
+
+    #[test]
     fn this_projects_own_icon_stand_ins_are_there() {
         let game = own_data();
         let stand_ins = game.icon_stand_ins();
