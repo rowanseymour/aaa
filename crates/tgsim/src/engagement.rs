@@ -5,9 +5,17 @@ use tgmap::Zone;
 
 use crate::supply::BEAT;
 use crate::{
-    CONTACT, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Relation, Step, TICK, Target, World,
-    next_chance, normalised, squared_distance, within, within_strictly,
+    CONTACT, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Relation, SECOND, Step, TICK, Target,
+    Unreached, World, next_chance, normalised, squared_distance, within, within_strictly,
 };
+
+/// How far a unit that found no way to its target has to move for it to
+/// look again.
+const UNMOVED: f32 = 0.5;
+
+/// Ticks after which a unit that found no way to its target looks again,
+/// as the way may have opened.
+const UNREACHED_RETRY: u64 = 5 * SECOND;
 
 impl World {
     /// Ends the engagements whose enemies are gone, then engages organizations
@@ -172,8 +180,8 @@ impl World {
     /// where it is to take on the next, and goes back to its place only
     /// once there's nothing left to pick. Its way is planned afresh only
     /// once the target has drifted [`PURSUIT_DRIFT`] off where it was
-    /// headed, and one that found no way there tries again only then or
-    /// once it's moved.
+    /// headed, and one that found no way there tries again only then,
+    /// once it's moved or after [`UNREACHED_RETRY`].
     pub(crate) fn close_in(&mut self) {
         for u in 0..self.units.len() {
             let unit = &self.units[u];
@@ -205,15 +213,27 @@ impl World {
                 squared_distance(at, goal) <= PURSUIT_DRIFT * squared_distance(unit.position, goal)
             };
             let on_course = unit.path.first().is_some_and(|&end| near(end));
-            // One that found no way waits for it or its target to move.
+            // One that found no way waits a while for it or its target to
+            // move.
+            let ticks = self.ticks;
             let stuck = unit.path.is_empty()
-                && (unit.unreached).is_some_and(|(at, from)| near(at) && from == unit.position);
+                && (unit.unreached).is_some_and(|n| {
+                    n.target == t
+                        && near(n.at)
+                        && within(n.from, unit.position, UNMOVED)
+                        && ticks < n.tick + UNREACHED_RETRY
+                });
             if on_course || stuck {
                 continue;
             }
             let way = self.way(u, goal);
             let unit = &mut self.units[u];
-            unit.unreached = way.is_empty().then_some((goal, unit.position));
+            unit.unreached = way.is_empty().then_some(Unreached {
+                target: t,
+                at: goal,
+                from: unit.position,
+                tick: ticks,
+            });
             unit.take(way, false);
         }
     }
@@ -828,14 +848,36 @@ mod tests {
         w.units[0].closing = Some(4.0);
         w.close_in();
         assert!(w.units[0].path.is_empty() && w.units[0].unreached.is_some());
-        // With the wall gone it doesn't look again while neither moves...
-        w.pathing = open;
+        // With the wall gone it doesn't look again while neither moves, nor
+        // for being nudged...
+        w.pathing = open.clone();
+        w.units[0].position[0] += 0.1;
         w.close_in();
         assert!(w.units[0].path.is_empty());
-        // ...but does once it has.
+        // ...but does once it has moved.
         w.units[0].position[0] += 1.0;
         w.close_in();
         assert!(!w.units[0].path.is_empty() && w.units[0].unreached.is_none());
+    }
+
+    #[test]
+    fn a_unit_with_no_way_to_its_target_tries_again_after_a_while() {
+        let mut w = skirmish();
+        let open = w.pathing.clone();
+        for x in 0..w.pathing.side as i32 {
+            w.pathing.set_blocked(tgmap::Tile::new(x, 10));
+        }
+        w.units[0].position = [11.0, 19.0];
+        w.units[0].target = Some(Target::Unit(1));
+        w.units[0].closing = Some(4.0);
+        w.close_in();
+        w.pathing = open;
+        w.ticks += super::UNREACHED_RETRY - 1;
+        w.close_in();
+        assert!(w.units[0].path.is_empty());
+        w.ticks += 1;
+        w.close_in();
+        assert!(!w.units[0].path.is_empty());
     }
 
     #[test]

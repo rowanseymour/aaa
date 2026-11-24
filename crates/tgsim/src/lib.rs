@@ -563,6 +563,16 @@ struct Leg {
     snapped: bool,
 }
 
+/// When a unit closing in last found no way to its target.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Unreached {
+    target: Target,
+    /// Where the target stood, and where the unit stood itself.
+    at: [f32; 2],
+    from: [f32; 2],
+    tick: u64,
+}
+
 #[derive(Clone)]
 pub struct Unit {
     /// Its object's id in the map.
@@ -622,9 +632,8 @@ pub struct Unit {
     /// While it's left its place to go after its target, the range it's
     /// going to be within of it.
     closing: Option<f32>,
-    /// Where its target stood, and where it stood itself, when it last
-    /// found no way to it while closing in.
-    unreached: Option<([f32; 2], [f32; 2])>,
+    /// When it last found no way to its target while closing in.
+    unreached: Option<Unreached>,
     /// The tick it next decides what to do: once the ability it's using
     /// is over, it's waited a while for one, or it's reacted to its
     /// organization engaging.
@@ -1488,6 +1497,13 @@ digest!(Build {
     template,
     at,
     facing
+});
+
+digest!(Unreached {
+    target,
+    at,
+    from,
+    tick
 });
 
 digest!(Leg {
