@@ -725,8 +725,13 @@ impl World {
                 let alive = self.units[u].alive();
                 match (hit.bombard, hit.from) {
                     // Bombardment keeps what it hurts out of supply rather
-                    // than drawing its fire.
-                    (Some(recharge), Some(from)) if alive => self.shell(r, from, recharge),
+                    // than drawing its fire. A member away from its
+                    // organization counts as itself, so not against it.
+                    (Some(recharge), Some(from)) if alive => {
+                        if self.with_organization(u) {
+                            self.shell(r, from, recharge);
+                        }
+                    }
                     (None, Some(from)) => fired_on.push((r, from)),
                     _ => {}
                 }

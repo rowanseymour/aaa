@@ -1316,6 +1316,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn bombs_flagged_for_bombardment_keep_what_they_hit_out_of_supply() {
+        let bombed = |bombard: bool| {
+            let mut w = field();
+            for o in w.rules.raisable.values_mut() {
+                for m in &mut o.members {
+                    if let Some(f) = m.fighter.as_mut() {
+                        f.weapons.iter_mut().for_each(|w| w.bombard = bombard);
+                    }
+                }
+            }
+            let mut o = truck();
+            (o.template, o.unpacks, o.primary) = ("one".into(), None, Some(0));
+            w.rules.raisable.insert(Id::from("one"), o);
+            let r = w
+                .raise(&Id::from("one"), 2, [80.0, 20.0], [0.0, 1.0])
+                .unwrap();
+            let u = w.organizations[r].units[0];
+            w.apply(1, attack(Some(Piece::Organization(r)), [80.0, 20.0]))
+                .unwrap();
+            until(&mut w, 60.0, |w| w.units[u].health < 100.0);
+            let plane = w.sorties[0].plane.unwrap();
+            let by = Piece::Organization(w.units[plane].organization);
+            (w.organizations[r].bombarded.iter().map(|b| b.by)).collect::<Vec<_>>() == [by]
+        };
+        assert!(bombed(true));
+        assert!(!bombed(false));
+    }
+
+    #[test]
     fn on_a_regiment_it_bombs_its_nearest_thing_then_the_next() {
         let mut w = field();
         let mut o = truck();
