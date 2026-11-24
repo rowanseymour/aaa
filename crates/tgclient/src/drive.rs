@@ -2,7 +2,8 @@
 //! a script can reach every screen.
 //!
 //! A button goes by its [`ButtonId`]. Clicking one activates it directly,
-//! with nothing hovered, but only where a person could: not one under
+//! with nothing hovered; right-clicking one has it take a right click
+//! where it stands. Either only where a person could: not one under
 //! whatever [`Covers`] the screen, nor one that's disabled.
 
 use bevy::camera::NormalizedRenderTarget;
@@ -88,10 +89,7 @@ pub fn buttons(world: &mut World) -> (Vec<Seen>, usize) {
 
 /// Activates the button with this id.
 pub fn click(world: &mut World, id: &str) -> Result<(), String> {
-    let button = seen(world, id)?;
-    if world.get::<bevy::ui::InteractionDisabled>(button).is_some() {
-        return Err(format!("button {id:?} is disabled"));
-    }
+    let (button, _) = pressable(world, id)?;
     world.trigger(Activate { entity: button });
     world.flush();
     Ok(())
@@ -102,14 +100,9 @@ pub fn click(world: &mut World, id: &str) -> Result<(), String> {
 /// button just let go, so it activates as a button does for any click and
 /// whatever answers a right click gets one.
 pub fn right_click(world: &mut World, id: &str) -> Result<(), String> {
-    let (seen, _) = buttons(world);
-    let button = seen.iter().find(|b| b.id.eq_ignore_ascii_case(id));
-    let button = button.ok_or_else(|| format!("no button {id:?} to press; ui lists them"))?;
-    let (entity, middle) = (button.entity, button.middle);
-    if world.get::<bevy::ui::InteractionDisabled>(entity).is_some() {
-        return Err(format!("button {id:?} is disabled"));
-    }
-    let mut mouse = world.resource_mut::<ButtonInput<MouseButton>>();
+    let (entity, middle) = pressable(world, id)?;
+    let mut mouse = (world.get_resource_mut::<ButtonInput<MouseButton>>())
+        .ok_or("there's no mouse to right-click with")?;
     mouse.press(MouseButton::Right);
     mouse.release(MouseButton::Right);
     world.entity_mut(entity).insert(bevy::ui::Pressed);
@@ -136,12 +129,21 @@ pub fn right_click(world: &mut World, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The button on screen with id `id`.
-fn seen(world: &mut World, id: &str) -> Result<Entity, String> {
+/// The button on screen with id `id`, and where its middle is.
+fn seen(world: &mut World, id: &str) -> Result<(Entity, Vec2), String> {
     let (seen, _) = buttons(world);
     let button = seen.iter().find(|b| b.id.eq_ignore_ascii_case(id));
     let button = button.ok_or_else(|| format!("no button {id:?} to press; ui lists them"))?;
-    Ok(button.entity)
+    Ok((button.entity, button.middle))
+}
+
+/// [`seen`], if it can be pressed.
+fn pressable(world: &mut World, id: &str) -> Result<(Entity, Vec2), String> {
+    let (button, middle) = seen(world, id)?;
+    if world.get::<bevy::ui::InteractionDisabled>(button).is_some() {
+        return Err(format!("button {id:?} is disabled"));
+    }
+    Ok((button, middle))
 }
 
 /// The button the pointer is held over, by [`hover`], as if the mouse were
@@ -152,7 +154,7 @@ pub struct Over(Option<Entity>);
 /// Holds the pointer over the button with id `id`, showing what hovering
 /// on it would, or with none, takes it off.
 pub fn hover(world: &mut World, id: Option<&str>) -> Result<(), String> {
-    let button = id.map(|id| seen(world, id)).transpose()?;
+    let button = id.map(|id| seen(world, id).map(|(b, _)| b)).transpose()?;
     world.resource_mut::<Over>().0 = button;
     Ok(())
 }
@@ -312,7 +314,8 @@ mod tests {
              mut clicked: ResMut<Clicked>,
              mouse: Res<ButtonInput<MouseButton>>| {
                 let right = click.button == PointerButton::Secondary;
-                if right && mouse.just_released(MouseButton::Right) {
+                let there = click.pointer.position == Vec2::new(20.0, 10.0);
+                if right && there && mouse.just_released(MouseButton::Right) {
                     clicked.0.push("right");
                 }
             },
