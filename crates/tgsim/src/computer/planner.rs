@@ -8,7 +8,7 @@ use tgmap::Id;
 use tgmap::sai::{Ego, Profile};
 
 use super::picture::{Known, Picture};
-use super::{ComputerPlayer, economy, fighting};
+use super::{ComputerPlayer, choosing, economy, fighting};
 use crate::{Command, SECOND, World};
 
 /// What a goal is about, which it keeps from think to think.
@@ -270,112 +270,16 @@ impl Planner {
         goals.sort_by(|a, b| b.priority.total_cmp(&a.priority));
     }
 
-    /// Carries out the goals that come out best, highest first, paying for
-    /// them in turn: the orders they give.
+    /// Shares units out among the goals and carries out those that come
+    /// out best: the orders they give.
     fn choose(&mut self, picture: &Picture, goals: Vec<Goal>) -> Vec<Command> {
-        let engine = self.ego().goal_engine.clone();
-        let mut left = picture.world.stockpile(picture.player);
-        let saving_for = picture.money_rate() * engine.resource_management.saving_time_limit / 60.0;
-        let mut saving = false;
-        let mut taken: HashSet<usize> = HashSet::new();
-        let mut serving = HashMap::new();
-        let mut carried = HashMap::new();
-        let mut orders = Vec::new();
-        // What this think has queued at each building.
-        let mut queued: HashMap<usize, usize> = HashMap::new();
-        let most_queued = engine.build_queue_max_items.max(1) as usize;
-        for goal in goals {
-            let queue_at = match &goal.work {
-                Work::Order(
-                    Command::Commission { building, .. } | Command::Research { building, .. },
-                ) => Some(*building),
-                _ => None,
-            };
-            if let Some(b) = queue_at {
-                let had = picture.world.buildings[b].queue.len();
-                if had + queued.get(&b).copied().unwrap_or(0) >= most_queued {
-                    continue;
-                }
-            }
-            // One whose unit is taken can't go ahead, so isn't saved for.
-            if let Work::Unit { organization, .. } = &goal.work
-                && taken.contains(organization)
-            {
-                continue;
-            }
-            if goal.cost > 0.0 {
-                if saving || goal.cost > left + saving_for.max(0.0) {
-                    continue;
-                }
-                if goal.cost > left {
-                    // Saves for it, paying for nothing below it.
-                    saving = true;
-                    continue;
-                }
-            }
-            let given = match &goal.work {
-                Work::Order(command) => Some(vec![command.clone()]),
-                Work::Unit {
-                    organization,
-                    order,
-                } => {
-                    if taken.contains(organization) {
-                        None
-                    } else {
-                        taken.insert(*organization);
-                        serving.insert(*organization, goal.key.clone());
-                        Some(order.iter().cloned().collect())
-                    }
-                }
-                Work::Force {
-                    region,
-                    to,
-                    attack,
-                    strength,
-                } => fighting::gather(
-                    self,
-                    picture,
-                    &goal,
-                    (*region, *to, *attack, *strength),
-                    &mut taken,
-                    &mut serving,
-                ),
-                Work::Explore { to } => {
-                    fighting::send_explorer(self, picture, &goal, *to, &mut taken, &mut serving)
-                }
-            };
-            let Some(mut given) = given else {
-                continue;
-            };
-            // Orders the match would refuse, such as to a unit routing, are
-            // left out.
-            given.retain(|c| picture.world.check(picture.player, c).is_ok());
-            // An order refused after all isn't carried out, nor paid for.
-            if matches!(goal.work, Work::Order(_)) && given.is_empty() {
-                continue;
-            }
-            log::debug!(
-                "{}: {} {:?} at {:.0}, costing {:.0}, {} orders",
-                picture.player,
-                goal.kind,
-                goal.key,
-                goal.priority,
-                goal.cost,
-                given.len()
-            );
-            left -= goal.cost;
-            if let Some(b) = queue_at {
-                *queued.entry(b).or_default() += 1;
-            }
-            if let Some(&fuzz) = self.pending.get(&goal.key) {
-                carried.insert(goal.key.clone(), fuzz);
-            }
-            orders.extend(given);
-        }
-        self.carried = carried;
+        let chosen = choosing::choose(self, picture, goals);
+        self.carried = (chosen.carried.into_iter())
+            .filter_map(|k| Some((k.clone(), *self.pending.get(&k)?)))
+            .collect();
         self.pending.clear();
-        self.serving = serving;
-        orders
+        self.serving = chosen.serving;
+        chosen.orders
     }
 
     /// The period between plans, in ticks.

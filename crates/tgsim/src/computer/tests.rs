@@ -354,3 +354,94 @@ fn a_hurt_unit_out_of_supply_runs_back_into_it() {
     // Within reach of the house that gives it.
     assert!(crate::distance(to, w.buildings[0].position) <= 0.9 * 30.0);
 }
+
+/// A fight in `region` of player 1's with `priority`, wanting next to no
+/// strength.
+fn fight(region: usize, attack: bool, priority: f32, w: &World) -> super::planner::Goal {
+    use super::planner::{Goal, Key, Work};
+    Goal {
+        key: match attack {
+            true => Key::Attack(region),
+            false => Key::Defend(region),
+        },
+        kind: match attack {
+            true => "ATTACK_REGION",
+            false => "DEFEND_REGION",
+        },
+        priority,
+        cost: 0.0,
+        work: Work::Force {
+            region,
+            to: w.regions.regions[region].centre,
+            attack,
+            strength: Wanted {
+                target: 1.0,
+                enough: 1.0,
+                exponent: 1.0,
+                over: 1.0,
+                given: 0.0,
+            },
+        },
+    }
+}
+
+/// The goal each of player 1's units serves once `p` has shared them out
+/// among `goals`.
+fn shared_out(
+    p: &Planner,
+    w: &World,
+    goals: Vec<super::planner::Goal>,
+) -> std::collections::HashMap<usize, super::planner::Key> {
+    let mut memory = Vec::new();
+    let picture = super::picture::Picture::new(w, 1, &mut memory);
+    super::choosing::choose(p, &picture, goals).serving
+}
+
+#[test]
+fn a_goal_takes_a_unit_from_one_ranked_above_that_gains_less_from_it() {
+    use super::planner::Key;
+    let mut w = testing::skirmish();
+    halves(&mut w);
+    rate(&mut w, "soldier", 50.0);
+    let mut ego = mood();
+    // Its rifleman is next to no use defending.
+    ego.goal_engine.goal_priority.push(GoalPriority {
+        goal_ids: Some(Id::from("DEFEND_REGION")),
+        actor_preference: vec![tgmap::sai::ActorPreference {
+            actor_ids: Some(Id::from("squad")),
+            multiplier: 0.01,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let p = planner(vec![ego]);
+    let serving = shared_out(
+        &p,
+        &w,
+        vec![fight(0, false, 1000.0, &w), fight(1, true, 900.0, &w)],
+    );
+    assert_eq!(serving.get(&0), Some(&Key::Attack(1)));
+}
+
+#[test]
+fn a_unit_stays_on_its_attack_when_one_nearby_is_ranked_higher() {
+    use super::planner::Key;
+    let mut w = testing::skirmish();
+    halves(&mut w);
+    rate(&mut w, "soldier", 50.0);
+    let goals = |w: &World| vec![fight(0, true, 1000.0, w), fight(1, true, 500.0, w)];
+    let mut p = planner(vec![mood()]);
+    p.serving.insert(0, Key::Attack(1));
+    // It's locked on to its own.
+    assert_eq!(shared_out(&p, &w, goals(&w)).get(&0), Some(&Key::Attack(1)));
+    // Not locked, it stays while the higher shares its strength, and goes
+    // where it's worth more once that doesn't.
+    for (linked, goes) in [(2, Key::Attack(1)), (0, Key::Attack(0))] {
+        let mut ego = mood();
+        ego.goal_engine.combat.linked_region_distance = linked;
+        ego.goal_engine.combat.attack_commit_distance = 0;
+        let mut p = planner(vec![ego]);
+        p.serving.insert(0, Key::Attack(1));
+        assert_eq!(shared_out(&p, &w, goals(&w)).get(&0), Some(&goes));
+    }
+}
