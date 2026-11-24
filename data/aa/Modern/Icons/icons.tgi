@@ -48,3 +48,39 @@
 	image = /Fonts/medium/1280/FactionExperience.png
 	texture = medal.svg
 }
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyExperience2.png
+	texture = experience_regular.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyExperience3.png
+	texture = experience_veteran.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyExperience4.png
+	texture = experience_elite.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyFormationAssault.png
+	texture = formation_assault.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyFormationAggressive.png
+	texture = formation_defensive.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyFormationColumn.png
+	texture = formation_column.svg
+}

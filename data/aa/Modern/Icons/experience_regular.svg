@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Regular: a gold chevron, in a light diamond. -->
+  <polygon fill="none" stroke="#1c1a10" stroke-width="4.5" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <polygon fill="none" stroke="#ecebe2" stroke-width="2" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <g stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke" fill="#e6b52f">
+    <path d="M18,30.5 L32,22.5 L46,30.5 L46,38 L32,30 L18,38 Z"/>
+  </g>
+  <path fill="#f7d35a" d="M22.5,31.9 L32,26.47 L41.5,31.9 L41.5,33.7 L32,28.27 L22.5,33.7 Z"/>
+</svg>

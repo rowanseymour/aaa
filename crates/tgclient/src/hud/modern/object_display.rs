@@ -788,7 +788,7 @@ impl Ui<'_, '_, '_> {
             ..default()
         };
         for (icon, tip, tint) in tips {
-            let icon = self.shows.image(Some(&icon));
+            let icon = self.shows.image(Some(&self.shows.game.modern_icon(&icon)));
             let picture = picture_node(icon).with_color(tint);
             let mut icon = self
                 .commands
