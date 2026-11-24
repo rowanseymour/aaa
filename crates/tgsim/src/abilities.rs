@@ -59,8 +59,10 @@ impl World {
         let r = unit.organization;
         let organization = &self.organizations[r];
         let kind = self.rules.kinds.get(&unit.template);
-        kind.is_some_and(|k| k.properties.contains(p))
-            || self.holds(organization.owner, p)
+        let on = self.weighed(crate::Target::Unit(u));
+        (kind.is_some_and(|k| k.properties.contains(p)) && self.keeps_own(&on, p))
+            || (self.holds(organization.owner, p)
+                && self.keeps_side_copy(organization.owner, &on, p))
             || self.level_property(r) == Some(p)
             || organization.properties.iter().any(|h| &h.property == p)
             || unit.properties.iter().any(|h| &h.property == p)

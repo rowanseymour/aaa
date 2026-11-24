@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use tgmap::{Id, Operation, Supply, SupplyEffect, Tile, Weapon, Zone};
 
+use crate::targets::Thing;
 use crate::{
     Building, Held, Piece, Refused, Relation, SECOND, State, TICK, Target, World, deploy_point,
     distance,
@@ -81,7 +82,13 @@ impl World {
     /// add to it.
     pub fn supply_range(&self, b: usize) -> Option<f32> {
         let building = &self.buildings[b];
-        let effects = self.effects(building.owner, &building.template, &building.properties);
+        let on = [Thing::Building(b)];
+        let effects = self.effects(
+            building.owner,
+            &building.template,
+            &building.properties,
+            &on,
+        );
         Some(self.supply_of(b)?.range + effects.map(|e| e.range).sum::<f32>())
     }
 
@@ -93,9 +100,10 @@ impl World {
         owner: u32,
         template: &Id,
         held: &'a [Held],
-    ) -> impl Iterator<Item = &'a SupplyEffect> {
+        on: &[Thing],
+    ) -> impl Iterator<Item = &'a SupplyEffect> + use<'a> {
         let table = &self.rules.supply_effects;
-        self.bearing(table, |e| &e.requires, owner, template, held)
+        self.bearing(table, |e| &e.requires, owner, template, held, on)
     }
 
     /// Carries out the special operation `operation` for `player`, aimed
@@ -486,6 +494,7 @@ impl World {
             organization.owner,
             &organization.template,
             &organization.properties,
+            &[Thing::Organization(r)],
         );
         let added: f32 = effects.map(|e| e.resupply).sum();
         (1.0 + added).max(self.rules.supply_rules.multiply_floor)
@@ -528,8 +537,10 @@ impl World {
             let short = *shorts.entry(owner).or_insert_with(|| self.short(owner));
             // Some properties stand in for an HQ, and for a zone while the
             // side can pay its upkeep.
-            let flagged = (self.effects(owner, &organization.template, &organization.properties))
-                .any(|e| e.supplied);
+            let on = [Thing::Organization(r)];
+            let held = &organization.properties;
+            let flagged =
+                (self.effects(owner, &organization.template, held, &on)).any(|e| e.supplied);
             let in_supply = sided
                 && !self.engaged_by(r)
                 && organization.bombarded.is_empty()

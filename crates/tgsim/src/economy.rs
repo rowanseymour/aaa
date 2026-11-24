@@ -9,6 +9,7 @@ use tgmap::Id;
 pub use tgmap::{Amounts, Economy, EconomyEffect, EconomyRules};
 
 use crate::properties::Held;
+use crate::targets::Thing;
 use crate::{Commission, Notice, Pause, State, TICK, Target, World};
 
 /// What a side, or one thing of it, earns and takes to keep, per minute.
@@ -122,7 +123,7 @@ impl World {
     /// What a holding of `owner`'s made from `template` adds to its
     /// economy: its own production and upkeep, as its properties leave them.
     fn holding_ledger(&self, owner: u32, template: &Id) -> Ledger {
-        let effects = self.economy_effects(owner, template, &[], []);
+        let effects = self.economy_effects(owner, template, &[], [], &[]);
         self.affected(template, &effects)
     }
 
@@ -142,16 +143,19 @@ impl World {
         template: &Id,
         with: &[&Id],
         held: impl IntoIterator<Item = &'a Held>,
+        on: &[Thing],
     ) -> Vec<&'a EconomyEffect> {
         let table = &self.rules.economy_effects;
         let kind = |t: &Id| self.rules.kinds.get(t);
-        let own = kind(template).into_iter().flat_map(|k| &k.properties);
+        let own = (kind(template).into_iter().flat_map(|k| &k.properties))
+            .filter(|p| self.keeps_own(on, p));
         let has = |p: &Id| {
             (std::iter::once(template).chain(with.iter().copied()))
                 .any(|t| kind(t).is_some_and(|k| k.properties.contains(p)))
         };
         let technologies = (self.technologies_of(owner))
-            .filter(|t| table.get(*t).is_some_and(|e| e.requires.iter().all(has)));
+            .filter(|t| table.get(*t).is_some_and(|e| e.requires.iter().all(has)))
+            .filter(|t| self.keeps_side_copy(owner, on, t));
         let timed = held.into_iter().map(|h| &h.property);
         let mut ids: Vec<&Id> = Vec::new();
         for id in own.chain(technologies).chain(timed) {
@@ -197,13 +201,15 @@ impl World {
         let mut ledger = Ledger::default();
         if !lone {
             let places: Vec<&Id> = (r.units.iter()).map(|&u| &self.units[u].template).collect();
-            let effects = self.economy_effects(r.owner, &r.template, &places, &r.properties);
+            let on = [Thing::Organization(organization)];
+            let effects = self.economy_effects(r.owner, &r.template, &places, &r.properties, &on);
             ledger += self.affected(&r.template, &effects);
         }
         for u in kept {
             let unit = &self.units[u];
             let held = self.timed_on(Target::Unit(u));
-            let effects = self.economy_effects(r.owner, &unit.template, &[], held);
+            let on = self.weighed(Target::Unit(u));
+            let effects = self.economy_effects(r.owner, &unit.template, &[], held, &on);
             let mut own = self.affected(&unit.template, &effects);
             if !unit.alive() {
                 own.production = Amounts::default();
@@ -250,7 +256,8 @@ impl World {
         }
         let e = self.economy_of(&b.template);
         let held = self.timed_on(Target::Building(building));
-        let effects = self.economy_effects(b.owner, &b.template, &[], held);
+        let on = [Thing::Building(building)];
+        let effects = self.economy_effects(b.owner, &b.template, &[], held, &on);
         let upkeep = self.affected(&b.template, &effects).upkeep;
         // Unpacking and packing aren't construction: it earns through both.
         let working = b.state == State::Standing && !b.constructing;
@@ -408,7 +415,8 @@ impl World {
     pub fn recruit_multiplier(&self, recruiter: usize) -> f32 {
         let b = &self.buildings[recruiter];
         let held = self.timed_on(Target::Building(recruiter));
-        let effects = self.economy_effects(b.owner, &b.template, &[], held);
+        let on = [Thing::Building(recruiter)];
+        let effects = self.economy_effects(b.owner, &b.template, &[], held, &on);
         let added: f32 = effects.iter().map(|e| e.recruit_cost).sum();
         (1.0 + added).max(self.rules.supply_rules.multiply_floor)
     }

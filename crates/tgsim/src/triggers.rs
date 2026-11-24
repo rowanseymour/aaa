@@ -795,7 +795,7 @@ impl World {
             "actor_loses_technology" => match (self.thing(p.first()), technology(p.get(1))) {
                 (Some(t), Some(tech)) => {
                     if !self.lose_own(t, &tech) {
-                        log::debug!("{t:?} has no copy of its own of {tech} to lose");
+                        log::debug!("{t:?} has no copy of {tech} a trigger can take");
                     }
                     true
                 }
@@ -1824,11 +1824,67 @@ mod tests {
         w.gain_taken_back(1, Id::from("radar"));
         w.gain_own(member, Id::from("radar"));
         let held = w.timed_on(crate::Target::Unit(unit));
-        assert_eq!(w.held_effect(1, &template, held, []).attack, 5.0);
+        let on = w.weighed(crate::Target::Unit(unit));
+        assert_eq!(w.held_effect(1, &template, held, &on, []).attack, 5.0);
         // Nothing's given to what has no properties.
         w.rules.kinds.clear();
         w.gain_own(crate::targets::Thing::Organization(0), Id::from("radar"));
         assert_eq!(copies(&w), 1);
+    }
+
+    #[test]
+    fn things_lose_the_copies_their_side_and_template_put_on_them() {
+        let mut w = veterans();
+        let templates: Vec<Id> = (w.organizations.iter().map(|o| o.template.clone()))
+            .chain(w.units.iter().map(|u| u.template.clone()))
+            .collect();
+        for t in templates {
+            w.rules.kinds.insert(t, tgmap::Kind::default());
+        }
+        let sharp = tgmap::CombatEffect {
+            attack: 5.0,
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert(Id::from("radar"), sharp);
+        let radar = Id::from("radar");
+        // Both its side's.
+        w.organizations[1].owner = 1;
+        let [a, b] = [w.organizations[0].units[0], w.organizations[1].units[0]];
+        let attack = |w: &World, u: usize| w.boost(u).attack;
+        let (one, two) = (
+            crate::targets::Thing::Unit(a),
+            crate::targets::Thing::Unit(b),
+        );
+        // Its side's researched copy goes from one thing, the side keeping
+        // it and its other things theirs.
+        w.gain_taken_back(1, radar.clone());
+        assert_eq!(attack(&w, a), 5.0);
+        assert!(w.lose_own(one, &radar));
+        assert!(w.holds(1, &radar));
+        assert_eq!((attack(&w, a), attack(&w, b)), (0.0, 5.0));
+        assert!(!w.lose_own(one, &radar));
+        // A second grant puts a second copy on it.
+        w.gain_taken_back(1, radar.clone());
+        assert_eq!(attack(&w, a), 5.0);
+        // One its side can't lose stays, the trigger taking another.
+        w.grant(1, radar.clone());
+        assert!(w.lose_own(two, &radar));
+        assert!(w.lose_own(two, &radar));
+        assert!(!w.lose_own(two, &radar));
+        assert_eq!(attack(&w, b), 5.0);
+        // It joins a side that has it and holds that side's copy.
+        w.organizations[0].owner = 2;
+        w.gain_taken_back(2, radar.clone());
+        assert_eq!(attack(&w, a), 5.0);
+        // Its template's copy goes too.
+        w.organizations[0].owner = 1;
+        w.technologies.clear();
+        let template = w.units[a].template.clone();
+        (w.rules.kinds.get_mut(&template).unwrap().properties).push(radar.clone());
+        assert_eq!(attack(&w, a), 5.0);
+        assert!(w.lose_own(one, &radar));
+        assert_eq!((attack(&w, a), attack(&w, b)), (0.0, 5.0));
+        assert!(!w.lose_own(one, &radar));
     }
 
     #[test]

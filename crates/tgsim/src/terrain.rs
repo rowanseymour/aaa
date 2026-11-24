@@ -148,7 +148,11 @@ impl World {
             .chain(&unit.properties)
             .map(|h| &h.property);
         let technologies = self.technologies_of(organization.owner);
-        let on = |p: &&Id| self.gains(&organization.template, p) || self.gains(&unit.template, p);
+        let things = self.weighed(crate::Target::Unit(u));
+        let on = |p: &&Id| {
+            (self.gains(&organization.template, p) || self.gains(&unit.template, p))
+                && self.keeps_side_copy(organization.owner, &things, p)
+        };
         let free = rules.free.contains(&unit.template)
             || rules.free.contains(&organization.template)
             || (timed.chain(technologies.filter(on))).any(|p| rules.unlimited.contains(p));

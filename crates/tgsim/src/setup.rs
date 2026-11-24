@@ -136,6 +136,7 @@ impl World {
             groups: Vec::new(),
             next_group: 0,
             technologies: BTreeMap::new(),
+            lost: Vec::new(),
             objectives: BTreeMap::new(),
             pools: BTreeMap::new(),
             triggers: crate::Triggers::default(),

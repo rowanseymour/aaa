@@ -166,12 +166,12 @@ impl World {
                 .into_iter()
                 .flat_map(|e| e.types.iter().cloned())
         };
-        let regiment = |r: usize, template: &Id| {
+        let regiment = |r: usize, template: &Id, on: &[Thing]| {
             let organization = &self.organizations[r];
             let (owner, held) = (organization.owner, &organization.properties);
             let kind = self.rules.kinds.get(&organization.template);
             let own = kind.into_iter().flat_map(|k| k.flags.iter().cloned());
-            let bearing = self.bearing(table, |e| &e.requires, owner, template, held);
+            let bearing = self.bearing(table, |e| &e.requires, owner, template, held, on);
             let state = self.state(r).map(Id::from);
             let fight = self.fight_state(r).map(Id::from);
             let more = [self.level_property(r).cloned(), state, fight];
@@ -185,21 +185,34 @@ impl World {
                 .collect::<Vec<_>>()
         };
         match t {
-            Thing::Organization(r) => regiment(r, &self.organizations[r].template),
+            Thing::Organization(r) => regiment(r, &self.organizations[r].template, &[t]),
             Thing::Unit(u) => {
                 let unit = &self.units[u];
                 let own = unit.fighter.iter().flat_map(|f| f.flags.iter().cloned());
                 let timed = (unit.properties.iter()).filter_map(|h| table.get(&h.property));
                 own.chain(timed.flat_map(|e| e.types.iter().cloned()))
-                    .chain(regiment(unit.organization, &unit.template))
+                    .chain(regiment(
+                        unit.organization,
+                        &unit.template,
+                        &self.weighed(Target::Unit(u)),
+                    ))
                     .collect()
             }
             Thing::Prop(_) => Vec::new(),
             Thing::Building(b) => {
                 let building = &self.buildings[b];
                 let (owner, held) = (building.owner, &building.properties);
-                let bearing = self.bearing(table, |e| &e.requires, owner, &building.template, held);
-                let handed = self.regiment_of(t).map(|r| regiment(r, &building.template));
+                let bearing = self.bearing(
+                    table,
+                    |e| &e.requires,
+                    owner,
+                    &building.template,
+                    held,
+                    &[t],
+                );
+                let handed = self
+                    .regiment_of(t)
+                    .map(|r| regiment(r, &building.template, &[t]));
                 (building.fighter.flags.iter().cloned())
                     .chain(bearing.flat_map(|e| e.types.iter().cloned()))
                     .chain(handed.into_iter().flatten())

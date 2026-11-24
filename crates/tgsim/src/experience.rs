@@ -222,10 +222,12 @@ impl World {
         owner: u32,
         template: &Id,
         held: impl IntoIterator<Item = &'a crate::Held> + 'a,
+        on: &[crate::targets::Thing],
         more: impl IntoIterator<Item = &'b Id>,
     ) -> CombatEffect {
         let table = &self.rules.combat_effects;
-        let bearing = self.bearing_with_own(table, |e| &e.requires, owner, template, held);
+        let ids = self.bearing_ids(table, |e| &e.requires, owner, template, held, on, true);
+        let bearing = ids.into_iter().filter_map(|p| table.get(p));
         let more = more.into_iter().filter_map(|p| table.get(p));
         (bearing.chain(more)).fold(CombatEffect::default(), CombatEffect::with)
     }
@@ -241,7 +243,8 @@ impl World {
         let held = self.timed_on(crate::Target::Unit(u));
         let more = [self.level_property(r), self.stance_property(u)];
         let more = more.into_iter().flatten().chain(self.entrenched_on(u));
-        self.held_effect(owner, &unit.template, held, more)
+        let on = self.weighed(crate::Target::Unit(u));
+        self.held_effect(owner, &unit.template, held, &on, more)
     }
 
     /// The most health the unit at `u` can have.

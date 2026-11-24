@@ -10,6 +10,17 @@ use crate::{Piece, TICK, World};
 /// For good, as a researched property never runs out.
 pub(crate) const KEPT: u64 = u64::MAX;
 
+/// A copy of a property a trigger took from a thing that it would have
+/// had otherwise.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Lost {
+    pub on: Thing,
+    pub property: Id,
+    /// The side whose research or trigger grant put it there; none for
+    /// one its template lists.
+    pub side: Option<u32>,
+}
+
 /// A property something has for a time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Held {
@@ -26,41 +37,48 @@ impl World {
     /// from `template` holding `held`: its side's technologies whose
     /// `requires` its kind has, then the properties it holds for a time.
     /// Each property bears once, however many copies of it there are.
-    pub(crate) fn bearing<'a, E>(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn bearing<'a, E, H: IntoIterator<Item = &'a Held> + 'a>(
         &'a self,
         table: &'a HashMap<Id, E>,
         requires: fn(&E) -> &[Id],
         owner: u32,
         template: &Id,
-        held: impl IntoIterator<Item = &'a Held> + 'a,
-    ) -> impl Iterator<Item = &'a E> {
-        let ids = self.bearing_ids(table, requires, owner, template, held, false);
+        held: H,
+        on: &[Thing],
+    ) -> impl Iterator<Item = &'a E> + use<'a, E, H> {
+        let ids = self.bearing_ids(table, requires, owner, template, held, on, false);
         ids.into_iter().filter_map(|p| table.get(p))
     }
 
     /// [`World::bearing`] after its template's own properties, each
     /// property once whichever of them it comes from.
-    pub(crate) fn bearing_with_own<'a, E>(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn bearing_with_own<'a, E, H: IntoIterator<Item = &'a Held> + 'a>(
         &'a self,
         table: &'a HashMap<Id, E>,
         requires: fn(&E) -> &[Id],
         owner: u32,
         template: &Id,
-        held: impl IntoIterator<Item = &'a Held> + 'a,
-    ) -> impl Iterator<Item = &'a E> {
-        let ids = self.bearing_ids(table, requires, owner, template, held, true);
+        held: H,
+        on: &[Thing],
+    ) -> impl Iterator<Item = &'a E> + use<'a, E, H> {
+        let ids = self.bearing_ids(table, requires, owner, template, held, on, true);
         ids.into_iter().filter_map(|p| table.get(p))
     }
 
     /// The properties of `table` that [`World::bearing`] gives, its
-    /// template's own first where `own`, each once.
-    fn bearing_ids<'a, E>(
+    /// template's own first where `own`, each once, less the copies taken
+    /// from what it's for, `on`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn bearing_ids<'a, E>(
         &'a self,
         table: &'a HashMap<Id, E>,
         requires: fn(&E) -> &[Id],
         owner: u32,
         template: &Id,
         held: impl IntoIterator<Item = &'a Held> + 'a,
+        things: &[Thing],
         own: bool,
     ) -> Vec<&'a Id> {
         let kind = self.rules.kinds.get(template);
@@ -68,12 +86,13 @@ impl World {
         let on = |p: &Id| table.get(p).is_some_and(|e| requires(e).iter().all(has));
         let mut ids: Vec<&'a Id> = match (own, kind) {
             (true, Some(k)) => (k.properties.iter().enumerate())
-                .filter(|&(i, p)| !k.properties[..i].contains(p))
+                .filter(|&(i, p)| !k.properties[..i].contains(p) && self.keeps_own(things, p))
                 .map(|(_, p)| p)
                 .collect(),
             _ => Vec::new(),
         };
-        for p in self.technologies_of(owner).filter(|p| on(p)) {
+        let left = |p: &Id| self.keeps_side_copy(owner, things, p);
+        for p in self.technologies_of(owner).filter(|p| on(p) && left(p)) {
             if !ids.contains(&p) {
                 ids.push(p);
             }
@@ -84,6 +103,53 @@ impl World {
             }
         }
         ids
+    }
+
+    /// How many copies of `property` triggers have taken from `things`:
+    /// those `side`'s grants put there, or for none those its template
+    /// lists.
+    fn lost_copies(&self, things: &[Thing], property: &Id, side: Option<u32>) -> usize {
+        (self.lost.iter())
+            .filter(|l| things.contains(&l.on) && l.property == *property && l.side == side)
+            .count()
+    }
+
+    /// Whether `things` keep the copy of `property` their template lists,
+    /// if it does.
+    pub(crate) fn keeps_own(&self, things: &[Thing], property: &Id) -> bool {
+        self.lost_copies(things, property, None) == 0
+    }
+
+    /// Whether `things`, of `owner`'s, keep a copy of `technology` from
+    /// their side's grants, if it holds any.
+    pub(crate) fn keeps_side_copy(&self, owner: u32, things: &[Thing], technology: &Id) -> bool {
+        let (given, kept) = self.side_copies(owner, technology);
+        kept || given > self.lost_copies(things, technology, Some(owner))
+    }
+
+    /// The copies of `technology` `player`'s grants put on each thing it's
+    /// on: how many a trigger can take, one for each grant from research
+    /// or a trigger, and whether there's one it can't.
+    fn side_copies(&self, player: u32, technology: &Id) -> (usize, bool) {
+        let grants = self
+            .technologies
+            .get(&player)
+            .map_or(&[][..], Vec::as_slice);
+        let of = || grants.iter().filter(|g| g.technology == *technology);
+        let given = of().filter(|g| g.source == crate::Source::Given).count();
+        (given, of().any(|g| g.source != crate::Source::Given))
+    }
+
+    /// What a thing's properties are weighed for: a unit takes its
+    /// organization's as well as its own, and a building is named twice.
+    pub(crate) fn weighed(&self, t: crate::Target) -> [Thing; 2] {
+        match t {
+            crate::Target::Unit(u) => [
+                Thing::Unit(u),
+                Thing::Organization(self.units[u].organization),
+            ],
+            crate::Target::Building(b) => [Thing::Building(b); 2],
+        }
     }
 
     /// The properties `t` holds for a time: for a unit, its
@@ -118,7 +184,8 @@ impl World {
             }
             crate::Target::Building(b) => (self.buildings[b].owner, &self.buildings[b].template),
         };
-        self.bearing(table, requires, owner, template, self.timed_on(t))
+        let on = self.weighed(t);
+        self.bearing(table, requires, owner, template, self.timed_on(t), &on)
     }
 
     /// Gives an organization or building a property for `seconds` from now,
@@ -193,16 +260,59 @@ impl World {
         }
     }
 
-    /// Takes away one of `t`'s own copies of `property` it has for good.
-    /// Returns whether there was one.
+    /// Takes away one of `t`'s copies of `property` that a trigger can
+    /// take: one of its own it has for good, else the copy its side's
+    /// research or trigger grant put on it, else the one its template
+    /// lists. Returns whether there was one.
     pub(crate) fn lose_own(&mut self, t: Thing, property: &Id) -> bool {
         let Some(held) = self.held_mut(t) else {
             return false;
         };
         let copy = (held.iter()).rposition(|h| h.property == *property && h.until == KEPT);
-        copy.map(|i| held.remove(i)).is_some()
+        if copy.map(|i| held.remove(i)).is_some() {
+            return true;
+        }
+        let Some((owner, template)) = self.owner_and_template(t) else {
+            return false;
+        };
+        let things = [t];
+        let lost = |side| self.lost_copies(&things, property, side);
+        let kind = self.rules.kinds.get(template);
+        let has = |p: &Id| kind.is_some_and(|k| k.properties.contains(p));
+        let needs = self.rules.property_requires.get(property);
+        let on_kind = kind.is_some() && needs.is_none_or(|n| n.iter().all(has));
+        let (given, _) = self.side_copies(owner, property);
+        let side = match on_kind && given > lost(Some(owner)) {
+            true => Some(owner),
+            false if has(property) && lost(None) == 0 => None,
+            false => return false,
+        };
+        self.lost.push(Lost {
+            on: t,
+            property: property.clone(),
+            side,
+        });
+        true
+    }
+
+    /// Who holds `t` and what it's made from; none for a prop.
+    fn owner_and_template(&self, t: Thing) -> Option<(u32, &Id)> {
+        match t {
+            Thing::Organization(r) => {
+                let o = &self.organizations[r];
+                Some((o.owner, &o.template))
+            }
+            Thing::Unit(u) => {
+                let unit = &self.units[u];
+                Some((self.organizations[unit.organization].owner, &unit.template))
+            }
+            Thing::Building(b) => Some((self.buildings[b].owner, &self.buildings[b].template)),
+            Thing::Prop(_) => None,
+        }
     }
 }
+
+crate::hash::digest!(Lost { on, property, side });
 
 crate::hash::digest!(Held {
     property,

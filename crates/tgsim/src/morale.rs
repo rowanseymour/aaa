@@ -143,7 +143,8 @@ impl World {
         let table = &self.rules.morale_effects;
         let level = self.level_property(r).and_then(|p| table.get(p));
         let entrenched = organization.entrenched.iter().flatten();
-        (self.template_effects(owner, template, &organization.properties))
+        let on = [crate::targets::Thing::Organization(r)];
+        (self.template_effects(owner, template, &organization.properties, &on))
             .chain(level)
             .chain(entrenched.filter_map(|p| table.get(p)))
     }
@@ -156,9 +157,10 @@ impl World {
         owner: u32,
         template: &Id,
         held: &'a [crate::Held],
-    ) -> impl Iterator<Item = &'a MoraleEffect> {
+        on: &[crate::targets::Thing],
+    ) -> impl Iterator<Item = &'a MoraleEffect> + use<'a> {
         let table = &self.rules.morale_effects;
-        self.bearing_with_own(table, |e| &e.requires, owner, template, held)
+        self.bearing_with_own(table, |e| &e.requires, owner, template, held, on)
     }
 
     /// The most morale the organization at `r` can have: what every slot
@@ -185,7 +187,8 @@ impl World {
         let members: f32 = (self.survivors(r))
             .flat_map(|u| {
                 let template = &self.units[u].template;
-                self.template_effects(organization.owner, template, &[])
+                let on = self.weighed(crate::Target::Unit(u));
+                self.template_effects(organization.owner, template, &[], &on)
                     .chain(level)
             })
             .map(|e| e.morale)
