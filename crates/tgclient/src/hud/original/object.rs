@@ -936,6 +936,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
         self.says(&parts, "", Says::Organization(r));
         if let Some(mut button) = self.entity(&parts, "") {
             shown::centres(&mut button, Says::Organization(r));
+            shown::commands_all(&mut button, r);
         }
         let parts = self.part("AttackEfficiency", &[]);
         self.efficiency(&parts, "", r);
@@ -1338,6 +1339,7 @@ impl Draw<'_, '_> {
                 Pickable::default(),
             ))
             .observe(shown::pick);
+            shown::centres(&mut node, of);
         }
         let Some(portrait) = card.children.iter().find(|c| c.name == "PortraitButton") else {
             return;

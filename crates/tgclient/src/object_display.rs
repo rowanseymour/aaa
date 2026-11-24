@@ -239,8 +239,7 @@ pub(crate) fn show_alone(
     chosen: Res<SelectedBuilding>,
     mut alone: ResMut<ShownAlone>,
 ) {
-    // A button activates on any mouse button; only the left shows it.
-    if mouse.any_just_released([MouseButton::Right, MouseButton::Middle]) {
+    if !left(&mouse) {
         return;
     }
     let Ok(&ShowAlone(of)) = parts.get(activate.entity) else {
@@ -256,6 +255,65 @@ pub(crate) fn show_alone(
     if selected.0 == [r] || (selected.0.is_empty() && building.is_some() && chosen.0 == building) {
         alone.0 = Some((r, of));
     }
+}
+
+/// Whether a button's activation now is the left mouse button's, or
+/// the console's or a key's: a button activates on any mouse button, and
+/// the display's act on the left alone.
+fn left(mouse: &ButtonInput<MouseButton>) -> bool {
+    !mouse.any_just_released([MouseButton::Right, MouseButton::Middle])
+}
+
+/// A part that gives Command All for the organization at its index: the
+/// selection becomes every organization of its HQ, or of it as one.
+#[derive(Component, Clone, Copy)]
+pub struct CommandsAll(pub(crate) usize);
+
+/// Makes `part` the button called `object.banner`, which gives Command
+/// All for the organization at `r`.
+pub(crate) fn commands_all(part: &mut EntityCommands, r: usize) {
+    let button = (Button, ui::called("object.banner"), Pickable::default());
+    part.insert((button, CommandsAll(r))).observe(command_all);
+}
+
+/// A banner of the player's own clicked with the left button: selects
+/// every organization attached to the HQ its organization is, or is
+/// attached to; one with no HQ is left as it is. Another side's isn't
+/// commanded, and would give away where its others stand.
+fn command_all(
+    activate: On<Activate>,
+    parts: Query<&CommandsAll>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    sim: Res<Sim>,
+    local: Res<Local>,
+    mut selected: ResMut<Selected>,
+    mut chosen: ResMut<SelectedBuilding>,
+) {
+    let Ok(&CommandsAll(r)) = parts.get(activate.entity) else {
+        return;
+    };
+    if !left(&mouse) {
+        return;
+    }
+    if local.0 != Some(sim.0.organizations[r].owner) {
+        return;
+    }
+    let Some(hq) = hq_for(&sim.0, r) else {
+        return;
+    };
+    selected.0 = sim.0.attached(hq).collect();
+    chosen.0 = None;
+}
+
+/// The HQ the organization at `r` is, packed or unpacked, or else the
+/// one it's attached to.
+fn hq_for(sim: &World, r: usize) -> Option<u32> {
+    let organization = &sim.organizations[r];
+    let own = match organization.unpacked_into {
+        Some(b) => sim.hq_of(b),
+        None => sim.packed_hq(r),
+    };
+    own.or(organization.hq)
 }
 
 /// The organization `of` is part of, while it stands: a living unit's, or
@@ -505,6 +563,8 @@ pub struct Looks {
     pub(crate) positions: HashMap<Id, (Vec<Option<Id>>, Option<usize>)>,
     /// The names of experience levels, by their properties' ids.
     pub(crate) levels: HashMap<Id, String>,
+    /// The game's words for speeds, each with the speeds it's for.
+    pub(crate) speeds: Vec<([f32; 2], String)>,
     /// The archive path of the picture marking a point on an
     /// organization's bars, if the layouts have one: the efficiency
     /// bar's, which the morale bar shares.
@@ -626,6 +686,7 @@ pub fn setup(
         primary_members: primary_members.collect(),
         positions: positions.collect(),
         levels: game.level_names(),
+        speeds: game.speed_words(),
         names: names.collect(),
         listings: listings.clone(),
         glyphs,
@@ -1091,6 +1152,7 @@ impl Holding {
                 let of = says(Says::Organization(r));
                 card.insert((Button, id, Pick(r), of, Pickable::default()))
                     .observe(pick);
+                centres(card, Says::Organization(r));
             }
             &Holding::Queued {
                 building, place, ..
@@ -1863,6 +1925,7 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     // outweighs disabled, even while either holds the queue up.
     match structure {
         "structure_packing" | "structure_unpacking" => Some(structure),
+        _ if building.besieged.is_some() => Some("under_siege"),
         _ if building.constructing => Some("construction"),
         "structure_researching" | "structure_recruiting" => Some(structure),
         _ if sim.out_of_supply(b) && building.standing() => Some("out_of_supply"),
@@ -1950,15 +2013,17 @@ struct Teller<'a> {
 }
 
 impl Teller<'_> {
-    /// The lines of a thing's tooltip: its template's name, then what
-    /// applies to it of its health, its stockpile and its faction. A
+    /// The lines of a thing's tooltip, in the game's order: its template's
+    /// name and health, then, for one the player sees now, its stockpile,
+    /// efficiency and morale, experience, speed, economy, technologies and
+    /// properties; then its faction, and its template's description. An
     /// organization has no health of its own to give.
     fn tip(&self, says: Says) -> Vec<String> {
         let (sim, looks) = (self.sim, self.looks);
         let name = |template: &Id| template_name(&looks.names, template.as_str());
         let row = |key: &str, value: String| self.row(key, value);
         let of = |(now, full): (f32, f32)| format!("{now:.0}/{full:.0}");
-        match says {
+        let (template, mut lines) = match says {
             Says::Unit(u) => {
                 let unit = &sim.units[u];
                 let mut lines = vec![name(&unit.template)];
@@ -1966,13 +2031,20 @@ impl Teller<'_> {
                     let health = of(measure(sim, Fill::Unit(u)));
                     lines.push(row("ui_tooltip_item_title_health", health));
                 }
-                lines.extend(self.experience(unit.organization));
                 // One that's dead says only what its template would.
+                if !unit.alive() {
+                    lines.extend(self.speed(unit.speed_max, unit.speed_max));
+                } else if self.fog.is_none_or(|f| f.lifted || f.shows_unit(u)) {
+                    // Its regiment's, as units keep none of their own.
+                    lines.extend(self.experience(unit.organization));
+                    lines.extend(self.speed(sim.unit_speed(u), unit.speed_max));
+                    lines.extend(self.held(Holder::Unit(u)));
+                }
                 if unit.alive() {
                     let owner = sim.organizations[unit.organization].owner;
                     lines.extend(self.faction(&unit.template, owner));
                 }
-                lines
+                (unit.template.clone(), lines)
             }
             Says::Building(b) => {
                 let building = &sim.buildings[b];
@@ -1981,12 +2053,23 @@ impl Teller<'_> {
                     name(&building.template),
                     row("ui_tooltip_item_title_health", health),
                 ];
-                if sim.supply_of(b).is_some_and(|s| s.relay) {
-                    let stockpile = of(measure(sim, Fill::Stockpile(b)));
-                    lines.push(row("ui_tooltip_item_title_supply_stockpile", stockpile));
+                let seen = self
+                    .fog
+                    .is_none_or(|f| f.building(b) == crate::fog::Look::Shown);
+                if seen {
+                    if sim.supply_of(b).is_some_and(|s| s.relay) {
+                        let stockpile = of(measure(sim, Fill::Stockpile(b)));
+                        lines.push(row("ui_tooltip_item_title_supply_stockpile", stockpile));
+                    }
+                    lines.extend(self.economy(Status::Building(b)));
+                    let unpacked =
+                        (sim.organizations.iter()).position(|r| r.unpacked_into == Some(b));
+                    lines.extend(self.held(Holder::Piece(
+                        unpacked.map_or(Piece::Building(b), Piece::Organization),
+                    )));
                 }
                 lines.extend(self.faction(&building.template, building.owner));
-                lines
+                (building.template.clone(), lines)
             }
             Says::Organization(r) => {
                 let organization = &sim.organizations[r];
@@ -2004,9 +2087,17 @@ impl Teller<'_> {
                             format!("{:.0}/{:.0}", organization.morale, organization.morale_max);
                         lines.push(row("ui_tooltip_item_title_morale", morale));
                     }
+                    lines.extend(self.experience(r));
+                    if organization.unpacked_into.is_none() {
+                        let plain = (organization.units.iter())
+                            .map(|&u| sim.units[u].speed_max)
+                            .fold(f32::INFINITY, f32::min);
+                        lines.extend(self.speed(sim.unhurried_speed(r), plain));
+                    }
+                    lines.extend(self.economy(Status::Organization(r)));
+                    lines.extend(self.held(Holder::Piece(Piece::Organization(r))));
                 }
-                lines.extend(self.experience(r));
-                lines
+                (organization.template.clone(), lines)
             }
             Says::Queued {
                 building: b,
@@ -2037,9 +2128,101 @@ impl Teller<'_> {
                     lines.push(row("ui_tooltip_item_title_queue_paused", looks.said(why)));
                 }
                 lines.push(looks.said("ui_tooltip_production_queue_item_cancel"));
-                lines
+                return lines;
             }
+        };
+        lines.extend(self.described(&template));
+        lines
+    }
+
+    /// The Speed row of what goes at `speed` now, in the game's word for
+    /// it; none for what can't move at all.
+    fn speed(&self, speed: f32, plain: f32) -> Option<String> {
+        if !(plain > 0.0 && plain.is_finite()) {
+            return None;
         }
+        let paces = self.looks.speeds.iter();
+        let (_, word) = paces
+            .into_iter()
+            .find(|(r, _)| (r[0]..r[1]).contains(&speed))?;
+        Some(self.row("ui_tooltip_item_title_speed", word.clone()))
+    }
+
+    /// The Production and Upkeep rows of what `status`'s thing counts for
+    /// in its side's economy now, as the economy line has it.
+    fn economy(&self, status: Status) -> Vec<String> {
+        let Some(ledger) = counted(self.sim, self.local, status) else {
+            return Vec::new();
+        };
+        let resources = &self.sim.rules().economy.resources;
+        let listed = |amounts: &tgdata::Amounts| {
+            let each = resources.iter().filter_map(|r| {
+                let amount = amounts.get(r.id.as_str()).round();
+                (amount != 0.0).then(|| format!("{amount} {}", r.name))
+            });
+            each.collect::<Vec<_>>().join(", ")
+        };
+        let rows = [
+            ("ui_tooltip_item_title_production", &ledger.production),
+            ("ui_tooltip_item_title_upkeep", &ledger.upkeep),
+        ];
+        (rows.into_iter())
+            .map(|(key, amounts)| (key, listed(amounts)))
+            .filter(|(_, said)| !said.is_empty())
+            .map(|(key, said)| self.row(key, said))
+            .collect()
+    }
+
+    /// The Technology and Properties rows: the names of the technologies
+    /// `holder` holds, then of the other properties it holds that say
+    /// anything, as its row of icons has them.
+    fn held(&self, holder: Holder) -> Vec<String> {
+        let technologies: Vec<Id> = match holder {
+            Holder::Piece(on) => self.sim.technologies_on(on),
+            Holder::Unit(u) => self.sim.unit_technologies(u),
+        }
+        .into_iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+        let named = |id: &Id| {
+            (self.looks.properties.get(id).map(|l| l.name.clone()))
+                .or_else(|| self.looks.names.get(id).cloned())
+                .filter(|n| !n.is_empty())
+        };
+        let names = |ids: &mut dyn Iterator<Item = &Id>| {
+            let mut out: Vec<String> = Vec::new();
+            for name in ids.filter_map(named) {
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+            out.join(", ")
+        };
+        let held = holding(self.sim, self.looks, holder);
+        let others = held
+            .iter()
+            .map(|(id, _)| id)
+            .filter(|id| !technologies.contains(id));
+        [
+            (
+                "ui_tooltip_item_title_properties_technology",
+                names(&mut technologies.iter()),
+            ),
+            (
+                "ui_tooltip_item_title_properties",
+                names(&mut others.into_iter()),
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, said)| !said.is_empty())
+        .map(|(key, said)| self.row(key, said))
+        .collect()
+    }
+
+    /// What `template` says of itself, if anything.
+    fn described(&self, template: &Id) -> Option<String> {
+        let listing = self.looks.listings.get(template)?;
+        listing.description.clone().filter(|d| !d.is_empty())
     }
 
     /// The experience the organization at `r` has, if it earns any: its
@@ -2515,10 +2698,11 @@ pub fn show_portrait(
 pub(crate) fn pick(
     activate: On<Activate>,
     cards: Query<&Pick>,
+    mouse: Res<ButtonInput<MouseButton>>,
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
 ) {
-    if let Ok(card) = cards.get(activate.entity) {
+    if let (Ok(card), true) = (cards.get(activate.entity), left(&mouse)) {
         selected.0 = vec![card.0];
         chosen.0 = None;
     }
@@ -2528,11 +2712,15 @@ pub(crate) fn pick(
 pub(crate) fn cancel(
     activate: On<Activate>,
     places: Query<&Queued>,
+    mouse: Res<ButtonInput<MouseButton>>,
     chosen: Res<SelectedBuilding>,
     local: Res<Local>,
     sim: Res<Sim>,
     mut orders: ResMut<Orders>,
 ) {
+    if !left(&mouse) {
+        return;
+    }
     if let (Ok(place), Some(b), Some(player)) = (places.get(activate.entity), chosen.0, local.0) {
         // By id, as what's at that place may change before it's carried out.
         if let Some(c) = sim.0.buildings[b].queue.get(place.0) {
@@ -2712,6 +2900,24 @@ mod tests {
             Some("mind_resting"),
             "ties, and wins"
         );
+    }
+
+    #[test]
+    fn a_building_under_siege_says_so_over_going_up() {
+        let mut sim = hq_by(tgsim::Rules::default());
+        sim.buildings[0].state = State::Standing;
+        sim.buildings[0].constructing = true;
+        assert_eq!(building_state(&sim, 0), Some("construction"));
+        sim.buildings[0].besieged = Some(u64::MAX);
+        assert_eq!(building_state(&sim, 0), Some("under_siege"));
+    }
+
+    #[test]
+    fn command_all_takes_the_hq_an_organization_is_attached_to() {
+        let mut sim = crate::orders::testing::fresh();
+        assert_eq!(hq_for(&sim, 0), None);
+        sim.organizations[0].hq = Some(77);
+        assert_eq!(hq_for(&sim, 0), Some(77));
     }
 
     #[test]
