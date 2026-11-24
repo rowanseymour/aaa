@@ -701,6 +701,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                 says(Says::Organization(r)),
             ));
             centres(&mut flag, Says::Organization(r));
+            commands_all(&mut flag, r);
             flag.with_children(|card| {
                 efficiency(&mut self.shows, card, at(0.0, 6.0, 63.0, 2.0), r);
                 banner(

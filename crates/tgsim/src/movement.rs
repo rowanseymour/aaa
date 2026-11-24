@@ -422,9 +422,15 @@ impl World {
             .fold(own, f32::min)
     }
 
+    /// How fast the unit at `u` can go now: its top speed, with what its
+    /// organization hands down.
+    pub fn unit_speed(&self, u: usize) -> f32 {
+        self.top_speed(u, self.handed_down_speed(self.units[u].organization))
+    }
+
     /// How fast the organization at `r` moves left to itself: as fast as
     /// its slowest member present can, whatever its group would have.
-    pub(crate) fn unhurried_speed(&self, r: usize) -> f32 {
+    pub fn unhurried_speed(&self, r: usize) -> f32 {
         let handed = self.handed_down_speed(r);
         let present = (self.organizations[r].units.iter()).filter(|&&u| self.units[u].alive());
         let slowest = (present.map(|&u| self.top_speed(u, handed))).fold(f32::INFINITY, f32::min);

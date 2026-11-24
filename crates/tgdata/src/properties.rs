@@ -134,6 +134,15 @@ impl GameData {
             .collect()
     }
 
+    /// The game's words for speeds, each with the speeds it's for, from
+    /// the least up to but not including the most.
+    pub fn speed_words(&self) -> Vec<([f32; 2], String)> {
+        let strings = self.strings();
+        (self.paces(&strings).into_iter())
+            .map(|p| (p.range, p.word))
+            .collect()
+    }
+
     /// What each shared property says under its name, by id: who it's
     /// for, then a line for each thing it does that the game has words for.
     pub(crate) fn property_lines(&self, strings: &crate::Strings) -> HashMap<Id, Vec<String>> {
