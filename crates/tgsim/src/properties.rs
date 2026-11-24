@@ -107,8 +107,13 @@ impl World {
 
     /// How many copies of `property` triggers have taken from `things`:
     /// those `side`'s grants put there, or for none those its template
-    /// lists.
+    /// lists. A regiment's loss of one it keeps from its members is its
+    /// own, so only the first of `things` counts for those.
     fn lost_copies(&self, things: &[Thing], property: &Id, side: Option<u32>) -> usize {
+        let things = match self.rules.kept_from_members.contains(property) {
+            true => &things[..things.len().min(1)],
+            false => things,
+        };
         (self.lost.iter())
             .filter(|l| things.contains(&l.on) && l.property == *property && l.side == side)
             .count()
@@ -155,18 +160,24 @@ impl World {
     /// The properties `t` holds for a time: for a unit, its
     /// organization's, which it shares, then its own, each once.
     pub(crate) fn timed_on(&self, t: crate::Target) -> impl Iterator<Item = &Held> + Clone {
-        let (handed, own): (&[Held], &[Held]) = match t {
+        let (handed, own) = match t {
             crate::Target::Unit(u) => {
                 let unit = &self.units[u];
-                (
-                    &self.organizations[unit.organization].properties,
-                    &unit.properties,
-                )
+                (Some(unit.organization), &unit.properties)
             }
-            crate::Target::Building(b) => (&[], &self.buildings[b].properties),
+            crate::Target::Building(b) => (None, &self.buildings[b].properties),
         };
-        let fresh = move |h: &&Held| !handed.iter().any(|o| o.property == h.property);
-        handed.iter().chain(own.iter().filter(fresh))
+        let handed = handed.into_iter().flat_map(|r| self.handed_down(r));
+        let shared = handed.clone();
+        let fresh = move |h: &&Held| !shared.clone().any(|o| o.property == h.property);
+        handed.chain(own.iter().filter(fresh))
+    }
+
+    /// What the organization at `r` holds for a time that its members
+    /// hold with it: all but those it keeps from them.
+    pub(crate) fn handed_down(&self, r: usize) -> impl Iterator<Item = &Held> + Clone {
+        let kept = &self.rules.kept_from_members;
+        (self.organizations[r].properties.iter()).filter(move |h| !kept.contains(&h.property))
     }
 
     /// What of `table` bears on `t` past its template's own properties:

@@ -222,6 +222,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         economy_effects: game.economy_effects(),
         enchantment_types: game.enchantment_types(),
         property_requires: game.property_requirements(),
+        kept_from_members: game.kept_from_members(),
         kinds: game.kinds(),
         sort_objectives: game.sort_objectives(),
         heroes,

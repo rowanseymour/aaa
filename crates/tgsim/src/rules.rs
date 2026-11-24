@@ -125,6 +125,8 @@ pub struct Rules {
     /// The properties a thing's kind needs for each property to be on it,
     /// for those that need any, by its id.
     pub property_requires: HashMap<Id, Vec<Id>>,
+    /// The properties a regiment holding them keeps from its members.
+    pub kept_from_members: HashSet<Id>,
     /// What each template's things are, by template, for the technologies
     /// and operations that work only on some.
     pub kinds: HashMap<Id, tgmap::Kind>,
@@ -272,6 +274,7 @@ impl Default for Rules {
             economy_effects: HashMap::new(),
             enchantment_types: HashMap::new(),
             property_requires: HashMap::new(),
+            kept_from_members: HashSet::new(),
             kinds: HashMap::new(),
             sort_objectives: true,
             difficulties: Vec::new(),

@@ -144,7 +144,7 @@ impl World {
                 .next()?,
         };
         let organization = &self.organizations[unit.organization];
-        let timed = (organization.properties.iter())
+        let timed = (self.handed_down(unit.organization))
             .chain(&unit.properties)
             .map(|h| &h.property);
         let technologies = self.technologies_of(organization.owner);
@@ -245,6 +245,11 @@ mod tests {
         });
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 2.0));
+        // but not one it keeps from its members,
+        w.rules.kept_from_members.insert(Id::from("trailblazing"));
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 0.5));
+        w.rules.kept_from_members.clear();
         w.organizations[0].properties.clear();
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 0.5));

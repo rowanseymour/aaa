@@ -166,9 +166,14 @@ impl World {
                 .into_iter()
                 .flat_map(|e| e.types.iter().cloned())
         };
-        let regiment = |r: usize, template: &Id, on: &[Thing]| {
+        // For a member, `handed` leaves out what the regiment keeps.
+        let regiment = |r: usize, template: &Id, on: &[Thing], handed: bool| {
             let organization = &self.organizations[r];
-            let (owner, held) = (organization.owner, &organization.properties);
+            let owner = organization.owner;
+            let held: Vec<&crate::Held> = match handed {
+                false => organization.properties.iter().collect(),
+                true => self.handed_down(r).collect(),
+            };
             let kind = self.rules.kinds.get(&organization.template);
             let own = kind.into_iter().flat_map(|k| k.flags.iter().cloned());
             let bearing = self.bearing(table, |e| &e.requires, owner, template, held, on);
@@ -185,7 +190,7 @@ impl World {
                 .collect::<Vec<_>>()
         };
         match t {
-            Thing::Organization(r) => regiment(r, &self.organizations[r].template, &[t]),
+            Thing::Organization(r) => regiment(r, &self.organizations[r].template, &[t], false),
             Thing::Unit(u) => {
                 let unit = &self.units[u];
                 let own = unit.fighter.iter().flat_map(|f| f.flags.iter().cloned());
@@ -195,6 +200,7 @@ impl World {
                         unit.organization,
                         &unit.template,
                         &self.weighed(Target::Unit(u)),
+                        true,
                     ))
                     .collect()
             }
@@ -212,7 +218,7 @@ impl World {
                 );
                 let handed = self
                     .regiment_of(t)
-                    .map(|r| regiment(r, &building.template, &[t]));
+                    .map(|r| regiment(r, &building.template, &[t], true));
                 (building.fighter.flags.iter().cloned())
                     .chain(bearing.flat_map(|e| e.types.iter().cloned()))
                     .chain(handed.into_iter().flatten())
@@ -366,6 +372,45 @@ mod tests {
         assert!(is(&w, Thing::Organization(1), "routing"));
         w.give(crate::Piece::Organization(1), "sabotage".into(), 10.0);
         assert!(is(&w, Thing::Unit(1), "routing sabotaged infantry"));
+    }
+
+    #[test]
+    fn what_a_regiment_keeps_from_its_members_is_its_own() {
+        let mut w = battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war());
+        let stocked = tgmap::PropertyTypes {
+            types: vec![Id::from("stocked")],
+            requires: Vec::new(),
+        };
+        w.rules.property_types.insert("oil".into(), stocked);
+        w.rules.kept_from_members.insert("oil".into());
+        w.give(crate::Piece::Organization(1), "oil".into(), 10.0);
+        assert!(is(&w, Thing::Organization(1), "stocked"));
+        assert!(!is(&w, Thing::Unit(1), "stocked"));
+        let held = |w: &World| w.timed_on(Target::Unit(1)).count();
+        assert_eq!(held(&w), 0);
+        // A member's own copy is still its own.
+        w.units[1].properties.push(crate::Held {
+            property: "oil".into(),
+            until: crate::properties::KEPT,
+            by: None,
+        });
+        assert!(is(&w, Thing::Unit(1), "stocked"));
+        assert_eq!(held(&w), 1);
+        // And taking the regiment's own copy of one its members' template
+        // lists leaves theirs.
+        let template = w.units[1].template.clone();
+        let oil = || tgmap::Kind {
+            properties: vec![Id::from("oil")],
+            ..Default::default()
+        };
+        w.rules
+            .kinds
+            .insert(w.organizations[1].template.clone(), oil());
+        w.rules.kinds.insert(template, oil());
+        assert!(w.lose_own(Thing::Organization(1), &Id::from("oil")));
+        let on = w.weighed(Target::Unit(1));
+        assert!(w.keeps_own(&on, &Id::from("oil")));
+        assert!(!w.keeps_own(&[Thing::Organization(1)], &Id::from("oil")));
     }
 
     #[test]

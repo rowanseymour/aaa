@@ -625,6 +625,9 @@ pub struct Property {
     /// Comma separated, the properties an object needs for a technology
     /// to be on it.
     pub required_properties: Option<String>,
+    /// Whether a regiment holding it hands it to its members.
+    #[serde(default = "yes")]
+    pub pass_down_members: bool,
     /// Seconds it lasts, for one an ability gives.
     pub duration: Option<f32>,
     /// What immunities to an enchantment name it by.
