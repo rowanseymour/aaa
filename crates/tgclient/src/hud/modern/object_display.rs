@@ -325,7 +325,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                         let mut card = cards.spawn((card, says(Says::Unit(u))));
                         shows_alone(
                             &mut card,
-                            Target::Unit(u),
+                            Some(Target::Unit(u)),
                             &format!("object.unit.{}", n + 1),
                         );
                         centres(&mut card, Says::Unit(u));
@@ -501,9 +501,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
             let backdrop = BackgroundColor(Color::BLACK);
             let mut portrait = display.spawn((inside, backdrop, says(of)));
             centres(&mut portrait, of);
-            if let Some(alone) = alone {
-                shows_alone(&mut portrait, alone, "object.portrait");
-            }
+            shows_alone(&mut portrait, alone, "object.portrait");
             portrait.with_child((
                 Node {
                     width: percent(100),

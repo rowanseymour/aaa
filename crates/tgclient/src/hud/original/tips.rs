@@ -272,7 +272,15 @@ fn write(lines: &mut ChildSpawnerCommands, pane: &Pane, letters: &Letters, sayin
                 title(lines, name, false);
             }
             if !hint.is_empty() {
-                lines.spawn(text(hint, pane.body));
+                lines.spawn(text("", pane.body)).with_children(|line| {
+                    for (words, colour) in crate::ui::stretches(hint) {
+                        line.spawn((
+                            TextSpan::new(words),
+                            letters.font(&pane.font),
+                            TextColor(colour.unwrap_or(pane.body)),
+                        ));
+                    }
+                });
             }
         }
         Saying::Tip(tip) => {

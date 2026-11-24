@@ -147,6 +147,8 @@ pub(crate) enum Tint {
     Friendly,
     /// An ability's, used by an enemy.
     Enemy,
+    /// An ability's, used by a side that's neither: untinted.
+    Neutral,
 }
 
 /// The actor state a building is in while under siege, whose properties
@@ -221,10 +223,14 @@ pub struct ShownAlone(pub(crate) Option<(usize, Target)>);
 #[derive(Component, Clone, Copy)]
 pub struct ShowAlone(pub(crate) Target);
 
-/// Makes `part` the button called `id`, which shows `of` on its own.
-pub(crate) fn shows_alone(part: &mut EntityCommands, of: Target, id: &str) {
-    part.insert((Button, ui::called(id), Pickable::default(), ShowAlone(of)))
-        .observe(show_alone);
+/// Makes `part` the button called `id`, which shows `of` on its own, or
+/// with none, does nothing, as clicking what's already the whole
+/// selection does.
+pub(crate) fn shows_alone(part: &mut EntityCommands, of: Option<Target>, id: &str) {
+    part.insert((Button, ui::called(id), Pickable::default()));
+    if let Some(of) = of {
+        part.insert(ShowAlone(of)).observe(show_alone);
+    }
 }
 
 /// A portrait or a unit's card clicked with the left button: shows its
@@ -371,6 +377,7 @@ fn centred(sim: &World, of: Says) -> Option<[f32; 2]> {
         Says::Unit(u) => sim.units[u].organization,
         Says::Organization(r) => r,
         Says::Building(b) => return Some(sim.position(Target::Building(b))),
+        Says::Delivery(d) => return sim.deliveries.get(d).map(|d| d.position),
         Says::Queued { .. } => return None,
     };
     Some(match sim.organizations[r].unpacked_into {
@@ -430,6 +437,9 @@ pub enum Says {
     Unit(usize),
     Building(usize),
     Organization(usize),
+    /// An aircraft bringing something in, by index into the sim's
+    /// deliveries.
+    Delivery(usize),
     /// What a building is commissioning, by place in its queue, and
     /// whether it shows in an HQ's place, where one that waits still says
     /// how far along it is.
@@ -565,6 +575,14 @@ pub struct Looks {
     pub(crate) levels: HashMap<Id, String>,
     /// The game's words for speeds, each with the speeds it's for.
     pub(crate) speeds: Vec<([f32; 2], String)>,
+    /// What colours a tooltip's figure above, below and at its plain value.
+    pub(crate) modifiers: [Color; 3],
+    /// The templates that can be recruited, in the order the data has them.
+    pub(crate) recruitables: Vec<Id>,
+    /// What each building can be rebuilt into, by template.
+    pub(crate) upgrades: HashMap<Id, Vec<Id>>,
+    /// The properties each template gives others, by template.
+    pub(crate) supports: HashMap<Id, Vec<Id>>,
     /// The archive path of the picture marking a point on an
     /// organization's bars, if the layouts have one: the efficiency
     /// bar's, which the morale bar shares.
@@ -583,14 +601,11 @@ impl Looks {
             .filter_map(|(id, tint)| Some((self.properties.get(id)?, tint)))
             .map(|(look, tint)| {
                 let said = std::iter::once(look.name.clone()).chain(look.lines.iter().cloned());
-                let tint = match tint {
-                    Tint::Plain => Color::WHITE,
-                    Tint::Side => self.side_tint,
-                    Tint::Support => self.support_tint,
-                    Tint::Friendly => self.friendly_tint,
-                    Tint::Enemy => self.enemy_tint,
-                };
-                (look.icon.clone(), said.collect::<Vec<_>>().join("\n"), tint)
+                (
+                    look.icon.clone(),
+                    said.collect::<Vec<_>>().join("\n"),
+                    self.tint(*tint),
+                )
             })
             .collect();
         let more = tips.split_off(tips.len().min(MAX_PROPERTIES));
@@ -601,6 +616,17 @@ impl Looks {
                 .join("\n")
         });
         (tips, more)
+    }
+
+    /// The colour a property's icon is in, by where it came from.
+    pub(crate) fn tint(&self, tint: Tint) -> Color {
+        match tint {
+            Tint::Plain | Tint::Neutral => Color::WHITE,
+            Tint::Side => self.side_tint,
+            Tint::Support => self.support_tint,
+            Tint::Friendly => self.friendly_tint,
+            Tint::Enemy => self.enemy_tint,
+        }
     }
 
     /// What the game's strings have under `key`.
@@ -687,6 +713,17 @@ pub fn setup(
         positions: positions.collect(),
         levels: game.level_names(),
         speeds: game.speed_words(),
+        modifiers: {
+            let [up, down, level] = game.modifier_colours();
+            [
+                colour(up, Color::srgb(0.0, 1.0, 0.0)),
+                colour(down, Color::srgb(1.0, 0.0, 0.0)),
+                colour(level, Color::WHITE),
+            ]
+        },
+        recruitables: game.recruitables(),
+        upgrades: game.upgrades(),
+        supports: game.support_properties(),
         names: names.collect(),
         listings: listings.clone(),
         glyphs,
@@ -936,7 +973,7 @@ fn holding(sim: &World, looks: &Looks, holder: Holder) -> Vec<(Id, Tint)> {
                 let tint = match h.by.map(|by| sim.sides.relation(owner, by)) {
                     Some(Relation::Itself | Relation::Ally) => Tint::Friendly,
                     Some(Relation::Enemy) => Tint::Enemy,
-                    _ => Tint::Plain,
+                    _ => Tint::Neutral,
                 };
                 (h.property.clone(), tint)
             });
@@ -1136,8 +1173,9 @@ pub(crate) enum Holding {
         place: usize,
         picture: Option<Handle<Image>>,
     },
-    /// An organization on its way by air: its picture and its name.
-    Flown(Option<Handle<Image>>, String),
+    /// An organization on its way by air: its picture, and the aircraft
+    /// bringing it, by index into the sim's deliveries.
+    Flown(Option<Handle<Image>>, usize),
     /// Nothing, saying so.
     Empty(String),
 }
@@ -1165,7 +1203,11 @@ impl Holding {
                 card.insert((Button, id, Queued(place), says(of), Pickable::default()))
                     .observe(cancel);
             }
-            Holding::Flown(_, said) | Holding::Empty(said) => {
+            &Holding::Flown(_, d) => {
+                card.insert((says(Says::Delivery(d)), Pickable::default()));
+                centres(card, Says::Delivery(d));
+            }
+            Holding::Empty(said) => {
                 card.insert((Hint(said.clone()), Pickable::default()));
             }
         }
@@ -1322,7 +1364,7 @@ impl Shows<'_> {
             (Place::Flown(d), _) => {
                 let template = self.sim.deliveries[d].template.to_string();
                 let picture = self.picture(&template);
-                Holding::Flown(picture, template_name(&self.looks.names, &template))
+                Holding::Flown(picture, d)
             }
             _ => Holding::Empty(self.looks.said(EMPTY_SLOT)),
         }
@@ -2015,9 +2057,9 @@ struct Teller<'a> {
 impl Teller<'_> {
     /// The lines of a thing's tooltip, in the game's order: its template's
     /// name and health, then, for one the player sees now, its stockpile,
-    /// efficiency and morale, experience, speed, economy, technologies and
-    /// properties; then its faction, and its template's description. An
-    /// organization has no health of its own to give.
+    /// efficiency and morale, experience, speed, cargo, economy and lists;
+    /// then its faction, and its template's description. An organization
+    /// has no health of its own to give.
     fn tip(&self, says: Says) -> Vec<String> {
         let (sim, looks) = (self.sim, self.looks);
         let name = |template: &Id| template_name(&looks.names, template.as_str());
@@ -2026,32 +2068,41 @@ impl Teller<'_> {
         let (template, mut lines) = match says {
             Says::Unit(u) => {
                 let unit = &sim.units[u];
+                let r = unit.organization;
                 let mut lines = vec![name(&unit.template)];
-                if unit.fighter.is_some() {
-                    let health = of(measure(sim, Fill::Unit(u)));
-                    lines.push(row("ui_tooltip_item_title_health", health));
+                if let Some(plain) = unit.fighter.as_ref().map(|f| f.health) {
+                    let (now, full) = measure(sim, Fill::Unit(u));
+                    lines.push(self.health(now, full, plain));
                 }
                 // One that's dead says only what its template would.
                 if !unit.alive() {
                     lines.extend(self.speed(unit.speed_max, unit.speed_max));
+                    lines.extend(self.given(&unit.template));
                 } else if self.fog.is_none_or(|f| f.lifted || f.shows_unit(u)) {
                     // Its regiment's, as units keep none of their own.
-                    lines.extend(self.experience(unit.organization));
+                    lines.extend(self.experience(r));
                     lines.extend(self.speed(sim.unit_speed(u), unit.speed_max));
-                    lines.extend(self.held(Holder::Unit(u)));
+                    lines.extend(self.economy(Status::Organization(r)));
+                    lines.extend(self.given(&unit.template));
+                    lines.extend(self.properties(Holder::Unit(u)));
                 }
                 if unit.alive() {
-                    let owner = sim.organizations[unit.organization].owner;
-                    lines.extend(self.faction(&unit.template, owner));
+                    lines.extend(self.faction(&unit.template, sim.organizations[r].owner));
+                }
+                // A regiment's unit has no description; a lone one's is
+                // its own.
+                if !lone(sim, r) {
+                    return lines;
                 }
                 (unit.template.clone(), lines)
             }
             Says::Building(b) => {
                 let building = &sim.buildings[b];
-                let health = of(measure(sim, Fill::Building(b)));
+                let remembered = self.fog.and_then(|f| f.remembered_health(b));
+                let (now, full) = remembered.unwrap_or_else(|| measure(sim, Fill::Building(b)));
                 let mut lines = vec![
                     name(&building.template),
-                    row("ui_tooltip_item_title_health", health),
+                    self.health(now, full, building.fighter.health),
                 ];
                 let seen = self
                     .fog
@@ -2062,9 +2113,15 @@ impl Teller<'_> {
                         lines.push(row("ui_tooltip_item_title_supply_stockpile", stockpile));
                     }
                     lines.extend(self.economy(Status::Building(b)));
+                    lines.extend(self.recruits(b));
+                    let upgrades = looks.upgrades.get(&building.template);
+                    let upgrades = upgrades.into_iter().flatten().rev();
+                    lines.extend(self.list("ui_tooltip_item_title_upgrades", upgrades));
+                    lines.extend(self.researches(b));
+                    lines.extend(self.given(&building.template));
                     let unpacked =
                         (sim.organizations.iter()).position(|r| r.unpacked_into == Some(b));
-                    lines.extend(self.held(Holder::Piece(
+                    lines.extend(self.properties(Holder::Piece(
                         unpacked.map_or(Piece::Building(b), Piece::Organization),
                     )));
                 }
@@ -2095,9 +2152,21 @@ impl Teller<'_> {
                         lines.extend(self.speed(sim.unhurried_speed(r), plain));
                     }
                     lines.extend(self.economy(Status::Organization(r)));
-                    lines.extend(self.held(Holder::Piece(Piece::Organization(r))));
+                    lines.extend(self.given(&organization.template));
+                    lines.extend(self.properties(Holder::Piece(Piece::Organization(r))));
                 }
                 (organization.template.clone(), lines)
+            }
+            Says::Delivery(d) => {
+                let Some(delivery) = sim.deliveries.get(d) else {
+                    return Vec::new();
+                };
+                let mut lines = vec![name(&delivery.template)];
+                let dropping = || Some(&sim.organizations[delivery.organization?].template);
+                if let Some(cargo) = delivery.cargo().or_else(dropping) {
+                    lines.push(row("ui_tooltip_item_title_transport_cargo", name(cargo)));
+                }
+                (delivery.template.clone(), lines)
             }
             Says::Queued {
                 building: b,
@@ -2135,8 +2204,28 @@ impl Teller<'_> {
         lines
     }
 
+    /// `figure` in the colour for how `now` stands to its `plain` value:
+    /// above, below or level.
+    fn modified(&self, figure: String, now: f32, plain: f32) -> String {
+        let [up, down, level] = self.looks.modifiers;
+        let colour = match now - plain {
+            d if d > 0.001 => up,
+            d if d < -0.001 => down,
+            _ => level,
+        };
+        ui::tinted(&figure, colour)
+    }
+
+    /// The Health row: `now` over `full`, tinted by `full` against the
+    /// template's `plain` most.
+    fn health(&self, now: f32, full: f32, plain: f32) -> String {
+        let figure = self.modified(format!("{now:.0}/{full:.0}"), full, plain);
+        self.row("ui_tooltip_item_title_health", figure)
+    }
+
     /// The Speed row of what goes at `speed` now, in the game's word for
-    /// it; none for what can't move at all.
+    /// it, tinted by it against its `plain` speed; none for what can't
+    /// move at all.
     fn speed(&self, speed: f32, plain: f32) -> Option<String> {
         if !(plain > 0.0 && plain.is_finite()) {
             return None;
@@ -2145,78 +2234,169 @@ impl Teller<'_> {
         let (_, word) = paces
             .into_iter()
             .find(|(r, _)| (r[0]..r[1]).contains(&speed))?;
-        Some(self.row("ui_tooltip_item_title_speed", word.clone()))
+        let word = self.modified(word.clone(), speed, plain);
+        Some(self.row("ui_tooltip_item_title_speed", word))
     }
 
-    /// The Production and Upkeep rows of what `status`'s thing counts for
-    /// in its side's economy now, as the economy line has it.
+    /// The economy rows of what `status`'s thing counts for in its side's
+    /// economy: Production and Upkeep now, each with what it would be in
+    /// full under it where that differs.
     fn economy(&self, status: Status) -> Vec<String> {
-        let Some(ledger) = counted(self.sim, self.local, status) else {
+        let Some(now) = counted(self.sim, self.local, status) else {
             return Vec::new();
         };
-        let resources = &self.sim.rules().economy.resources;
-        let listed = |amounts: &tgdata::Amounts| {
-            let each = resources.iter().filter_map(|r| {
-                let amount = amounts.get(r.id.as_str()).round();
-                (amount != 0.0).then(|| format!("{amount} {}", r.name))
-            });
-            each.collect::<Vec<_>>().join(", ")
+        // Only a building ever counts for less than it would.
+        let full = match status {
+            Status::Building(b) | Status::Structure(b) => self.sim.building_full_ledger(b),
+            Status::Organization(r) => match self.sim.organizations[r].unpacked_into {
+                Some(b) => self.sim.building_full_ledger(b),
+                None => now.clone(),
+            },
+            Status::Unit(_) => now.clone(),
         };
-        let rows = [
-            ("ui_tooltip_item_title_production", &ledger.production),
-            ("ui_tooltip_item_title_upkeep", &ledger.upkeep),
+        let resources = &self.sim.rules().economy.resources;
+        // Each resource's production less its upkeep, in resource order.
+        let net = |l: &Ledger| -> Vec<f32> {
+            (resources.iter())
+                .map(|r| l.production.get(r.id.as_str()) - l.upkeep.get(r.id.as_str()))
+                .collect()
+        };
+        let (now, full) = (net(&now), net(&full));
+        let listed = |nets: &[f32], made: bool| {
+            let each = resources.iter().zip(nets).filter_map(|(r, &n)| {
+                let n = (n * 1000.0).round() / 1000.0;
+                if n == 0.0 || (n > 0.0) != made {
+                    return None;
+                }
+                Some(match r.role == tgdata::ResourceRole::LimitedConsumed {
+                    true => format!("{} {}", n.abs().round(), r.name),
+                    false => format!("{n:+} {}", r.name),
+                })
+            });
+            each.collect::<Vec<_>>().join(" ")
+        };
+        let mut lines = Vec::new();
+        let sides = [
+            (
+                true,
+                "ui_tooltip_item_title_production",
+                "ui_tooltip_item_title_production_potential",
+            ),
+            (
+                false,
+                "ui_tooltip_item_title_upkeep",
+                "ui_tooltip_item_title_upkeep_potential",
+            ),
         ];
-        (rows.into_iter())
-            .map(|(key, amounts)| (key, listed(amounts)))
-            .filter(|(_, said)| !said.is_empty())
-            .map(|(key, said)| self.row(key, said))
-            .collect()
+        for (made, title, maximum) in sides {
+            let (said, most) = (listed(&now, made), listed(&full, made));
+            if !said.is_empty() || said != most {
+                lines.push(self.row(title, said.clone()));
+            }
+            if said != most {
+                lines.push(self.row(maximum, most));
+            }
+        }
+        lines
     }
 
-    /// The Technology and Properties rows: the names of the technologies
-    /// `holder` holds, then of the other properties it holds that say
-    /// anything, as its row of icons has them.
-    fn held(&self, holder: Holder) -> Vec<String> {
-        let technologies: Vec<Id> = match holder {
-            Holder::Piece(on) => self.sim.technologies_on(on),
-            Holder::Unit(u) => self.sim.unit_technologies(u),
-        }
-        .into_iter()
-        .map(|(id, _)| id.clone())
-        .collect();
-        let named = |id: &Id| {
-            (self.looks.properties.get(id).map(|l| l.name.clone()))
-                .or_else(|| self.looks.names.get(id).cloned())
-                .filter(|n| !n.is_empty())
-        };
-        let names = |ids: &mut dyn Iterator<Item = &Id>| {
-            let mut out: Vec<String> = Vec::new();
-            for name in ids.filter_map(named) {
-                if !out.contains(&name) {
-                    out.push(name);
+    /// A list row: its title and the names of `ids`, those with names,
+    /// joined by ", "; none when there are none.
+    fn list<'i>(&self, key: &str, ids: impl Iterator<Item = &'i Id>) -> Option<String> {
+        let names: Vec<String> = ids.filter_map(|id| self.named(id)).collect();
+        (!names.is_empty()).then(|| self.row(key, names.join(", ")))
+    }
+
+    /// What the game calls a template, technology or property.
+    fn named(&self, id: &Id) -> Option<String> {
+        let looks = self.looks;
+        (looks.names.get(id).cloned())
+            .or_else(|| looks.properties.get(id).map(|l| l.name.clone()))
+            .filter(|n| !n.is_empty())
+    }
+
+    /// The Recruits row of the building at `b`: the recruitable templates
+    /// that need it, those its side may make by its technologies, each
+    /// with the other buildings it needs.
+    fn recruits(&self, b: usize) -> Option<String> {
+        let (sim, looks) = (self.sim, self.looks);
+        let building = &sim.buildings[b];
+        let owner = building.owner;
+        let needs_it = |group: &Vec<Id>| group.contains(&building.template);
+        let names: Vec<String> = (looks.recruitables.iter())
+            .filter_map(|template| {
+                let requires = sim.rules().requires.get(template)?;
+                let allowed = !sim.barred(owner, template)
+                    && requires.properties.iter().all(|p| sim.holds(owner, p));
+                if !requires.structures.iter().any(needs_it) || !allowed {
+                    return None;
                 }
-            }
-            out.join(", ")
-        };
-        let held = holding(self.sim, self.looks, holder);
-        let others = held
-            .iter()
-            .map(|(id, _)| id)
-            .filter(|id| !technologies.contains(id));
+                let name = self.named(template)?;
+                let others: Vec<String> = (requires.structures.iter())
+                    .filter(|g| !needs_it(g))
+                    .filter_map(|g| self.named(g.first()?))
+                    .collect();
+                if others.is_empty() {
+                    return Some(name);
+                }
+                let with = looks.said("ui_tooltip_other_requirements|s");
+                Some(name + &crate::messages::filled(&with, &[others.join(", ")]))
+            })
+            .collect();
+        (!names.is_empty()).then(|| self.row("ui_tooltip_item_title_recruits", names.join(", ")))
+    }
+
+    /// The Researches row of the building at `b`: what its research menu
+    /// offers its side, done or under way included.
+    fn researches(&self, b: usize) -> Option<String> {
+        let sim = self.sim;
+        let owner = sim.buildings[b].owner;
+        let offered = (sim.research_list(b).iter())
+            .zip(sim.researchables(owner, b))
+            .filter(|(_, r)| *r != tgsim::Researchable::Hidden)
+            .map(|(item, _)| &item.technology);
+        self.list("ui_tooltip_item_title_researches", offered)
+    }
+
+    /// The Provides and Technology rows of `template`: what it gives
+    /// others, and, for a building, the technologies it gives its side.
+    fn given(&self, template: &Id) -> Vec<String> {
+        let supports = self.looks.supports.get(template).into_iter().flatten();
+        let granted = self.sim.rules().granted.get(template).into_iter().flatten();
         [
-            (
-                "ui_tooltip_item_title_properties_technology",
-                names(&mut technologies.iter()),
-            ),
-            (
-                "ui_tooltip_item_title_properties",
-                names(&mut others.into_iter()),
-            ),
+            self.list("ui_tooltip_item_title_properties_provided", supports),
+            self.list("ui_tooltip_item_title_properties_technology", granted),
         ]
         .into_iter()
-        .filter(|(_, said)| !said.is_empty())
-        .map(|(key, said)| self.row(key, said))
+        .flatten()
         .collect()
+    }
+
+    /// The Properties row: the names of the properties `holder` holds from
+    /// its side, a building or an ability, in its row of icons' order,
+    /// each in its icon's tint, as is the comma after it.
+    fn properties(&self, holder: Holder) -> Option<String> {
+        let looks = self.looks;
+        let held = holding(self.sim, looks, holder);
+        let mut seen: Vec<&Id> = Vec::new();
+        let mut named: Vec<(String, Color)> = Vec::new();
+        for (id, tint) in held.iter().filter(|(_, tint)| *tint != Tint::Plain) {
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            if let Some(look) = looks.properties.get(id) {
+                named.push((look.name.clone(), looks.tint(*tint)));
+            }
+        }
+        let last = named.len().checked_sub(1)?;
+        let said: String = (named.iter().enumerate())
+            .map(|(i, (name, colour))| match i == last {
+                true => ui::tinted(name, *colour),
+                false => ui::tinted(&format!("{name}, "), *colour),
+            })
+            .collect();
+        Some(self.row("ui_tooltip_item_title_properties", said))
     }
 
     /// What `template` says of itself, if anything.
