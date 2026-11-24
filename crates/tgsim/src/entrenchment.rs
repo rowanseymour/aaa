@@ -61,7 +61,8 @@ impl World {
         let e = &self.rules.entrenchment;
         let time = *e.times.get(template)?;
         let held = &organization.properties;
-        let bearing = self.bearing_with_own(&e.rates, |e| &e.requires, owner, template, held);
+        let on = [crate::targets::Thing::Organization(r)];
+        let bearing = self.bearing_with_own(&e.rates, |e| &e.requires, owner, template, held, &on);
         let rate = 1.0 + bearing.map(|e| e.rate).sum::<f32>();
         (rate > 0.0).then(|| time / rate)
     }

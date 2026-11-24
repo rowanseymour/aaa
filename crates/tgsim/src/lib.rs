@@ -202,6 +202,8 @@ pub struct World {
     pub cleared: Vec<u32>,
     /// Each side's grants of technologies, by player id, oldest first.
     pub technologies: BTreeMap<u32, Vec<Granted>>,
+    /// The copies of properties triggers have taken from things.
+    pub(crate) lost: Vec<properties::Lost>,
     /// The objectives each side holds, by player id.
     pub objectives: BTreeMap<u32, Objectives>,
     /// The heroes each side holds, by player id.
@@ -1454,7 +1456,7 @@ impl Sides {
 }
 
 digest!(World {
-    organizations, units, buildings, props, deliveries, sorties, next_wave, cleared, technologies, objectives, fates, over,
+    organizations, units, buildings, props, deliveries, sorties, next_wave, cleared, technologies, lost, objectives, fates, over,
     groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng, sides,
 } skip {

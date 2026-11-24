@@ -25,6 +25,7 @@ impl World {
             owner,
             &organization.template,
             held,
+            &[crate::targets::Thing::Organization(r)],
             more.into_iter().flatten(),
         )
     }

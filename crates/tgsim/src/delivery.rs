@@ -500,7 +500,7 @@ impl World {
     /// The top speed `owner`'s aircraft flying `airlift` has: its speed
     /// as the side's technologies on its kind change it.
     fn plane_speed(&self, owner: u32, airlift: &tgmap::Airlift) -> f32 {
-        let effect = self.held_effect(owner, &airlift.transport, [], []);
+        let effect = self.held_effect(owner, &airlift.transport, [], &[], []);
         airlift.speed * (1.0 + effect.speed).max(crate::value::MULTIPLY_FLOOR)
     }
 
