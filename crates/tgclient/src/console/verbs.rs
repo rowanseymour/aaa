@@ -119,8 +119,8 @@ pub(crate) const VERBS: &[Verb] = &[
     ),
     verb(
         "click",
-        "button",
-        "presses a button, by its id; ui lists them",
+        "button [left | right]",
+        "presses a button, by its id, with the left mouse button or the right; ui lists them",
         |world, args, _| click(world, args),
     ),
     verb(
