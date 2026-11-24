@@ -97,13 +97,28 @@ pub(crate) fn pointer(world: &mut World, args: &[&str]) -> Reply {
 }
 
 pub(crate) fn mouse(world: &mut World, args: &[&str]) -> Reply {
-    let button = match args {
-        ["left"] => MouseButton::Left,
-        ["right"] => MouseButton::Right,
+    let [chord] = args else {
+        return Err(usage("mouse"));
+    };
+    let (held, button) = chord.rsplit_once('-').unwrap_or(("", chord));
+    let button = match button {
+        "left" => MouseButton::Left,
+        "right" => MouseButton::Right,
         _ => return Err(usage("mouse")),
     };
+    let mut keys = Vec::new();
+    for key in held.split('-').filter(|k| !k.is_empty()) {
+        keys.push(match key {
+            "shift" => KeyCode::ShiftLeft,
+            "ctrl" => KeyCode::ControlLeft,
+            "alt" => KeyCode::AltLeft,
+            _ => return Err(usage("mouse")),
+        });
+    }
+    crate::drive::hold(world, &keys);
     crate::drive::mouse(world, button, bevy::input::ButtonState::Pressed);
     let mut console = world.resource_mut::<Console>();
+    console.held.extend(keys);
     console.held_mouse = Some(button);
     console.settling = SETTLE_FRAMES;
     Ok(String::new())

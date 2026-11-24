@@ -57,7 +57,7 @@ fn turned(at: [f32; 2], to: [f32; 2]) -> [f32; 2] {
 /// go up there; a right click calls placing off.
 #[allow(clippy::too_many_arguments)]
 pub fn place(
-    buttons: Res<ButtonInput<MouseButton>>,
+    (buttons, keys): (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>),
     pointer: Pointer,
     loaded: Res<Loaded>,
     local: Res<Local>,
@@ -102,6 +102,7 @@ pub fn place(
         return;
     };
     let size = loaded.map.ground.size();
+    orders.queue(crate::commanding::queuing(&keys));
     let mut sent = Vec::new();
     for build in build_orders(&sim.0, &selected.0, &template, (at, facing), size) {
         let tgsim::Command::Build { organization, .. } = build else {

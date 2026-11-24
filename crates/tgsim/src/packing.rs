@@ -125,6 +125,8 @@ impl World {
             }
             let b = self.buildings.len();
             self.organizations[r].unpacked_into = Some(b);
+            // A building has no use for orders queued behind its unpack.
+            self.organizations[r].queue.clear();
             self.refigure_morale(r, true);
             // It keeps the truck's number rather than taking one.
             self.push_buildings(std::slice::from_ref(&building), false);

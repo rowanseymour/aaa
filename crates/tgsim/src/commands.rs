@@ -127,6 +127,7 @@ impl World {
             Command::Escort { building, .. } => self.may_set_escort(player, building),
             Command::Heard { ref command } => self.may_hear(command),
             Command::Select { ref pieces } => self.may_select(pieces),
+            Command::Queued { ref command } => self.may_queue(player, command),
         }
     }
 
@@ -276,6 +277,7 @@ impl World {
             }
             Command::Escort { building, on } => self.set_escort(player, building, on)?,
             Command::Group { orders } => self.order_group(player, orders)?,
+            Command::Queued { command } => self.order_queued(player, *command)?,
             Command::Heard { command } => self.hear(&command)?,
             Command::Select { pieces } => {
                 self.may_select(&pieces)?;
@@ -284,6 +286,9 @@ impl World {
         }
         if let (Some(r), false) = (steering, grouped) {
             self.leave_group(r);
+        }
+        if let Some(r) = steering {
+            self.organizations[r].queue.clear();
         }
         // Any other order is a new one for its members, which bombarding
         // gives way to, whether or not it sends them anywhere.

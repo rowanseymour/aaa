@@ -114,7 +114,7 @@ fn air_attack(
 /// for the selected building.
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
-    buttons: Res<ButtonInput<MouseButton>>,
+    (buttons, keys): (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>),
     pointer: crate::pointing::Pointer,
     scenery: Res<crate::banners::Scenery>,
     loaded: Res<Loaded>,
@@ -231,6 +231,7 @@ pub fn aim(
         Some(r) => vec![r],
         None => selected.0.clone(),
     };
+    orders.queue(crate::commanding::queuing(&keys));
     // With Group Behavior on, what each is told goes as one group.
     if groups.grouping(&given) {
         orders.gather(player);
