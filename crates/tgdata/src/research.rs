@@ -23,8 +23,9 @@ pub struct Research {
     pub grant: Grant,
     pub seconds: f32,
     pub cost: Amounts,
-    /// Each building it needs, by every id it may go by on a map: its
-    /// current one first, then any it was renamed from.
+    /// Each building it needs, by every id that meets the need for it:
+    /// its current one first, then any it was renamed from and what it
+    /// upgrades into.
     pub structures: Vec<Vec<Id>>,
     /// Whether one of `structures` is enough, rather than all.
     pub structures_any: bool,
@@ -48,19 +49,21 @@ impl GameData {
 
     pub fn research_lists(&self) -> HashMap<Id, Vec<Research>> {
         let aliases = self.structure_aliases();
+        let upgrades = self.upgrades();
+        let meeting = |s: &Id| crate::recruiting::meeting(s, &aliases, &upgrades);
         self.by_template(|t| {
             let items = &t.research_component.as_ref()?.research_item;
-            let list: Vec<Research> = items.iter().filter_map(|i| research(i, &aliases)).collect();
+            let list: Vec<Research> = items.iter().filter_map(|i| research(i, &meeting)).collect();
             (!list.is_empty()).then_some(list)
         })
     }
 }
 
-/// An item as researched, with `aliases` giving every id a building may
-/// go by; `None` for one naming no property.
+/// An item as researched, with `meeting` giving every id that meets the
+/// need for a building; `None` for one naming no property.
 pub(crate) fn research(
     item: &defs::ResearchItem,
-    aliases: &impl Fn(&Id) -> Vec<Id>,
+    meeting: &impl Fn(&Id) -> Vec<Id>,
 ) -> Option<Research> {
     let technology = item.property_ids.clone()?;
     let grant = match item.kind.as_deref() {
@@ -79,7 +82,7 @@ pub(crate) fn research(
             .unwrap_or_default(),
         structures: listed(item.required_structures.as_deref())
             .iter()
-            .map(aliases)
+            .map(meeting)
             .collect(),
         structures_any: item.required_structures_any,
         properties: listed(item.required_properties.as_deref()),
@@ -124,8 +127,10 @@ mod tests {
             "depot" => vec![id.clone(), Id::from("old_depot")],
             _ => vec![id.clone()],
         };
+        let upgrades = HashMap::from([(Id::from("corps"), vec![Id::from("army")])]);
+        let meeting = |s: &Id| crate::recruiting::meeting(s, aliases, &upgrades);
         let items = &thing.research_component.unwrap().research_item;
-        let list: Vec<Research> = items.iter().filter_map(|i| research(i, &aliases)).collect();
+        let list: Vec<Research> = items.iter().filter_map(|i| research(i, &meeting)).collect();
         // One naming nothing to research is passed over.
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].technology, Id::from("tech_heavy"));
@@ -137,7 +142,7 @@ mod tests {
         let ids = |of: &[&str]| -> Vec<Id> { of.iter().map(|&s| Id::from(s)).collect() };
         assert_eq!(
             list[1].structures,
-            [ids(&["depot", "old_depot"]), ids(&["corps"])]
+            [ids(&["depot", "old_depot"]), ids(&["corps", "army"])]
         );
         assert!(list[1].structures_any && !list[1].properties_any);
     }

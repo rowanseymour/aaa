@@ -139,7 +139,7 @@ pub struct DeployPoints {
 /// Every structure id that meets a need for `structure`: each id it goes
 /// by (see [`GameData::structure_aliases`]), its own first, then those of
 /// what it upgrades into, however many times over.
-fn meeting(
+pub(crate) fn meeting(
     structure: &Id,
     aliases: impl Fn(&Id) -> Vec<Id>,
     upgrades: &HashMap<Id, Vec<Id>>,

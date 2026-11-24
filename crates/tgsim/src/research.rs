@@ -235,8 +235,9 @@ impl World {
         })
     }
 
-    /// Of `structures`, each building by every id it goes by, the first id
-    /// of each `player` lacks: none where `any` and one stands.
+    /// Of `structures`, each building by every id that meets the need for
+    /// it, the first id of each `player` lacks: none where `any` and one
+    /// stands.
     fn missing(&self, player: u32, building: usize, structures: &[Vec<Id>], any: bool) -> Vec<Id> {
         let missing: Vec<Id> = (structures.iter())
             .filter(|ids| !self.stands(player, building, ids))
