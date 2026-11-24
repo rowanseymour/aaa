@@ -19,8 +19,8 @@ use tgsim::{Relation, Target};
 use super::Pictures;
 use super::lettering::{Letters, Measured, PLAIN, Sliced};
 use crate::object_display::{
-    self as shown, Armed, Click, Defends, Fill, Looks, Marker, Mode, Parts as _, Pick, Place,
-    Queued, Says, Shield, Showing, Shows, ShowsFrom, Status, Strikes, UnitPicture, WhileSeen,
+    self as shown, Armed, Defends, Fill, Looks, Marker, Mode, Parts as _, Pick, Place, Queued,
+    Says, Shield, Showing, Shows, ShowsFrom, Status, Strikes, UnitPicture, WhileSeen,
 };
 use crate::ui::{self, Hint, Shade};
 use crate::{Local, Sim};
@@ -686,7 +686,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
     /// The portrait's box and frame, showing `template`'s picture until
     /// there's a portrait drawn, over a health bar filled as `fill` says,
     /// both giving `of`'s tooltip.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says, click: Option<Click>) {
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<usize>) {
         let skip = ["ModelPortrait", "Icon"];
         let parts = self.part("PortraitButton", &skip);
         let picture = self.shows.picture(template);
@@ -704,8 +704,8 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             self.s.commands_mut().entity(model).with_child(face);
         }
         self.says(&parts, "", of);
-        if let (Some(click), Some(mut button)) = (click, self.entity(&parts, "")) {
-            shown::clicks(&mut button, click, "object.portrait");
+        if let (Some(u), Some(mut button)) = (alone, self.entity(&parts, "")) {
+            shown::shows_alone(&mut button, u, "object.portrait");
         }
         let parts = self.part("Health", &["TargetPercentage"]);
         self.fill(&parts, "StatusBar", fill);
@@ -919,7 +919,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             self.says(&parts, "", Says::Unit(u));
             if let Some(mut button) = self.entity(&parts, "") {
                 let id = format!("object.unit.{}", n + 1);
-                shown::clicks(&mut button, Click::Alone(u), &id);
+                shown::shows_alone(&mut button, u, &id);
             }
         }
     }

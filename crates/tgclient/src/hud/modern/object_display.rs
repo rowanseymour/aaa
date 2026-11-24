@@ -323,11 +323,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                             ..at(place.x, place.y, card.x, card.y)
                         });
                         let mut card = cards.spawn((card, says(Says::Unit(u))));
-                        clicks(
-                            &mut card,
-                            Click::Alone(u),
-                            &format!("object.unit.{}", n + 1),
-                        );
+                        shows_alone(&mut card, u, &format!("object.unit.{}", n + 1));
                         card.with_children(|card| {
                             card.spawn((
                                 Node {
@@ -485,7 +481,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// The portrait's box, holding `template`'s picture until [`portray`]
     /// has a portrait to show there, over a bar filled as `fill` says, both
     /// giving `of`'s tooltip.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says, click: Option<Click>) {
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<usize>) {
         let picture = self.shows.picture(template);
         let [left, top, width, height] = PORTRAIT_BOX;
         let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
@@ -499,8 +495,8 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
             // Black round a portrait that doesn't fill its box.
             let backdrop = BackgroundColor(Color::BLACK);
             let mut portrait = display.spawn((inside, backdrop, says(of)));
-            if let Some(click) = click {
-                clicks(&mut portrait, click, "object.portrait");
+            if let Some(u) = alone {
+                shows_alone(&mut portrait, u, "object.portrait");
             }
             portrait.with_child((
                 Node {

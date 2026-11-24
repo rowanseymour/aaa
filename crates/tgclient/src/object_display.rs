@@ -143,6 +143,10 @@ pub(crate) enum Tint {
     Side,
     /// What a building hands its side.
     Support,
+    /// An ability's, used by its holder's side or an ally.
+    Friendly,
+    /// An ability's, used by an enemy.
+    Enemy,
 }
 
 /// The actor state a building is in while under siege, whose properties
@@ -216,26 +220,11 @@ pub struct ShownAlone(pub(crate) Option<(usize, usize)>);
 #[derive(Component, Clone, Copy)]
 pub struct ShowAlone(pub(crate) usize);
 
-/// What clicking a portrait or a unit's card does.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum Click {
-    /// Shows the unit at this index on its own.
-    Alone(usize),
-    /// Selects the organization at this index, as the whole selection.
-    Organization(usize),
-}
-
-/// Makes `part`, the button called `id`, do what `click` says.
-pub(crate) fn clicks(part: &mut EntityCommands, click: Click, id: &str) {
-    part.insert((Button, ui::called(id), Pickable::default()));
-    match click {
-        Click::Alone(u) => {
-            part.insert(ShowAlone(u)).observe(show_alone);
-        }
-        Click::Organization(r) => {
-            part.insert(Pick(r)).observe(pick);
-        }
-    }
+/// Makes `part` the button called `id`, which shows the unit at `u` on
+/// its own.
+pub(crate) fn shows_alone(part: &mut EntityCommands, u: usize, id: &str) {
+    part.insert((Button, ui::called(id), Pickable::default(), ShowAlone(u)))
+        .observe(show_alone);
 }
 
 /// A portrait or a unit's card clicked: shows that unit on its own, if
@@ -329,6 +318,8 @@ pub(crate) fn says(of: Says) -> impl Bundle {
 pub enum Status {
     Organization(usize),
     Building(usize),
+    /// A unit shown on its own, which counts for nothing by itself.
+    Unit(usize),
 }
 
 /// The figure by the shield: the defence of what's selected, as it stands,
@@ -408,6 +399,10 @@ pub struct Looks {
     /// building, by [`Tint::Side`] and [`Tint::Support`].
     pub(crate) side_tint: Color,
     pub(crate) support_tint: Color,
+    /// What tints the icons of properties abilities gave, by
+    /// [`Tint::Friendly`] and [`Tint::Enemy`].
+    pub(crate) friendly_tint: Color,
+    pub(crate) enemy_tint: Color,
     /// How each formation shows on its button, by its id.
     pub(crate) formation_looks: Arc<HashMap<Id, tgdata::FormationLook>>,
     /// Each technology's research button icon, by id, for what's being
@@ -453,6 +448,8 @@ impl Looks {
                     Tint::Plain => Color::WHITE,
                     Tint::Side => self.side_tint,
                     Tint::Support => self.support_tint,
+                    Tint::Friendly => self.friendly_tint,
+                    Tint::Enemy => self.enemy_tint,
                 };
                 (look.icon.clone(), said.collect::<Vec<_>>().join("\n"), tint)
             })
@@ -565,6 +562,8 @@ pub fn setup(
             Color::srgb(1.0, 1.0, 0.0),
         ),
         support_tint: colour(game.support_property_colour(), Color::srgb(0.0, 0.0, 1.0)),
+        friendly_tint: colour(game.friendly_property_colour(), Color::srgb(0.0, 1.0, 0.0)),
+        enemy_tint: colour(game.enemy_property_colour(), Color::srgb(1.0, 0.0, 0.0)),
         formation_looks: game.formation_looks(),
         technologies: (technologies.iter())
             .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
@@ -688,6 +687,12 @@ fn holder(sim: &World, mode: &Mode) -> Option<Holder> {
 /// come first, as they stand there, so that icons keep the order their
 /// properties came in while their holder stays selected.
 fn held(sim: &World, looks: &Looks, holder: Holder, shown: &[(Id, Tint)]) -> Vec<(Id, Tint)> {
+    ordered(holding(sim, looks, holder), shown, |(p, _)| p)
+}
+
+/// What [`held`] gives before what's shown has its say: each property
+/// once, at its first copy's place, with that copy's tint.
+fn holding(sim: &World, looks: &Looks, holder: Holder) -> Vec<(Id, Tint)> {
     // A thing is made with its template's properties last listed first,
     // so its own before those it inherits.
     let own = |template: &Id| {
@@ -767,11 +772,33 @@ fn held(sim: &World, looks: &Looks, holder: Holder, shown: &[(Id, Tint)]) -> Vec
         }
         Holder::Unit(u) => {
             let unit = &sim.units[u];
+            let r = unit.organization;
+            // It has what its organization hands down that fits it, with
+            // the tint it has there.
+            let kept = &sim.rules().kept_from_members;
+            let handed = holding(sim, looks, Holder::Piece(Piece::Organization(r)))
+                .into_iter()
+                .filter(|(p, _)| !kept.contains(p) && sim.unit_may_hold(u, p));
+            let engaged =
+                (sim.unit_states(u).contains(&UNIT_ENGAGED)).then(|| Id::from(tgmap::ENGAGED));
             let stance = sim.stance_property(u).cloned();
+            // An ability's by how its holder's side stands towards the
+            // side that used it.
+            let owner = sim.organizations[r].owner;
+            let given = (unit.properties.iter()).map(|h| {
+                let tint = match h.by.map(|by| sim.sides.relation(owner, by)) {
+                    Some(Relation::Itself | Relation::Ally) => Tint::Friendly,
+                    Some(Relation::Enemy) => Tint::Enemy,
+                    _ => Tint::Plain,
+                };
+                (h.property.clone(), tint)
+            });
             (own(&unit.template).map(plain))
                 .chain(side)
+                .chain(handed)
+                .chain(engaged.map(plain))
                 .chain(stance.map(plain))
-                .chain(timed(&unit.properties))
+                .chain(given)
                 .collect()
         }
     };
@@ -781,8 +808,12 @@ fn held(sim: &World, looks: &Looks, holder: Holder, shown: &[(Id, Tint)]) -> Vec
             now.push((p, tint));
         }
     }
-    ordered(now, shown, |(p, _)| p)
+    now
 }
+
+/// The state a unit is in while it attacks a target of its own, as the
+/// sim names it.
+const UNIT_ENGAGED: &str = "mind_engaged";
 
 /// The properties held `now` as their icons show: those already `shown`
 /// as they stand there, then the rest, each matched by its `key`. What a
@@ -877,12 +908,12 @@ pub fn choose(
     mut showing: ResMut<Showing>,
 ) {
     let hqs = sim.0.hqs();
-    // It holds while its organization alone stays selected and it lives
-    // in it.
+    // Any change to the selection turns the display back, even to the
+    // same organization again, as does the unit's death.
     if let Some((r, u)) = alone.0 {
         let unit = sim.0.units.get(u);
         let in_it = unit.is_some_and(|unit| unit.alive() && unit.organization == r);
-        if selected.0 != [r] || chosen.0.is_some() || !in_it {
+        if selected.is_changed() || chosen.is_changed() || !in_it {
             alone.0 = None;
         }
     }
@@ -1198,8 +1229,9 @@ pub(crate) trait Parts<'a> {
     /// The name over the owner, and where it has `properties`, its icons.
     fn title(&mut self, name: String, owner: u32, properties: bool);
     /// The portrait of `template`, over a bar filled as `fill` says, both
-    /// giving `of`'s tooltip, the portrait doing what `click` says.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says, click: Option<Click>);
+    /// giving `of`'s tooltip, a click on the portrait showing the unit at
+    /// `alone` on its own.
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<usize>);
     /// `target`'s weapons, each its icon with its main damage by it.
     fn attacks(&mut self, target: Target);
     /// The shield, with `target`'s defence by it, whose `template` gives
@@ -1281,10 +1313,8 @@ pub(crate) trait Parts<'a> {
                     .cloned()
                     .unwrap_or_default();
                 self.title(name, sim.organizations[r].owner, true);
-                // Its portrait takes the display back to its organization.
-                let back = Some(Click::Organization(r));
-                self.portrait(template.as_str(), Fill::Unit(u), Says::Unit(u), back);
-                (Target::Unit(u), template, None, Status::Organization(r))
+                self.portrait(template.as_str(), Fill::Unit(u), Says::Unit(u), None);
+                (Target::Unit(u), template, None, Status::Unit(u))
             }
         };
         self.attacks(target);
@@ -1317,15 +1347,12 @@ pub(crate) trait Parts<'a> {
         let owner = shows.sim.organizations[r].owner;
         let captain = captain(shows.sim, shows.looks, r);
         let template = shows.sim.units[captain].template.clone();
-        // A lone unit's selects it again; an organization's shows its
-        // captain on its own.
-        let click = match lone(shows.sim, r) {
-            true => Click::Organization(r),
-            false => Click::Alone(captain),
-        };
+        // An organization's shows its captain on its own; a lone unit's is
+        // already the whole selection, so clicking it does nothing.
+        let alone = (!lone(shows.sim, r)).then_some(captain);
         self.title(name, owner, true);
         let of = Says::Unit(captain);
-        self.portrait(template.as_str(), Fill::Unit(captain), of, Some(click));
+        self.portrait(template.as_str(), Fill::Unit(captain), of, alone);
         captain
     }
 
@@ -1670,12 +1697,31 @@ pub fn refresh(
             // Blank for a building only remembered under the fog.
             Status::Building(b) if !seen_now(sim, fog.as_deref(), Target::Building(b)) => None,
             Status::Building(b) => hq_state(sim, b).unwrap_or_else(|| building_state(sim, b)),
+            Status::Unit(u) => unit_state(sim, u),
         };
         let words = ids.map(|i| looks.state(i)).unwrap_or_default();
         if text.0 != words {
             text.0 = words;
         }
     }
+}
+
+/// What a unit of an organization is doing on its own account, as the
+/// game's actor state id: the weightiest of its states, engaged winning
+/// over under siege on their tie.
+fn unit_state(sim: &World, u: usize) -> Option<&'static str> {
+    let unit = &sim.units[u];
+    if !unit.alive() {
+        return None;
+    }
+    let states = sim.unit_states(u);
+    Some(match () {
+        _ if states.contains(&UNIT_ENGAGED) => UNIT_ENGAGED,
+        _ if states.contains(&"under_siege") => "under_siege",
+        _ if states.contains(&"falling") => "falling",
+        _ if unit.moving() => "mind_moving",
+        _ => "mind_resting",
+    })
 }
 
 /// What an organization's doing, as the game's actor state ids.
@@ -1957,6 +2003,7 @@ fn ours(sim: &World, local: Option<u32>, owner: u32) -> bool {
 /// now, which only the player's own side's and its allies' say.
 pub(crate) fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
     let (owner, ledger) = match status {
+        Status::Unit(_) => return None,
         Status::Building(b) => (sim.buildings[b].owner, sim.building_ledger(b)),
         Status::Organization(r) => {
             let organization = &sim.organizations[r];
@@ -2367,12 +2414,10 @@ pub(crate) fn pick(
     cards: Query<&Pick>,
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
-    mut alone: ResMut<ShownAlone>,
 ) {
     if let Ok(card) = cards.get(activate.entity) {
         selected.0 = vec![card.0];
         chosen.0 = None;
-        alone.0 = None;
     }
 }
 
