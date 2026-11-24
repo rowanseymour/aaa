@@ -317,35 +317,35 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
             display
                 .spawn((at(144.0, 44.0, 210.0, 110.0), Pickable::IGNORE))
                 .with_children(|cards| {
-                    for (&(u, place), picture) in places.iter().zip(pictures) {
+                    for (n, (&(u, place), picture)) in places.iter().zip(pictures).enumerate() {
                         let card = framed(Node {
                             flex_direction: FlexDirection::Column,
                             ..at(place.x, place.y, card.x, card.y)
                         });
-                        cards
-                            .spawn((card, says(Says::Unit(u))))
-                            .with_children(|card| {
-                                card.spawn((
-                                    Node {
-                                        width: percent(100),
-                                        flex_grow: 1.0,
-                                        ..default()
-                                    },
-                                    picture_node(picture),
-                                    UnitPicture(u),
-                                    Shade::Full,
-                                ));
-                                bar(
-                                    card,
-                                    Node {
-                                        width: percent(100),
-                                        height: px(4.0 * SCALE),
-                                        ..default()
-                                    },
-                                    Fill::Unit(u),
-                                    None,
-                                );
-                            });
+                        let mut card = cards.spawn((card, says(Says::Unit(u))));
+                        shows_alone(&mut card, u, &format!("object.unit.{}", n + 1));
+                        card.with_children(|card| {
+                            card.spawn((
+                                Node {
+                                    width: percent(100),
+                                    flex_grow: 1.0,
+                                    ..default()
+                                },
+                                picture_node(picture),
+                                UnitPicture(u),
+                                Shade::Full,
+                            ));
+                            bar(
+                                card,
+                                Node {
+                                    width: percent(100),
+                                    height: px(4.0 * SCALE),
+                                    ..default()
+                                },
+                                Fill::Unit(u),
+                                None,
+                            );
+                        });
                     }
                 });
         });
@@ -481,7 +481,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// The portrait's box, holding `template`'s picture until [`portray`]
     /// has a portrait to show there, over a bar filled as `fill` says, both
     /// giving `of`'s tooltip.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says) {
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<usize>) {
         let picture = self.shows.picture(template);
         let [left, top, width, height] = PORTRAIT_BOX;
         let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
@@ -494,7 +494,11 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
             };
             // Black round a portrait that doesn't fill its box.
             let backdrop = BackgroundColor(Color::BLACK);
-            display.spawn((inside, backdrop, says(of))).with_child((
+            let mut portrait = display.spawn((inside, backdrop, says(of)));
+            if let Some(u) = alone {
+                shows_alone(&mut portrait, u, "object.portrait");
+            }
+            portrait.with_child((
                 Node {
                     width: percent(100),
                     height: percent(100),

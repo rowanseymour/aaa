@@ -94,7 +94,16 @@ pub(crate) fn step(
     mut fixed: ResMut<Time<Fixed>>,
 ) {
     let played = sim.0.ticks;
-    step_world(&mut sim.0, &mut orders, &mut selected.0, &mut chosen.0);
+    // Only a real change counts as one, as the display goes back from a
+    // unit shown on its own when the selection changes.
+    let (mut now, mut building) = (selected.0.clone(), chosen.0);
+    step_world(&mut sim.0, &mut orders, &mut now, &mut building);
+    if now != selected.0 {
+        selected.0 = now;
+    }
+    if building != chosen.0 {
+        chosen.0 = building;
+    }
     if sim.0.ticks == played {
         wait_for_tick(&mut fixed);
     }

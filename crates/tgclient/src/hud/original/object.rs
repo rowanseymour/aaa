@@ -686,7 +686,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
     /// The portrait's box and frame, showing `template`'s picture until
     /// there's a portrait drawn, over a health bar filled as `fill` says,
     /// both giving `of`'s tooltip.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says) {
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<usize>) {
         let skip = ["ModelPortrait", "Icon"];
         let parts = self.part("PortraitButton", &skip);
         let picture = self.shows.picture(template);
@@ -704,6 +704,9 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             self.s.commands_mut().entity(model).with_child(face);
         }
         self.says(&parts, "", of);
+        if let (Some(u), Some(mut button)) = (alone, self.entity(&parts, "")) {
+            shown::shows_alone(&mut button, u, "object.portrait");
+        }
         let parts = self.part("Health", &["TargetPercentage"]);
         self.fill(&parts, "StatusBar", fill);
         self.says(&parts, "", of);
@@ -897,7 +900,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             separation,
             Vec2::new(at.width(), at.height()),
         );
-        for (u, place) in places {
+        for (n, (u, place)) in places.into_iter().enumerate() {
             let within = moved(at, place.x, place.y);
             let parts = self.painter.paint(
                 self.s,
@@ -914,6 +917,10 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
             }
             self.fill(&parts, "Health/StatusBar", Fill::Unit(u));
             self.says(&parts, "", Says::Unit(u));
+            if let Some(mut button) = self.entity(&parts, "") {
+                let id = format!("object.unit.{}", n + 1);
+                shown::shows_alone(&mut button, u, &id);
+            }
         }
     }
 

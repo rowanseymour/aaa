@@ -1720,6 +1720,12 @@ pub struct UVars {
     /// What tints the icon of a property a building hands its side.
     #[serde(rename = "UIColorPropertySupport")]
     pub ui_color_property_support: Option<[f32; 3]>,
+    /// What tint the icon of a property an ability gave, by whether the
+    /// side that used it is a friend or an enemy of the holder's.
+    #[serde(rename = "UIColorPropertyTemporaryFriendly")]
+    pub ui_color_property_temporary_friendly: Option<[f32; 3]>,
+    #[serde(rename = "UIColorPropertyTemporaryEnemy")]
+    pub ui_color_property_temporary_enemy: Option<[f32; 3]>,
     /// The id of the [`HotkeyConfiguration`] in use.
     #[serde(rename = "HotkeyConfiguration")]
     pub hotkey_configuration: Option<Id>,

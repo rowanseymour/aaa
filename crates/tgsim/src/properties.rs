@@ -229,6 +229,12 @@ impl World {
         }
     }
 
+    /// Whether `property` can be on the unit at `u`, as
+    /// [`World::can_carry`] says.
+    pub fn unit_may_hold(&self, u: usize, property: &Id) -> bool {
+        self.can_carry(Thing::Unit(u), property)
+    }
+
     /// Whether `property` can be on `on`, as [`World::can_carry`] says.
     pub fn may_hold(&self, on: Piece, property: &Id) -> bool {
         let t = match on {

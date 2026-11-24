@@ -242,7 +242,7 @@ impl World {
 
     /// The property the unit at `u`'s stance gives it, if it holds one that
     /// gives one it has what it needs for.
-    pub(crate) fn stance_property(&self, u: usize) -> Option<&Id> {
+    pub fn stance_property(&self, u: usize) -> Option<&Id> {
         let unit = &self.units[u];
         let ids = unit.stance.as_ref()?;
         let stances = self.rules.stances.get(&unit.template)?;

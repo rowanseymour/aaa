@@ -199,6 +199,18 @@ impl GameData {
         self.interface_setting(|v| v.ui_color_property_support)
     }
 
+    /// What tints the icon of a property an ability gave, when the side
+    /// that used it is the holder's or an ally.
+    pub fn friendly_property_colour(&self) -> Option<[f32; 3]> {
+        self.interface_setting(|v| v.ui_color_property_temporary_friendly)
+    }
+
+    /// What tints the icon of a property an ability gave, when the side
+    /// that used it is an enemy of the holder's.
+    pub fn enemy_property_colour(&self) -> Option<[f32; 3]> {
+        self.interface_setting(|v| v.ui_color_property_temporary_enemy)
+    }
+
     /// The images this project's own interface draws in place of the
     /// game's, by the game's image's lower-case path from the archive root:
     /// from the `[IconStandIn]` blocks of the `.tgi` files under `Modern/`,
