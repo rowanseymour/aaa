@@ -112,6 +112,13 @@ impl GameData {
         places.into_iter().find(|p| self.exists(p))
     }
 
+    /// Where a property's icon at `path` is drawn from: as
+    /// [`GameData::wide_icon`] finds it, else the shared one's path even
+    /// though nothing's there, as a missing icon still takes its place.
+    fn property_icon(&self, path: &str) -> String {
+        (self.wide_icon(path)).unwrap_or_else(|| path.replace("%s/", ""))
+    }
+
     /// The game's words for speeds, in the order it lists them.
     pub(crate) fn paces(&self, strings: &crate::Strings) -> Vec<Pace> {
         let definitions = self.definitions();
@@ -171,7 +178,7 @@ impl GameData {
         file: &str,
         p: &defs::Property,
     ) -> Option<PropertyLook> {
-        let icon = self.wide_icon(&icon_beside(file, p.icon.as_deref())?)?;
+        let icon = self.property_icon(&icon_beside(file, p.icon.as_deref())?);
         Some(PropertyLook {
             name: localized(strings, p.name.as_deref()).unwrap_or_default(),
             icon,
@@ -197,9 +204,7 @@ impl GameData {
             let Some(path) = icon_beside(file, p.icon.as_deref()) else {
                 continue;
             };
-            let Some(icon) = self.wide_icon(&path) else {
-                continue;
-            };
+            let icon = self.property_icon(&path);
             out.insert(
                 id.clone(),
                 PropertyLook {
@@ -216,7 +221,53 @@ impl GameData {
                 out.insert(id, look);
             }
         }
+        // Those abilities and special operations give what they land on,
+        // the first of any given more than once.
+        let given = (definitions.things.iter())
+            .flat_map(|t| crate::supply::enchantments(&t.thing).map(|p| (t.file.as_str(), p)));
+        let operations = (definitions.abilities.iter())
+            .flat_map(|(_, a)| &a.effect)
+            .filter_map(|e| e.enchantment_property.as_ref())
+            .map(|p| ("", p));
+        for (file, p) in given.chain(operations) {
+            let Some(id) = p.ids.clone() else {
+                continue;
+            };
+            if out.contains_key(&id) {
+                continue;
+            }
+            if let Some(look) = self.property_look(&strings, &paces, file, p) {
+                out.insert(id, look);
+            }
+        }
         out
+    }
+}
+
+impl GameData {
+    /// How the property each organization template holds while its
+    /// formation is broken shows, by template id, for those whose layout
+    /// gives one with an icon.
+    pub fn broken_looks(&self) -> HashMap<Id, PropertyLook> {
+        let strings = self.strings();
+        let paces = self.paces(&strings);
+        let files =
+            self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("templates/"));
+        let files = crate::scoped(&files);
+        let mut layouts: HashMap<Id, PropertyLook> = HashMap::new();
+        for scope in &files {
+            for l in scope.read::<defs::OrganizationLayout>("OrganizationLayout") {
+                let (Some(id), Some(p)) = (l.ids, l.broken_property) else {
+                    continue;
+                };
+                if let Some(look) = self.property_look(&strings, &paces, scope.file, &p) {
+                    layouts.entry(id).or_insert(look);
+                }
+            }
+        }
+        (self.organization_components().into_iter())
+            .filter_map(|(t, o)| Some((t, layouts.get(&o.layout)?.clone())))
+            .collect()
     }
 }
 

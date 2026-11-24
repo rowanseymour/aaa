@@ -1128,11 +1128,15 @@ impl Draw<'_, '_> {
             .shows
             .looks
             .property_tips(&self.shows.detail.properties);
-        for (n, (icon, tip)) in tips.into_iter().enumerate() {
+        for (n, (icon, tip, tint)) in tips.into_iter().enumerate() {
             let within = moved(at, n as f32 * (width + separation), 0.0);
             let parts = self.painter.paint(self.s, bar, within, &[]);
-            let icon = self.shows.image(Some(&icon));
-            self.show(&parts, "Decal", icon);
+            // One whose file is missing still takes its place, drawn plain.
+            let icon = self.shows.image(Some(&icon)).unwrap_or_default();
+            if let Some(mut decal) = self.entity(&parts, "Decal") {
+                let image = ImageNode::new(icon).with_color(tint);
+                decal.insert((image, Visibility::Inherited));
+            }
             self.mark_icon(&parts, Hint(tip), seen);
         }
         // The rest behind one marker at the panel's right end, which lists

@@ -387,7 +387,7 @@ impl World {
     /// The state the organization at `r` holds for its part in a fight, as
     /// the data names it: engaged, or targeted while another engages it
     /// and it doesn't engage back.
-    pub(crate) fn fight_state(&self, r: usize) -> Option<&'static str> {
+    pub fn fight_state(&self, r: usize) -> Option<&'static str> {
         match self.organizations[r].engaged.is_empty() {
             false => Some(tgmap::ENGAGED),
             true => self.engagers(r).next().map(|_| tgmap::TARGETED),
