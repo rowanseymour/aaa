@@ -133,17 +133,31 @@ impl World {
     /// when any of its places can, a dead member's counting by its
     /// template, as its replacement will.
     pub fn technologies_on(&self, on: Piece) -> Vec<(&Id, Source)> {
-        let (owner, templates): (u32, Vec<&Id>) = match on {
+        match on {
             Piece::Organization(r) => {
                 let o = &self.organizations[r];
                 let members = o.units.iter().map(|&u| &self.units[u].template);
-                (
-                    o.owner,
-                    std::iter::once(&o.template).chain(members).collect(),
-                )
+                let templates: Vec<&Id> = std::iter::once(&o.template).chain(members).collect();
+                self.technologies_fitting(o.owner, &templates)
             }
-            Piece::Building(b) => (self.buildings[b].owner, vec![&self.buildings[b].template]),
-        };
+            Piece::Building(b) => {
+                let building = &self.buildings[b];
+                self.technologies_fitting(building.owner, &[&building.template])
+            }
+        }
+    }
+
+    /// The technologies the unit at `u`'s side holds that can be on it, as
+    /// [`World::technologies_on`] gives them.
+    pub fn unit_technologies(&self, u: usize) -> Vec<(&Id, Source)> {
+        let unit = &self.units[u];
+        let owner = self.organizations[unit.organization].owner;
+        self.technologies_fitting(owner, &[&unit.template])
+    }
+
+    /// The technologies `owner`'s side holds that the kind of any of
+    /// `templates` meets the needs of, the first's kind being known.
+    fn technologies_fitting(&self, owner: u32, templates: &[&Id]) -> Vec<(&Id, Source)> {
         let playing = (self.sides.player(owner)).is_some_and(|p| !p.independent);
         let grants = match playing {
             true => self.technologies.get(&owner).map_or(&[][..], Vec::as_slice),

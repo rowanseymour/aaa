@@ -200,6 +200,62 @@ pub(crate) enum Actor {
     Organization(usize),
     /// With the templates of what it's commissioning.
     Building(usize, Vec<String>),
+    /// One unit of the selected organization, on its own: the
+    /// organization's index, then the unit's.
+    Unit(usize, usize),
+}
+
+/// The unit of the selected organization the display shows on its own,
+/// if one: the organization's index, then the unit's. It holds while that
+/// organization alone stays selected.
+#[derive(Resource, Default)]
+pub struct ShownAlone(pub(crate) Option<(usize, usize)>);
+
+/// A part that turns the display to the unit at its index on its own,
+/// with its organization still selected.
+#[derive(Component, Clone, Copy)]
+pub struct ShowAlone(pub(crate) usize);
+
+/// What clicking a portrait or a unit's card does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Click {
+    /// Shows the unit at this index on its own.
+    Alone(usize),
+    /// Selects the organization at this index, as the whole selection.
+    Organization(usize),
+}
+
+/// Makes `part`, the button called `id`, do what `click` says.
+pub(crate) fn clicks(part: &mut EntityCommands, click: Click, id: &str) {
+    part.insert((Button, ui::called(id), Pickable::default()));
+    match click {
+        Click::Alone(u) => {
+            part.insert(ShowAlone(u)).observe(show_alone);
+        }
+        Click::Organization(r) => {
+            part.insert(Pick(r)).observe(pick);
+        }
+    }
+}
+
+/// A portrait or a unit's card clicked: shows that unit on its own, if
+/// it lives and its organization alone is selected.
+pub(crate) fn show_alone(
+    activate: On<Activate>,
+    parts: Query<&ShowAlone>,
+    sim: Res<Sim>,
+    selected: Res<Selected>,
+    mut alone: ResMut<ShownAlone>,
+) {
+    let Ok(&ShowAlone(u)) = parts.get(activate.entity) else {
+        return;
+    };
+    let Some(unit) = sim.0.units.get(u).filter(|unit| unit.alive()) else {
+        return;
+    };
+    if selected.0 == [unit.organization] {
+        alone.0 = Some((unit.organization, u));
+    }
 }
 
 /// A bar filled to a share of its width.
@@ -516,6 +572,7 @@ pub fn setup(
         marker: efficiency_target(&game.game_widgets()),
     });
     commands.insert_resource(Showing::default());
+    commands.insert_resource(ShownAlone::default());
 }
 
 /// The archive path of the picture marking where an efficiency bar is
@@ -548,6 +605,7 @@ fn wanted(
     local: Option<u32>,
     selected: &[usize],
     chosen: Option<usize>,
+    alone: Option<(usize, usize)>,
 ) -> Option<Mode> {
     let actor = match (selected, chosen) {
         ([], Some(b)) => {
@@ -557,7 +615,10 @@ fn wanted(
             Actor::Building(b, queue.map(|c| c.template().to_string()).collect())
         }
         ([], None) => return None,
-        ([r], _) => Actor::Organization(*r),
+        ([r], _) => match alone {
+            Some((of, u)) if of == *r => return Some(Mode::SimpleActor(Actor::Unit(of, u))),
+            _ => Actor::Organization(*r),
+        },
         (rs, _) => {
             return Some(Mode::Group(rs.iter().take(MAX_SELECTED).copied().collect()));
         }
@@ -565,6 +626,7 @@ fn wanted(
     let company = match actor {
         Actor::Organization(r) => !lone(sim, r) || hq(sim, hqs, &actor).is_some(),
         Actor::Building(..) => hq(sim, hqs, &actor).is_some(),
+        Actor::Unit(..) => false,
     };
     Some(match company {
         true => Mode::Company(actor),
@@ -577,6 +639,7 @@ fn hq<'a>(sim: &World, hqs: &'a [tgsim::Hq], actor: &Actor) -> Option<&'a tgsim:
     let id = match *actor {
         Actor::Building(b, _) => sim.hq_of(b)?,
         Actor::Organization(r) => sim.organizations[r].id,
+        Actor::Unit(..) => return None,
     };
     hqs.iter().find(|h| h.id == id)
 }
@@ -595,15 +658,25 @@ fn formation_property(formation: &Id, n: usize) -> Id {
     Id::from(format!("{formation}/{n}"))
 }
 
+/// Whose properties show.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Holder {
+    Piece(Piece),
+    /// A unit shown on its own, by its index.
+    Unit(usize),
+}
+
 /// Whose properties show: the organization selected alone, the one that
-/// unpacked into the building, or else the building itself.
-fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
+/// unpacked into the building, or else the building itself; or the unit
+/// shown on its own.
+fn holder(sim: &World, mode: &Mode) -> Option<Holder> {
     Some(match *mode.actor()? {
-        Actor::Organization(r) => Piece::Organization(r),
+        Actor::Organization(r) => Holder::Piece(Piece::Organization(r)),
         Actor::Building(b, _) => {
             let unpacked = (sim.organizations.iter()).position(|r| r.unpacked_into == Some(b));
-            unpacked.map_or(Piece::Building(b), Piece::Organization)
+            Holder::Piece(unpacked.map_or(Piece::Building(b), Piece::Organization))
         }
+        Actor::Unit(_, u) => Holder::Unit(u),
     })
 }
 
@@ -614,7 +687,7 @@ fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
 /// building its siege's, then those it has for a time. Those in `shown`
 /// come first, as they stand there, so that icons keep the order their
 /// properties came in while their holder stays selected.
-fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[(Id, Tint)]) -> Vec<(Id, Tint)> {
+fn held(sim: &World, looks: &Looks, holder: Holder, shown: &[(Id, Tint)]) -> Vec<(Id, Tint)> {
     // A thing is made with its template's properties last listed first,
     // so its own before those it inherits.
     let own = |template: &Id| {
@@ -623,7 +696,11 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[(Id, Tint)]) -> Vec<
             .flat_map(|k| k.properties.iter().rev())
             .cloned()
     };
-    let side = sim.technologies_on(holder).into_iter().map(|(p, source)| {
+    let side = match holder {
+        Holder::Piece(on) => sim.technologies_on(on),
+        Holder::Unit(u) => sim.unit_technologies(u),
+    };
+    let side = side.into_iter().map(|(p, source)| {
         let tint = match source {
             tgsim::Source::Building(_) => Tint::Support,
             _ => Tint::Side,
@@ -643,7 +720,7 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[(Id, Tint)]) -> Vec<
     };
     let plain = |p: Id| (p, Tint::Plain);
     let all: Vec<(Id, Tint)> = match holder {
-        Piece::Organization(r) => {
+        Holder::Piece(Piece::Organization(r)) => {
             let organization = &sim.organizations[r];
             // One that's unpacked stands in no formation, and guards nothing.
             let afield = organization.unpacked_into.is_none();
@@ -676,16 +753,25 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[(Id, Tint)]) -> Vec<
                 .chain(timed(&organization.properties))
                 .collect()
         }
-        Piece::Building(b) => {
+        Holder::Piece(Piece::Building(b)) => {
             let building = &sim.buildings[b];
             let besieged = (looks.besieged.iter())
                 .filter(|_| building.besieged.is_some())
-                .filter(|p| sim.may_hold(holder, p))
+                .filter(|p| sim.may_hold(Piece::Building(b), p))
                 .cloned();
             (own(&building.template).map(plain))
                 .chain(side)
                 .chain(besieged.map(plain))
                 .chain(timed(&building.properties))
+                .collect()
+        }
+        Holder::Unit(u) => {
+            let unit = &sim.units[u];
+            let stance = sim.stance_property(u).cloned();
+            (own(&unit.template).map(plain))
+                .chain(side)
+                .chain(stance.map(plain))
+                .chain(timed(&unit.properties))
                 .collect()
         }
     };
@@ -765,6 +851,7 @@ fn detail(
     let seen_as = match mode.actor() {
         Some(&Actor::Organization(r)) => Some(Target::Unit(captain(sim, looks, r))),
         Some(&Actor::Building(b, _)) => Some(Target::Building(b)),
+        Some(&Actor::Unit(_, u)) => Some(Target::Unit(u)),
         None => None,
     };
     Detail {
@@ -778,6 +865,7 @@ fn detail(
 }
 
 /// Works out what the display should show, for either interface to draw.
+#[allow(clippy::too_many_arguments)]
 pub fn choose(
     selected: Res<Selected>,
     chosen: Res<SelectedBuilding>,
@@ -785,10 +873,20 @@ pub fn choose(
     local: Res<Local>,
     badges: Res<Badges>,
     looks: Res<Looks>,
+    mut alone: ResMut<ShownAlone>,
     mut showing: ResMut<Showing>,
 ) {
     let hqs = sim.0.hqs();
-    let mode = wanted(&sim.0, &hqs, local.0, &selected.0, chosen.0);
+    // It holds while its organization alone stays selected and it lives
+    // in it.
+    if let Some((r, u)) = alone.0 {
+        let unit = sim.0.units.get(u);
+        let in_it = unit.is_some_and(|unit| unit.alive() && unit.organization == r);
+        if selected.0 != [r] || chosen.0.is_some() || !in_it {
+            alone.0 = None;
+        }
+    }
+    let mode = wanted(&sim.0, &hqs, local.0, &selected.0, chosen.0, alone.0);
     let mode = mode.map(|m| {
         let shown = match &showing.now {
             Some((was, detail)) if holder(&sim.0, was) == holder(&sim.0, &m) => {
@@ -1100,8 +1198,8 @@ pub(crate) trait Parts<'a> {
     /// The name over the owner, and where it has `properties`, its icons.
     fn title(&mut self, name: String, owner: u32, properties: bool);
     /// The portrait of `template`, over a bar filled as `fill` says, both
-    /// giving `of`'s tooltip.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says);
+    /// giving `of`'s tooltip, the portrait doing what `click` says.
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, click: Option<Click>);
     /// `target`'s weapons, each its icon with its main damage by it.
     fn attacks(&mut self, target: Target);
     /// The shield, with `target`'s defence by it, whose `template` gives
@@ -1129,7 +1227,9 @@ pub(crate) trait Parts<'a> {
     /// Draws what's shown in `mode`.
     fn draw(&mut self, mode: &Mode) {
         match mode {
-            Mode::SimpleActor(actor) => self.simple_actor(actor),
+            Mode::SimpleActor(actor) | Mode::Company(actor @ Actor::Unit(..)) => {
+                self.simple_actor(actor)
+            }
             Mode::Company(Actor::Organization(r)) => self.organization(*r),
             Mode::Company(Actor::Building(b, _)) => {
                 let b = *b;
@@ -1171,6 +1271,21 @@ pub(crate) trait Parts<'a> {
                 let template = sim.buildings[b].template.clone();
                 (Target::Building(b), template, None, Status::Building(b))
             }
+            Actor::Unit(r, u) => {
+                let shows = self.shows();
+                let template = sim.units[u].template.clone();
+                let name = shows
+                    .looks
+                    .names
+                    .get(&template)
+                    .cloned()
+                    .unwrap_or_default();
+                self.title(name, sim.organizations[r].owner, true);
+                // Its portrait takes the display back to its organization.
+                let back = Some(Click::Organization(r));
+                self.portrait(template.as_str(), Fill::Unit(u), Says::Unit(u), back);
+                (Target::Unit(u), template, None, Status::Organization(r))
+            }
         };
         self.attacks(target);
         if sim.defense(target).is_some() {
@@ -1202,8 +1317,15 @@ pub(crate) trait Parts<'a> {
         let owner = shows.sim.organizations[r].owner;
         let captain = captain(shows.sim, shows.looks, r);
         let template = shows.sim.units[captain].template.clone();
+        // A lone unit's selects it again; an organization's shows its
+        // captain on its own.
+        let click = match lone(shows.sim, r) {
+            true => Click::Organization(r),
+            false => Click::Alone(captain),
+        };
         self.title(name, owner, true);
-        self.portrait(template.as_str(), Fill::Unit(captain), Says::Unit(captain));
+        let of = Says::Unit(captain);
+        self.portrait(template.as_str(), Fill::Unit(captain), of, Some(click));
         captain
     }
 
@@ -1232,7 +1354,12 @@ pub(crate) trait Parts<'a> {
         let name = shows.building_name(b);
         let stockpile = shows.detail.stockpile;
         self.title(name, owner, true);
-        self.portrait(template.as_str(), Fill::Building(b), Says::Building(b));
+        self.portrait(
+            template.as_str(),
+            Fill::Building(b),
+            Says::Building(b),
+            None,
+        );
         if stockpile {
             self.stockpile(b);
         }
@@ -1249,6 +1376,7 @@ fn portrayed<'a>(sim: &'a World, looks: &'a Looks, mode: &Mode) -> Option<(&'a s
             let building = &sim.buildings[*b];
             Some((building.template.as_str(), building.owner))
         }
+        Actor::Unit(r, u) => Some((sim.units[*u].template.as_str(), sim.organizations[*r].owner)),
         Actor::Organization(r) => {
             let organization = &sim.organizations[*r];
             let template = match organization.unpacked_into {
@@ -1284,9 +1412,17 @@ fn sitter(drawn: &Drawn, leaders: &Leaders, template: &str, owner: u32) -> Sitte
     )
 }
 
-/// The one thing a display of a thing on its own shows: whether it's a
-/// building, and which.
-type Alone = Option<(bool, usize)>;
+/// What kind of thing a display of a thing on its own shows.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Lone {
+    Building,
+    Organization,
+    Unit,
+}
+
+/// The one thing a display of a thing on its own shows: its kind, and
+/// its index.
+type Alone = Option<(Lone, usize)>;
 
 /// The map's sun: not the stage's own light, nor the menu backdrop's, still
 /// up as the match starts.
@@ -1317,8 +1453,9 @@ pub fn portray(
         // Each thing shown on its own gets a portrait afresh, where a
         // organization keeps one that's already up.
         let alone = match mode {
-            Mode::SimpleActor(Actor::Building(b, _)) => Some((true, *b)),
-            Mode::SimpleActor(Actor::Organization(r)) => Some((false, *r)),
+            Mode::SimpleActor(Actor::Building(b, _)) => Some((Lone::Building, *b)),
+            Mode::SimpleActor(Actor::Organization(r)) => Some((Lone::Organization, *r)),
+            Mode::SimpleActor(Actor::Unit(_, u)) => Some((Lone::Unit, *u)),
             _ => None,
         };
         Some((sitter(&drawn, &leaders, template, owner), alone))
@@ -2230,10 +2367,12 @@ pub(crate) fn pick(
     cards: Query<&Pick>,
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
+    mut alone: ResMut<ShownAlone>,
 ) {
     if let Ok(card) = cards.get(activate.entity) {
         selected.0 = vec![card.0];
         chosen.0 = None;
+        alone.0 = None;
     }
 }
 
@@ -2297,6 +2436,24 @@ mod tests {
             Some("UI/Game/ObjectDisplay/TargetPercentageBar.tga")
         );
         assert_eq!(efficiency_target(&layouts[0].children[0].children), None);
+    }
+
+    #[test]
+    fn a_unit_shows_on_its_own_only_while_its_organization_alone_is_selected() {
+        let sim = crate::orders::testing::fresh();
+        let u = sim.organizations[0].units[0];
+        let shown = |selected: &[usize], alone| wanted(&sim, &[], Some(1), selected, None, alone);
+        assert_eq!(
+            shown(&[0], Some((0, u))),
+            Some(Mode::SimpleActor(Actor::Unit(0, u)))
+        );
+        // Another organization's unit doesn't take its place.
+        let other = sim.organizations[1].units[0];
+        assert_eq!(
+            shown(&[0], Some((1, other))),
+            Some(Mode::Company(Actor::Organization(0)))
+        );
+        assert!(matches!(shown(&[0, 1], Some((0, u))), Some(Mode::Group(_))));
     }
 
     /// A match whose player 1 has a relay, building 0, unpacked from its
