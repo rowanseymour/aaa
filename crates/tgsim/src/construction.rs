@@ -822,6 +822,28 @@ mod tests {
     }
 
     #[test]
+    fn an_engineer_reads_moving_on_its_way_then_repairing_and_not_engaged() {
+        let mut w = with_buildings(engineers(), &[building(9, 1, [10.0, 25.0])]);
+        w.buildings[0].fighter.flags.push(Id::from("constructable"));
+        w.buildings[0].health = 20.0;
+        assert_eq!(w.unit_activity(0), "mind_resting");
+        let repair = Command::Repair {
+            organization: 0,
+            piece: Piece::Building(0),
+        };
+        w.apply(1, repair).unwrap();
+        run(&mut w, 0.5);
+        assert_eq!(w.unit_activity(0), "mind_moving");
+        let mut ticks = 0;
+        while w.unit_activity(0) != "mind_repairing" && ticks < 400 {
+            w.tick();
+            ticks += 1;
+        }
+        assert_eq!(w.unit_activity(0), "mind_repairing");
+        assert!(!w.unit_states(0).contains(&"mind_engaged"));
+    }
+
+    #[test]
     fn a_repair_out_of_reach_is_given_up() {
         let mut w = with_buildings(engineers(), &[building(9, 1, [10.0, 25.0])]);
         w.buildings[0].fighter.flags.push(Id::from("constructable"));

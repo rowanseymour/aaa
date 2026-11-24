@@ -323,7 +323,12 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                             ..at(place.x, place.y, card.x, card.y)
                         });
                         let mut card = cards.spawn((card, says(Says::Unit(u))));
-                        shows_alone(&mut card, u, &format!("object.unit.{}", n + 1));
+                        shows_alone(
+                            &mut card,
+                            Target::Unit(u),
+                            &format!("object.unit.{}", n + 1),
+                        );
+                        centres(&mut card, Says::Unit(u));
                         card.with_children(|card| {
                             card.spawn((
                                 Node {
@@ -481,7 +486,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// The portrait's box, holding `template`'s picture until [`portray`]
     /// has a portrait to show there, over a bar filled as `fill` says, both
     /// giving `of`'s tooltip.
-    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<usize>) {
+    fn portrait(&mut self, template: &str, fill: Fill, of: Says, alone: Option<Target>) {
         let picture = self.shows.picture(template);
         let [left, top, width, height] = PORTRAIT_BOX;
         let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
@@ -495,8 +500,9 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
             // Black round a portrait that doesn't fill its box.
             let backdrop = BackgroundColor(Color::BLACK);
             let mut portrait = display.spawn((inside, backdrop, says(of)));
-            if let Some(u) = alone {
-                shows_alone(&mut portrait, u, "object.portrait");
+            centres(&mut portrait, of);
+            if let Some(alone) = alone {
+                shows_alone(&mut portrait, alone, "object.portrait");
             }
             portrait.with_child((
                 Node {
@@ -690,28 +696,28 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
     /// morale.
     fn flag(&mut self, r: usize) {
         self.commands.entity(self.root).with_children(|display| {
-            display
-                .spawn((
-                    framed(at(366.0, 44.0, 63.0, 77.0)),
-                    says(Says::Organization(r)),
-                ))
-                .with_children(|card| {
-                    efficiency(&mut self.shows, card, at(0.0, 6.0, 63.0, 2.0), r);
-                    banner(
-                        &mut self.shows,
-                        card,
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(6.0 * SCALE),
-                            top: px(12.0 * SCALE),
-                            width: px(51.0 * SCALE),
-                            height: px(51.0 * SCALE),
-                            ..default()
-                        },
-                        r,
-                    );
-                    morale(&mut self.shows, card, at(0.0, 69.0, 63.0, 2.0), r);
-                });
+            let mut flag = display.spawn((
+                framed(at(366.0, 44.0, 63.0, 77.0)),
+                says(Says::Organization(r)),
+            ));
+            centres(&mut flag, Says::Organization(r));
+            flag.with_children(|card| {
+                efficiency(&mut self.shows, card, at(0.0, 6.0, 63.0, 2.0), r);
+                banner(
+                    &mut self.shows,
+                    card,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(6.0 * SCALE),
+                        top: px(12.0 * SCALE),
+                        width: px(51.0 * SCALE),
+                        height: px(51.0 * SCALE),
+                        ..default()
+                    },
+                    r,
+                );
+                morale(&mut self.shows, card, at(0.0, 69.0, 63.0, 2.0), r);
+            });
         });
     }
 
