@@ -622,6 +622,9 @@ pub struct Unit {
     /// While it's left its place to go after its target, the range it's
     /// going to be within of it.
     closing: Option<f32>,
+    /// Where its target stood, and where it stood itself, when it last
+    /// found no way to it while closing in.
+    unreached: Option<([f32; 2], [f32; 2])>,
     /// The tick it next decides what to do: once the ability it's using
     /// is over, it's waited a while for one, or it's reacted to its
     /// organization engaging.
@@ -1495,7 +1498,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
     health_factor,
     fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,

@@ -172,7 +172,8 @@ impl World {
     /// where it is to take on the next, and goes back to its place only
     /// once there's nothing left to pick. Its way is planned afresh only
     /// once the target has drifted [`PURSUIT_DRIFT`] off where it was
-    /// headed.
+    /// headed, and one that found no way there tries again only then or
+    /// once it's moved.
     pub(crate) fn close_in(&mut self) {
         for u in 0..self.units.len() {
             let unit = &self.units[u];
@@ -200,14 +201,20 @@ impl World {
                 continue;
             }
             let goal = self.position(t);
-            let on_course = unit.path.first().is_some_and(|&end| {
-                squared_distance(end, goal) <= PURSUIT_DRIFT * squared_distance(unit.position, goal)
-            });
-            if on_course {
+            let near = |at: [f32; 2]| {
+                squared_distance(at, goal) <= PURSUIT_DRIFT * squared_distance(unit.position, goal)
+            };
+            let on_course = unit.path.first().is_some_and(|&end| near(end));
+            // One that found no way waits for it or its target to move.
+            let stuck = unit.path.is_empty()
+                && (unit.unreached).is_some_and(|(at, from)| near(at) && from == unit.position);
+            if on_course || stuck {
                 continue;
             }
             let way = self.way(u, goal);
-            self.units[u].take(way, false);
+            let unit = &mut self.units[u];
+            unit.unreached = way.is_empty().then_some((goal, unit.position));
+            unit.take(way, false);
         }
     }
 
@@ -805,6 +812,30 @@ mod tests {
         assert!(distance(w.units[0].position, w.units[1].position) <= 4.0);
         assert!(w.units[1].health < 100.0);
         assert!(w.organizations[0].position[1] < 21.0);
+    }
+
+    #[test]
+    fn a_unit_with_no_way_to_its_target_tries_again_once_either_moves() {
+        let mut w = skirmish();
+        let open = w.pathing.clone();
+        // A wall right across the map between them.
+        for x in 0..w.pathing.side as i32 {
+            w.pathing.set_blocked(tgmap::Tile::new(x, 10));
+        }
+        // It's already as near as it can get.
+        w.units[0].position = [11.0, 19.0];
+        w.units[0].target = Some(Target::Unit(1));
+        w.units[0].closing = Some(4.0);
+        w.close_in();
+        assert!(w.units[0].path.is_empty() && w.units[0].unreached.is_some());
+        // With the wall gone it doesn't look again while neither moves...
+        w.pathing = open;
+        w.close_in();
+        assert!(w.units[0].path.is_empty());
+        // ...but does once it has.
+        w.units[0].position[0] += 1.0;
+        w.close_in();
+        assert!(!w.units[0].path.is_empty() && w.units[0].unreached.is_none());
     }
 
     #[test]

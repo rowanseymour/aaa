@@ -273,10 +273,19 @@ impl World {
             if within(here, there, reach) || !(self.ticks + r as u64).is_multiple_of(BEAT) {
                 continue;
             }
+            // What's still flying in goes where its delivery takes it.
+            if self.flown(r) {
+                continue;
+            }
             let (to, facing) = self.near(r, piece);
             let off = squared_distance(self.organizations[r].position, to);
-            if !self.underway(r) || off > PURSUIT_DRIFT * squared_distance(here, to) {
-                self.send(r, to, facing);
+            if self.underway(r) && off <= PURSUIT_DRIFT * squared_distance(here, to) {
+                continue;
+            }
+            self.send(r, to, facing);
+            // Sent off and going nowhere, it can't get any nearer.
+            if !self.underway(r) {
+                self.organizations[r].mending = None;
             }
         }
     }
@@ -810,6 +819,44 @@ mod tests {
         w.buildings[0].owner = 1;
         w.buildings[0].fighter.flags.pop();
         assert_eq!(w.check(1, &repair), Err(Refused::Unable));
+    }
+
+    #[test]
+    fn a_repair_out_of_reach_is_given_up() {
+        let mut w = with_buildings(engineers(), &[building(9, 1, [10.0, 25.0])]);
+        w.buildings[0].fighter.flags.push(Id::from("constructable"));
+        w.buildings[0].health = 80.0;
+        // A wall right across the map between them.
+        for x in 0..w.pathing.side as i32 {
+            w.pathing.set_blocked(tgmap::Tile::new(x, 6));
+        }
+        let repair = Command::Repair {
+            organization: 0,
+            piece: Piece::Building(0),
+        };
+        w.apply(1, repair).unwrap();
+        run(&mut w, 20.0);
+        assert_eq!(w.organizations[0].mending, None);
+        assert_eq!(w.buildings[0].health, 80.0);
+    }
+
+    #[test]
+    fn a_repair_is_kept_by_engineers_pulled_off_their_way() {
+        let mut w = with_buildings(engineers(), &[building(9, 1, [10.0, 25.0])]);
+        w.buildings[0].fighter.flags.push(Id::from("constructable"));
+        w.buildings[0].health = 80.0;
+        let repair = Command::Repair {
+            organization: 0,
+            piece: Piece::Building(0),
+        };
+        w.apply(1, repair).unwrap();
+        run(&mut w, 0.5);
+        // Pulled well off, as by a fight, while it's still sent where it was.
+        let u = w.organizations[0].units[0];
+        w.units[u].position = [10.0, 2.0];
+        w.units[u].halt();
+        run(&mut w, 30.0);
+        assert_eq!(w.buildings[0].health, 100.0);
     }
 
     #[test]

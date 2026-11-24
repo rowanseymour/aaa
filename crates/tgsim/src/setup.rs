@@ -394,6 +394,7 @@ impl World {
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
             closing: None,
+            unreached: None,
             shelling: None,
             busy: 0,
             decided: 0,
