@@ -440,6 +440,14 @@ pub(crate) fn organizations(
         .max()
         .unwrap_or(0);
     let mut spare = highest + 1..;
+    // A map's attachments are the ones its HQs list in their places.
+    let attached: HashMap<u32, u32> = things
+        .iter()
+        .flat_map(|hq| {
+            let listed = hq.hq_organizations().unwrap_or_default();
+            listed.into_iter().map(move |r| (r, hq.id))
+        })
+        .collect();
     things
         .iter()
         .filter_map(|t| {
@@ -480,7 +488,7 @@ pub(crate) fn organizations(
             let ranges = ranges(&t.template);
             let mut organization =
                 organization(t.id, &t.template, owner, facing, members, places, ranges)?;
-            organization.hq = organization.hq.filter(|&id| id != 0);
+            organization.hq = attached.get(&t.id).copied();
             organization.morale = stored.morale;
             organization.experience = t.experience().unwrap_or(0.0);
             organization.efficiency = stored.fighting.as_ref().map(|f| f.efficiency);
@@ -1150,6 +1158,54 @@ mod tests {
             &HashMap::from([(Id::from("line"), layout())]),
             &HashMap::new(),
         )
+    }
+
+    #[test]
+    fn organizations_are_attached_only_where_their_hq_lists_them() {
+        use crate::fixtures::{placed, stored_organization};
+        use tgck::map::{Component, Detail, State};
+        // An HQ listing organization 10 in its places, then an empty place.
+        let mut places = Vec::new();
+        for word in [1u32, 30, 3, 0] {
+            places.extend(word.to_le_bytes());
+        }
+        places.extend(2u32.to_le_bytes());
+        for (kind, id) in [(0u32, 10u32), (3, 0)] {
+            places.push(1);
+            places.extend(kind.to_le_bytes());
+            places.extend(id.to_le_bytes());
+            places.extend((-1i32).to_le_bytes());
+        }
+        let regiment = |id: u32, hq: Option<u32>| {
+            let mut o = stored_organization("line", vec![placed(id + 1, "rifle", 0, None, None)]);
+            // What an organization records of its own HQ doesn't decide it.
+            o.hq = hq;
+            placed(id, "squad", 2, None, Some(o))
+        };
+        let mut hq = regiment(30, None);
+        let Detail::Actor(actor) = &mut hq.detail else {
+            panic!();
+        };
+        let State::Decoded { components, .. } = &mut actor.state else {
+            panic!();
+        };
+        components.push(Component::Framed {
+            bit: 30,
+            data: places,
+        });
+        let moves = Body {
+            speed: Some(3.0),
+            ..Body::default()
+        };
+        let organizations = organizations(
+            &[regiment(10, None), regiment(20, Some(30)), hq],
+            &HashMap::from([(Id::from("rifle"), moves)]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        let hqs: Vec<_> = organizations.iter().map(|o| (o.id, o.hq)).collect();
+        assert_eq!(hqs, [(10, Some(30)), (20, None), (30, None)]);
     }
 
     #[test]

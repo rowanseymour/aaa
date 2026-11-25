@@ -900,6 +900,11 @@ impl Thing {
     pub fn hq_badge(&self) -> Option<i32> {
         self.actor()?.hq_badge()
     }
+
+    /// The ids of the organizations in this thing's places as an HQ.
+    pub fn hq_organizations(&self) -> Option<Vec<u32>> {
+        self.actor()?.hq_organizations()
+    }
 }
 
 impl Detail {
