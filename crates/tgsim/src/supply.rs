@@ -39,9 +39,9 @@ pub struct Supplying {
     /// Whether it's been looked at since it was put down or changed hands.
     pub(crate) judged: bool,
     /// Whether it was unpacking or packing when last looked at.
-    busy: bool,
+    pub(crate) busy: bool,
     /// The tile its zone was laid around, and how far.
-    laid: Option<(Tile, f32)>,
+    pub(crate) laid: Option<(Tile, f32)>,
 }
 
 impl Supplying {
@@ -827,6 +827,22 @@ mod tests {
         run(&mut w, 3.0);
         assert!(w.buildings.iter().all(|b| b.supply.zone.is_some()));
         assert!(!w.out_of_supply(0));
+    }
+
+    #[test]
+    fn relays_a_map_places_start_with_the_stockpile_it_stores() {
+        let mut w = World::from_organizations(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+        (w.rules.supplies).insert(Id::from("depot"), supply(20.0, true, 4.0));
+        let mut depot = building(7, 1, [20.0, 20.0]);
+        depot.template = "depot".into();
+        depot.stockpile = 0.5;
+        w.add_buildings(&[depot]);
+        assert_eq!(w.buildings[0].supply.stockpile, 2.0);
+        // Cut off, it lives on what it has.
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].supply.zone.is_some());
+        run(&mut w, 2.0);
+        assert!(w.out_of_supply(0) && w.buildings[0].supply.zone.is_none());
     }
 
     #[test]

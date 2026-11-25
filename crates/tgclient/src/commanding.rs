@@ -535,6 +535,7 @@ mod tests {
             deploy: None,
             organization: None,
             awake: false,
+            stockpile: 0.0,
         };
         sim.add_buildings(&[house(1), house(2)]);
         let organization = tgsim::Piece::Organization;

@@ -306,6 +306,7 @@ pub(crate) fn building(id: u32, owner: u32, position: [f32; 2]) -> tgmap::Buildi
         deploy: None,
         organization: None,
         awake: false,
+        stockpile: 0.0,
     }
 }
 

@@ -654,6 +654,7 @@ mod tests {
             deploy: None,
             organization: None,
             awake: false,
+            stockpile: 0.0,
         }]);
         if researching {
             let research = tgdata::Research {

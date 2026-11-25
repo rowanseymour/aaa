@@ -423,6 +423,8 @@ impl World {
         for b in buildings {
             let health = b.fighter.health * b.health;
             let hangar = self.hangar(&b.template, true);
+            let supply = self.rules.supplies.get(&b.template);
+            let stocks = supply.map_or(0.0, |s| s.stockpile_max);
             self.buildings.push(Building {
                 id: b.id,
                 template: b.template.clone(),
@@ -465,7 +467,10 @@ impl World {
                 deploy: b.deploy,
                 organization: b.organization.clone(),
                 rally: None,
-                supply: Supplying::default(),
+                supply: Supplying {
+                    stockpile: b.stockpile * stocks,
+                    ..Supplying::default()
+                },
                 properties: Vec::new(),
                 created: self.ticks,
                 remembered: Vec::new(),

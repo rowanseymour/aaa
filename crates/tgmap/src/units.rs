@@ -867,6 +867,7 @@ impl Recruits {
             deploy: self.deploy_points.get(template).copied(),
             organization: None,
             awake: false,
+            stockpile: 0.0,
         })
     }
 

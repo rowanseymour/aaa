@@ -3055,6 +3055,7 @@ mod tests {
             deploy: None,
             organization: None,
             awake: false,
+            stockpile: 0.0,
         };
         sim.add_buildings(&[hq]);
         sim
