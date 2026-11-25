@@ -600,7 +600,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                         }
                     });
                 }
-                Holding::Flown(picture, _) => {
+                Holding::Flown(picture, ..) => {
                     card.with_children(|card| {
                         card.spawn((inside, picture_node(picture), Pickable::IGNORE));
                         let [left, top, width, height] = SLOT_HEALTH;

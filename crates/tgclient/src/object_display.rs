@@ -1174,8 +1174,9 @@ pub(crate) enum Holding {
         picture: Option<Handle<Image>>,
     },
     /// An organization on its way by air: its picture, and the aircraft
-    /// bringing it, by index into the sim's deliveries.
-    Flown(Option<Handle<Image>>, usize),
+    /// bringing it, by index into the sim's deliveries and as the
+    /// organization it's selected as.
+    Flown(Option<Handle<Image>>, usize, Option<usize>),
     /// Nothing, saying so.
     Empty(String),
 }
@@ -1203,8 +1204,11 @@ impl Holding {
                 card.insert((Button, id, Queued(place), says(of), Pickable::default()))
                     .observe(cancel);
             }
-            &Holding::Flown(_, d) => {
+            &Holding::Flown(_, d, plane) => {
                 card.insert((Button, id, says(Says::Delivery(d)), Pickable::default()));
+                if let Some(r) = plane {
+                    card.insert(Pick(r)).observe(pick);
+                }
                 centres(card, Says::Delivery(d));
             }
             Holding::Empty(said) => {
@@ -1364,7 +1368,9 @@ impl Shows<'_> {
             (Place::Flown(d), _) => {
                 let template = self.sim.deliveries[d].template.to_string();
                 let picture = self.picture(&template);
-                Holding::Flown(picture, d)
+                let plane = self.sim.deliveries[d].plane;
+                let plane = plane.map(|u| self.sim.units[u].organization);
+                Holding::Flown(picture, d, plane)
             }
             _ => Holding::Empty(self.looks.said(EMPTY_SLOT)),
         }
