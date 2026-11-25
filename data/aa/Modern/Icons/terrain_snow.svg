@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Snow: a white mountain peak under a blue sky in a light diamond. -->
+  <defs><clipPath id="d"><polygon points="32,3 61,32 32,61 3,32"/></clipPath></defs>
+  <g clip-path="url(#d)">
+  <rect width="64" height="64" fill="#4f7cc4"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#dfe7f2" d="M-4 66 L24 18 L32 26 L40 14 L68 66 Z"/>
+  <path fill="#aebdd6" d="M40 14 L36 40 L44 52 L52 66 L68 66 Z"/>
+  <path fill="#aebdd6" d="M24 18 L20 40 L14 66 L-4 66 Z"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M-4 66 L24 18 L32 26 L40 14 L68 66"/>
+  <path fill="#ffffff" d="M40 14 L46 25 L42 23 L38 28 L35 22 L32 26 Z M24 18 L29 23 L25 25 L21 23 Z"/>
+  </g>
+  <polygon fill="none" stroke="#1c1a10" stroke-width="4.5" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <polygon fill="none" stroke="#ecebe2" stroke-width="2" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+
+</svg>

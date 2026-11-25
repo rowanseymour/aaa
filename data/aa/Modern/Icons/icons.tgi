@@ -84,3 +84,27 @@
 	image = /Properties/PropertyIcons/IconPropertyFormationColumn.png
 	texture = formation_column.svg
 }
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyCity.png
+	texture = terrain_city.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertyJungle.png
+	texture = terrain_jungle.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertySand.png
+	texture = terrain_sand.svg
+}
+
+[IconStandIn]
+{
+	image = /Properties/PropertyIcons/IconPropertySnow.png
+	texture = terrain_snow.svg
+}
