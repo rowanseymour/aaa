@@ -172,7 +172,7 @@ pub fn aim(
                 let listed = menus.menu(&sim.0, chosen.0).get(i);
                 let name = listed.map_or("", |r| r.look.name.as_str());
                 let cost = sim.0.cost(b, organization).ceil().to_string();
-                let text = fill(&menus.affording, &[name, &cost]);
+                let text = fill(&menus.recruit.affording, &[name, &cost]);
                 let about = About::Building(b);
                 failed.write(Failed {
                     text,

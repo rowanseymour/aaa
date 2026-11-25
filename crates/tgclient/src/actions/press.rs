@@ -92,6 +92,8 @@ pub struct Presser<'w, 's> {
     refusal: ResMut<'w, Refusal>,
     chat: ResMut<'w, crate::chat::Chat>,
     failed: MessageWriter<'w, Failed>,
+    /// For the names of what's refused.
+    log: Option<Res<'w, crate::messages::MessageLog>>,
     words: Res<'w, crate::confirm::Words>,
     questions: Query<'w, 's, (), With<crate::confirm::Question>>,
     commands: Commands<'w, 's>,
@@ -301,6 +303,7 @@ impl Presser<'_, '_> {
                         // offered.
                         if e != tgsim::Refused::Lacking {
                             self.refusal.0 = Some((slot, e));
+                            self.refuse_recruit(b, i, e);
                         }
                     }
                     // A plain recruit leaves the menu open for the next.
@@ -349,6 +352,21 @@ impl Presser<'_, '_> {
         };
         let sure = self.words.sure.clone();
         crate::confirm::confirm(&mut self.commands, &self.words, Screen::Match, sure, ok);
+    }
+
+    /// Tells the player the selected building at `building` won't recruit
+    /// the `i`th item of its menu, where the game says why.
+    fn refuse_recruit(&mut self, building: usize, i: usize, refused: tgsim::Refused) {
+        let log = self.log.as_deref();
+        let Some(text) = recruit_refused(&self.sim.0, &self.looks, log, building, i, refused)
+        else {
+            return;
+        };
+        self.failed.write(Failed {
+            text,
+            about: Some(About::Building(building)),
+            at: None,
+        });
     }
 
     /// Tells the player the selected building at `building` won't research
@@ -427,6 +445,36 @@ pub fn act(mut intents: MessageReader<Intent>, mut presser: Presser) {
     if let Some((i, _)) = taken {
         presser.refuse_research(b, i, tgsim::Refused::Unable);
     }
+}
+
+/// What the game says of the `i`th recruit of `building`'s menu refused
+/// for `refused`, where it says anything; `log` names the HQ it would
+/// attach to.
+pub(super) fn recruit_refused(
+    sim: &tgsim::World,
+    looks: &Looks,
+    log: Option<&crate::messages::MessageLog>,
+    building: usize,
+    i: usize,
+    refused: tgsim::Refused,
+) -> Option<String> {
+    let recruit = looks.menu(sim, Some(building)).get(i)?;
+    let cost = || {
+        recruit
+            .organization
+            .as_ref()
+            .map_or(0.0, |r| sim.cost(building, r))
+    };
+    let hq = || {
+        let id = sim.hq_of(building);
+        let hq = (sim.hqs().into_iter()).find(|h| Some(h.id) == id);
+        match (log, hq) {
+            (Some(log), Some(hq)) => log.look.hq(sim, &hq),
+            (Some(log), None) => log.look.building(sim, building),
+            (None, _) => sim.buildings[building].template.to_string(),
+        }
+    };
+    looks.recruit.refused(refused, &recruit.look.name, cost, hq)
 }
 
 /// The HQ the selection is, by its id: the selected building, or the one
