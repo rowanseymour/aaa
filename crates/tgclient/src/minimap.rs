@@ -67,16 +67,27 @@ struct Clock {
 }
 
 impl Clock {
+    /// The shortest period kept, so that a setting of nothing or less
+    /// still leaves a blink a first half to show in.
+    const SHORTEST: f32 = 1.0 / 60.0;
+
     fn new(period: f32) -> Self {
-        Clock { period, last: None }
+        Clock {
+            period: period.max(Self::SHORTEST),
+            last: None,
+        }
     }
 
-    /// Whether the layer is to be redrawn now, counting it as redrawn.
+    /// Whether the layer is to be redrawn now, counting it as redrawn. The
+    /// redraws keep to whole periods from the first, however late a frame
+    /// comes, unless one is missed altogether.
     fn due(&mut self, now: f32) -> bool {
-        if self.last.is_some_and(|last| now - last < self.period) {
-            return false;
-        }
-        self.last = Some(now);
+        let next = match self.last {
+            Some(last) if now - last < self.period => return false,
+            Some(last) if now - last < 2.0 * self.period => last + self.period,
+            _ => now,
+        };
+        self.last = Some(next);
         true
     }
 
@@ -886,8 +897,18 @@ mod tests {
         assert!(clock.first_half(0.5));
         assert!(!clock.first_half(1.0));
         assert!(!clock.due(1.2));
-        assert!(clock.due(1.25));
-        assert!(clock.first_half(1.5));
+        assert!(clock.due(1.3));
+        assert!(clock.first_half(1.7));
+        assert!(!clock.first_half(1.8));
+        assert!(clock.due(5.0));
+        assert!(!clock.due(5.9));
+    }
+
+    #[test]
+    fn a_period_of_nothing_still_blinks() {
+        let mut clock = Clock::new(0.0);
+        assert!(clock.due(1.0));
+        assert!(clock.first_half(1.0));
     }
 
     #[test]
