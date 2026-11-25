@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Jungle: bamboo stalks and leaves filling a light diamond. -->
+  <defs><clipPath id="d"><polygon points="32,3 61,32 32,61 3,32"/></clipPath></defs>
+  <g clip-path="url(#d)">
+  <rect width="64" height="64" fill="#3f6f34"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#5f9a48" d="M2 24 Q14 14 26 22 Q14 30 2 24 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#5f9a48" d="M40 48 Q52 38 64 46 Q52 56 40 48 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#8cc05a" d="M17.5 -2 L24.5 -2 L24.5 66 L17.5 66 Z"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M17.5 14 L24.5 14"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M17.5 34 L24.5 34"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M17.5 54 L24.5 54"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#8cc05a" d="M39.5 -2 L46.5 -2 L46.5 66 L39.5 66 Z"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M39.5 14 L46.5 14"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M39.5 34 L46.5 34"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M39.5 54 L46.5 54"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#b4dc78" d="M28.5 -2 L35.5 -2 L35.5 66 L28.5 66 Z"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M28.5 20 L35.5 20"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M28.5 40 L35.5 40"/>
+  <path fill="none" stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" d="M28.5 54 L35.5 54"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#6fae4e" d="M32 26 Q44 14 58 18 Q46 32 32 26 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#6fae4e" d="M32 44 Q20 34 6 38 Q18 52 32 44 Z"/>
+
+  </g>
+  <polygon fill="none" stroke="#1c1a10" stroke-width="4.5" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <polygon fill="none" stroke="#ecebe2" stroke-width="2" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+
+</svg>

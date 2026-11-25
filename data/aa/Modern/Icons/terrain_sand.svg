@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Sand: a cactus on dunes under a blue sky in a light diamond. -->
+  <defs><clipPath id="d"><polygon points="32,3 61,32 32,61 3,32"/></clipPath></defs>
+  <g clip-path="url(#d)">
+  <rect width="64" height="64" fill="#58b6d6"/>
+  <rect y="38" width="64" height="26" fill="#f2cf86"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#e2ae5c" d="M-2 44 Q18 34 36 42 Q50 48 66 40 L66 66 L-2 66 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#6fae4e" d="M28 56 L28 14 Q28 9 32 9 Q36 9 36 14 L36 56 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#6fae4e" d="M36 40 L42 40 Q44 40 44 38 L44 26 Q44 22 47.5 22 Q51 22 51 26 L51 40 Q51 47 44 47 L36 47 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#6fae4e" d="M28 34 L23 34 Q21 34 21 32 L21 24 Q21 20 17.5 20 Q14 20 14 24 L14 34 Q14 41 21 41 L28 41 Z"/>
+  <path fill="none" stroke="#a8d878" stroke-width="1.6" stroke-linecap="round" d="M31 14 L31 52 M47 26 L47 38 M17 24 L17 34"/>
+  </g>
+  <polygon fill="none" stroke="#1c1a10" stroke-width="4.5" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <polygon fill="none" stroke="#ecebe2" stroke-width="2" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+
+</svg>

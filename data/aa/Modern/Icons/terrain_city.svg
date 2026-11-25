@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- City: a cluster of town buildings under a sky in a light diamond. -->
+  <defs><clipPath id="d"><polygon points="32,3 61,32 32,61 3,32"/></clipPath></defs>
+  <g clip-path="url(#d)">
+  <rect width="64" height="64" fill="#9cc6e0"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#b9a68a" d="M30 60 L30 14 L42 14 L42 60 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#8a7a64" d="M33 14 L36 8 L39 14 Z"/>
+  <rect fill="#f7d35a" x="33" y="19" width="3" height="4"/>
+  <rect fill="#f7d35a" x="37" y="19" width="3" height="4"/>
+  <rect fill="#f7d35a" x="33" y="27" width="3" height="4"/>
+  <rect fill="#f7d35a" x="37" y="27" width="3" height="4"/>
+  <rect fill="#f7d35a" x="33" y="35" width="3" height="4"/>
+  <rect fill="#f7d35a" x="37" y="35" width="3" height="4"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#e2c48a" d="M8 66 L8 36 L18 28 L28 36 L28 66 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#c8432f" d="M5 38 L18 26 L31 38 Z"/>
+  <rect fill="#f7d35a" x="13" y="42" width="3" height="4"/>
+  <rect fill="#f7d35a" x="21" y="42" width="3" height="4"/>
+  <rect fill="#f7d35a" x="13" y="51" width="3" height="4"/>
+  <rect fill="#f7d35a" x="21" y="51" width="3" height="4"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#d8d0c0" d="M38 66 L38 32 L58 32 L58 66 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#5a6470" d="M36 33 L48 25 L60 33 Z"/>
+  <rect fill="#f7d35a" x="42" y="37" width="3" height="4"/>
+  <rect fill="#f7d35a" x="47" y="37" width="3" height="4"/>
+  <rect fill="#f7d35a" x="52" y="37" width="3" height="4"/>
+  <rect fill="#f7d35a" x="42" y="45" width="3" height="4"/>
+  <rect fill="#f7d35a" x="47" y="45" width="3" height="4"/>
+  <rect fill="#f7d35a" x="52" y="45" width="3" height="4"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#5a4630" d="M45 54 L51 54 L51 66 L45 66 Z"/>
+  <path stroke="#1c1a10" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke" fill="#9a8a70" d="M24 66 L24 46 L40 46 L40 66 Z"/>
+  <rect fill="#f7d35a" x="27" y="50" width="3" height="4"/>
+  <rect fill="#f7d35a" x="33" y="50" width="3" height="4"/>
+  <rect fill="#f7d35a" x="27" y="57" width="3" height="4"/>
+  <rect fill="#f7d35a" x="33" y="57" width="3" height="4"/>
+
+  </g>
+  <polygon fill="none" stroke="#1c1a10" stroke-width="4.5" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+  <polygon fill="none" stroke="#ecebe2" stroke-width="2" stroke-linejoin="round" points="32,3 61,32 32,61 3,32"/>
+
+</svg>
