@@ -57,6 +57,7 @@ mod targets;
 mod terrain;
 #[cfg(test)]
 mod testing;
+mod told;
 mod triggers;
 mod value;
 mod workers;
@@ -251,6 +252,8 @@ pub struct World {
     loaded: bool,
     /// Projectiles on their way.
     pub flying: Vec<Projectile>,
+    /// The uses things have been told to make, waiting on their turrets.
+    pub(crate) told: Vec<told::Told>,
     /// Projectiles that landed in the last [`LANDINGS_KEPT`] ticks, oldest
     /// first, for what shows them to find.
     pub landings: Vec<Landing>,
@@ -1176,6 +1179,15 @@ pub enum Command {
     },
     /// Sets whether an airfield's air attacks take an escort.
     Escort { building: usize, on: bool },
+    /// Has the thing with the map id `thing` stop and use, once, the
+    /// ability of its `[PerformerComponent]` whose definition is `ability`
+    /// on the thing with the id `target`, as a map's script can, or does
+    /// nothing more where it can't now. Any side may give it of anything.
+    Ability {
+        thing: u32,
+        ability: Id,
+        target: u32,
+    },
     /// Tells the map's triggers the player ran this interface command,
     /// such as `ActorCommand move`, which they're listening for.
     Heard { command: String },
@@ -1471,7 +1483,7 @@ impl Sides {
 
 digest!(World {
     organizations, units, buildings, props, deliveries, sorties, next_wave, cleared, technologies, lost, objectives, fates, over,
-    groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
+    groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, told, landings, numbers, next_id,
     next_commission, rng, sides,
 } skip {
     // Fixed by the map and the game's data.
@@ -1575,6 +1587,13 @@ digest!(Commission {
 });
 
 digest!(TurretAim { yaw, idle });
+
+digest!(told::Told {
+    by,
+    weapon,
+    target,
+    at
+});
 
 digest!(Projectile { from, by, weapon, target, at, lands, bombard } skip {
     // Its firer's template's.

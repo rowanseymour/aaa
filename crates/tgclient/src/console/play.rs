@@ -759,6 +759,76 @@ pub(crate) fn repair(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
+/// Tells a building or unit to use one of its performer's abilities on
+/// another, once, as a map's script can. An organization stands for its
+/// member that has the ability, or as the target for its member nearest.
+pub(super) fn tell_ability(world: &mut World, args: &[&str]) -> Reply {
+    let [thing, ability, target] = args else {
+        return Err(usage("ability"));
+    };
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let sim = &world.resource::<Sim>().0;
+    let ability = Id::from(*ability);
+    let has = |f: Option<&tgmap::Fighter>| {
+        f.is_some_and(|f| {
+            (f.weapons.iter()).any(|w| w.performed && w.definition == Some(ability.clone()))
+        })
+    };
+    let (by, at) = match thing_by_id(sim, thing)? {
+        Thing::Building(b) => {
+            let b = &sim.buildings[b];
+            (has(Some(&b.fighter)).then_some(b.id), b.position)
+        }
+        Thing::Units(units) => {
+            let found = units
+                .into_iter()
+                .find(|&u| has(sim.units[u].fighter.as_ref()));
+            let found = found.map(|u| &sim.units[u]);
+            (found.map(|u| u.id), found.map_or([0.0; 2], |u| u.position))
+        }
+    };
+    let thing = by.ok_or_else(|| format!("{thing} has no ability {ability}"))?;
+    let target = match thing_by_id(sim, target)? {
+        Thing::Building(b) => sim.buildings[b].id,
+        Thing::Units(units) => {
+            let far = |u: &usize| {
+                let [x, y] = sim.units[*u].position;
+                (x - at[0]).hypot(y - at[1])
+            };
+            let nearest = units.into_iter().min_by(|a, b| far(a).total_cmp(&far(b)));
+            sim.units[nearest.ok_or_else(|| format!("{target} has nobody left"))?].id
+        }
+    };
+    let command = tgsim::Command::Ability {
+        thing,
+        ability,
+        target,
+    };
+    give(world, player, command)?;
+    Ok(String::new())
+}
+
+/// A building, or living units, named by id.
+enum Thing {
+    Building(usize),
+    Units(Vec<usize>),
+}
+
+/// The building, unit or organization with the id `id`, an organization
+/// as its members alive.
+fn thing_by_id(sim: &tgsim::World, id: &str) -> Result<Thing, String> {
+    if let Some(b) = (sim.buildings.iter()).position(|b| !b.gone() && b.id.to_string() == id) {
+        return Ok(Thing::Building(b));
+    }
+    if let Some(u) = (sim.units.iter()).position(|u| u.alive() && u.id.to_string() == id) {
+        return Ok(Thing::Units(vec![u]));
+    }
+    match organization_by_id(sim, id) {
+        Ok(r) if !sim.destroyed(r) => Ok(Thing::Units(sim.survivors(r).collect())),
+        _ => Err(format!("nothing {id}")),
+    }
+}
+
 /// Queues `command` from `player` for the next tick, as a click would.
 /// The organization with object id `id`, by index.
 fn organization_by_id(sim: &tgsim::World, id: &str) -> Result<usize, String> {

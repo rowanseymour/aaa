@@ -20,7 +20,7 @@ const WAIT_SECONDS: f32 = 0.6;
 impl TurretAim {
     /// Turns toward `yaw` by up to a tick's worth of `turret`'s turn rate,
     /// the short way round, returning whether it got there.
-    fn turn(&mut self, turret: &Turret, yaw: f32) -> bool {
+    pub(crate) fn turn(&mut self, turret: &Turret, yaw: f32) -> bool {
         let step = turret.turn_rate * TICK;
         let left = wrap(yaw - self.yaw);
         if left.abs() <= step {
@@ -411,6 +411,12 @@ impl World {
         let mut hits: Vec<Hit> = Vec::new();
         let mut launched = Vec::new();
         self.air_shots(&mut hits, &mut launched);
+        // What one asleep was told to use recharges meanwhile.
+        for building in &mut self.buildings {
+            if building.fighter.notice.is_some() && !building.awake {
+                building.fired_ago.iter_mut().for_each(|ago| *ago += TICK);
+            }
+        }
         // Buildings that defend themselves sit idle until woken, and once
         // woken fire even while disabled.
         let defends = |b: usize| self.buildings[b].fighter.notice.is_some();
@@ -469,11 +475,22 @@ impl World {
                 if held || moving && !weapon.turret {
                     continue;
                 }
+                // A building only uses its performer's abilities when told.
+                if matches!(s, Target::Building(_)) && weapon.performed {
+                    continue;
+                }
                 let ready = fired_ago[w].is_infinite() || {
                     let rate = *rate.get_or_insert_with(|| self.fire_rate(s));
                     fired_ago[w] * rate >= weapon.recharge - 1e-4
                 };
                 if !ready {
+                    continue;
+                }
+                // One it's been told to use has the turret meanwhile, so
+                // the weapon on it neither aims nor takes a target.
+                if let (Target::Building(b), Some(i)) = (s, weapon.aimed_by)
+                    && self.told_turret(b) == Some(i)
+                {
                     continue;
                 }
                 let Some(t) = self.aim(s, weapon, target) else {
@@ -523,6 +540,7 @@ impl World {
                 }
             }
         }
+        self.told_uses(&mut hits, &mut launched);
         self.flying.extend(launched);
         let ticks = self.ticks;
         let (landed, flying): (Vec<_>, Vec<_>) = std::mem::take(&mut self.flying)
@@ -633,6 +651,22 @@ impl World {
         hits: &mut Vec<Hit>,
         launched: &mut Vec<Projectile>,
     ) {
+        let fighter = self.units[u].fighter.as_ref();
+        let weapon = &fighter.expect("units that fire can fight").weapons[w];
+        let bombard = self.bombards(Target::Unit(u), weapon);
+        self.fire_as(u, w, aimed, bombard, hits, launched);
+    }
+
+    /// As [`World::fire`], the shot bombardment or not as `bombard` says.
+    pub(crate) fn fire_as(
+        &mut self,
+        u: usize,
+        w: usize,
+        aimed: Aimed,
+        bombard: bool,
+        hits: &mut Vec<Hit>,
+        launched: &mut Vec<Projectile>,
+    ) {
         let unit = &mut self.units[u];
         let fighter = unit.fighter.as_ref().expect("units that fire can fight");
         let weapon = fighter.weapons[w].clone();
@@ -641,15 +675,56 @@ impl World {
         unit.busy = self.ticks + (weapon.choice.lasts / TICK).round() as u64;
         self.play_once(u, weapon.animation.as_deref());
         self.units[u].fired_in_fight = true;
-        let s = Target::Unit(u);
+        self.shoot(Target::Unit(u), w, &weapon, aimed, bombard, hits, launched);
+    }
+
+    /// Has building `b` fire its weapon `w` once at what it's aimed at.
+    pub(crate) fn building_fire(
+        &mut self,
+        b: usize,
+        w: usize,
+        aimed: Aimed,
+        bombard: bool,
+        hits: &mut Vec<Hit>,
+        launched: &mut Vec<Projectile>,
+    ) {
+        let building = &mut self.buildings[b];
+        let weapon = building.fighter.weapons[w].clone();
+        building.shot = Some((self.ticks, w));
+        building.fired_ago[w] = 0.0;
+        self.shoot(
+            Target::Building(b),
+            w,
+            &weapon,
+            aimed,
+            bombard,
+            hits,
+            launched,
+        );
+    }
+
+    /// What a shot by `s` with its `weapon`, its `w`th, does as it's fired.
+    #[allow(clippy::too_many_arguments)]
+    fn shoot(
+        &mut self,
+        s: Target,
+        w: usize,
+        weapon: &Weapon,
+        aimed: Aimed,
+        bombard: bool,
+        hits: &mut Vec<Hit>,
+        launched: &mut Vec<Projectile>,
+    ) {
         let by = self.owner(s);
-        self.use_on_user(&weapon, (s, by), hits);
+        self.use_on_user(weapon, (s, by), hits);
         match weapon.flight {
-            Some(flight) => launched.push(self.launch(s, by, w, &weapon, flight, aimed)),
+            Some(flight) => launched.push(Projectile {
+                bombard,
+                ..self.launch(s, by, w, weapon, flight, aimed)
+            }),
             None => {
-                let bombard = self.bombards(s, &weapon);
-                let at = self.impact(s, &weapon, self.aimed_point(aimed));
-                self.strike(&weapon, at, aimed.thing(), (s, by), bombard, hits)
+                let at = self.impact(s, weapon, self.aimed_point(aimed));
+                self.strike(weapon, at, aimed.thing(), (s, by), bombard, hits)
             }
         }
     }
@@ -980,7 +1055,7 @@ impl World {
                     let weapons = &building.fighter.weapons;
                     weapons
                         .iter()
-                        .any(|w| self.can_target(s, w, t) && self.in_arc(s, w, t))
+                        .any(|w| !w.performed && self.can_target(s, w, t) && self.in_arc(s, w, t))
                 })
                 .map(|&(t, _)| self.piece(t))
                 .collect();

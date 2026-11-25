@@ -758,6 +758,9 @@ pub struct Ability {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AbilityDefinition {
     pub ids: Option<Id>,
+    /// The definition template it's made from, which names it.
+    #[serde(rename = "@template")]
+    pub template: Option<Id>,
     /// `#` keys into the localized strings.
     pub name: Option<String>,
     pub description: Option<String>,

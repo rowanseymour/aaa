@@ -121,6 +121,8 @@ pub(crate) fn main_damage(weapon: &Weapon) -> tgmap::Damage {
 
 pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
     Weapon {
+        definition: None,
+        performed: false,
         range,
         min_range: 0.0,
         recharge: 2.0,

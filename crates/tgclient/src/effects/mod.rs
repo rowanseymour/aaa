@@ -829,6 +829,8 @@ mod tests {
 
     fn gun(effects: tgdata::WeaponEffects, flight: bool) -> Weapon {
         Weapon {
+            definition: None,
+            performed: false,
             range: 10.0,
             min_range: 0.0,
             recharge: 1.0,

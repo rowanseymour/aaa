@@ -323,7 +323,7 @@ fn retemplates(inherited: &Block, child: &Block) -> bool {
     }
 }
 
-fn template(block: &Block) -> Option<&str> {
+pub(crate) fn template(block: &Block) -> Option<&str> {
     block.attr("Template").or_else(|| block.attr("Inherit"))
 }
 

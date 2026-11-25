@@ -14,8 +14,8 @@ use super::parse::commands;
 use super::play::{
     advance, air_attack, attach, attach_hero, build, building_order, commission, create, decide,
     destroy_selected, detach_hero, disband, escort, heroes, objects, order, outcome,
-    placement_kingdom, player_kingdom, record, repair, research, select, settlements, sun, unpack,
-    use_faction_ability,
+    placement_kingdom, player_kingdom, record, repair, research, select, settlements, sun,
+    tell_ability, unpack, use_faction_ability,
 };
 use super::{Console, MAX_DEPTH, Step};
 
@@ -323,6 +323,14 @@ pub(crate) const VERBS: &[Verb] = &[
         "[kingdom | template ...]",
         "lists the buildings and organizations on the map, each with its template, id, kingdom and place; given kingdoms, by name or id, or templates, only those, a word that names a kingdom taken as one",
         |world, args, _| Ok(objects(&world.resource::<Sim>().0, args)),
+    )
+    .dev()
+    .in_match(),
+    verb(
+        "ability",
+        "thing ability target",
+        "has a building or unit, by its id or its organization's, use an ability of its performer, by its definition's id, once on another thing, by its id, as a map's script can; refused silently where it couldn't fire on it now",
+        |world, args, _| tell_ability(world, args),
     )
     .dev()
     .in_match(),

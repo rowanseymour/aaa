@@ -307,7 +307,7 @@ impl World {
         self.computer_may_play(r.owner) && !off.contains(&r.id) && !lone
     }
 
-    fn stop_by_trigger(&mut self, organization: usize) {
+    pub(crate) fn stop_by_trigger(&mut self, organization: usize) {
         let player = self.organizations[organization].owner;
         let stop = Command::Stop { organization };
         if let Err(e) = self.give_order(player, stop, false) {
