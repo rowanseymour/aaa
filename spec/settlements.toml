@@ -1,0 +1,250 @@
+subject = "Settlements"
+summary = '''Kohan II's settlements: the centre building, the invisible settlement that goes with it, and the denizens that live in a building and come out as companies. Only what a match needs to start and to know who is still in it; walls, layouts, structure building and upgrades are left out for now. AA's data has no settlements, but the rules are the same engine's.'''
+games = '''traced in Kohan II. AA's data has no settlements or denizens.'''
+
+[[topic]]
+title = "Centre and settlement"
+
+[[topic.rule]]
+id = "settlement-two-things"
+tags = ["code", "data"]
+text = '''
+A settlement is two things on the map:
+- the **centre**, an ordinary building (Kohan II's `human_center_village`, `human_center_town` and so on): it has health, houses denizens, produces (`gold = 18`, `unit_limit_provided = 2` for the village) and gives supply;
+- the **settlement**, a thing of a definition built on the `Settlement` template (`human_settlement`), owned by the same side. It's invisible, not blocking and ethereal, takes no space (`placement_category = none`), and groups the centre with the settlement's other structures and its walls.
+'''
+
+[[topic.rule]]
+id = "settlement-center-ids"
+tags = ["code", "data"]
+text = '''Which settlement goes with a centre: the settlement definition whose `[SettlementComponent]` `[Levels]` lists that centre in a `settlement_center_ids`. The settlement is at the level that names its centre (the village is the first level, the town the second, and so on).'''
+
+[[topic.rule]]
+id = "settlement-recruit-component"
+tags = ["code", "data"]
+text = '''The `Settlement` template gives every settlement a `RecruitComponent` (with nothing listed to recruit), which is what makes a settlement keep its side alive (see [outcome](outcome.toml)). The centre has no `RecruitComponent` and no `OrganizationComponent` of its own. The settlement is also what recruits companies, from designs rather than that list: see [recruiting](recruiting.toml).'''
+
+[[topic]]
+title = "Placing a centre"
+
+[[topic.rule]]
+id = "placing-centre"
+tags = ["code"]
+text = '''
+Whenever a centre is placed whole (a placeholder replaced at match start, or placed in the editor), in this order:
+- it's refused if the spot is already inside another settlement, with a line in the message log;
+- its required object (`required_object_ids = marker_settlement` on every Kohan II nation's centre) is created at the spot first, unless one is already there for it;
+- the centre is created;
+- the settlement is created at the centre's position, owned by the same side, with the centre as its centre;
+- the settlement builds its walls, if its level has any (a first level has none unless `first_level_has_walls`; the stock settlements leave it off, so a village starts without walls). If the settlement can't take the centre, all of them are removed again and a line is posted to the message log.
+'''
+
+[[topic.rule]]
+id = "placeholder-settlementvillage"
+tags = ["code", "data"]
+text = '''So a side given `placeholder_settlementvillage` starts with three new things: a `marker_settlement`, its nation's village centre and its nation's settlement.'''
+
+[[topic]]
+title = "When a centre goes"
+
+[[topic.rule]]
+id = "centre-dies"
+tags = ["code"]
+text = '''When a centre dies, the settlement's other structures are sold (those still being built are cancelled) and its walls are removed.'''
+
+[[topic.rule]]
+id = "settlement-removed"
+tags = ["code", "guess"]
+text = '''The settlement itself goes when its centre is removed from the map. Whether that's the moment the centre dies or only once its wreck has gone hasn't been settled (Open questions).'''
+
+[[topic]]
+title = "Denizens"
+
+[[topic.rule]]
+id = "denizen-component"
+tags = ["code", "data"]
+text = '''A building with a `DenizenComponent` (every Kohan II centre, and lairs and camps) houses denizens: men who live inside it and aren't things on the map while they're there.'''
+
+[[topic.rule]]
+id = "denizen-inventory"
+tags = ["code", "data"]
+text = '''`[Inventory]` blocks say who lives there: `actor_ids` (a unit, e.g. `worker`, `bowman`, `pikeman`) and `count`. A building starts with its full inventory inside, at full health, from the moment it exists.'''
+
+[[topic.rule]]
+id = "inventory-places"
+tags = ["code"]
+text = '''Each place in the inventory is a denizen for good: it's inside, out in a company, or dead and growing back (Healing and replacing, below).'''
+
+[[topic.rule]]
+id = "denizen-organizations"
+tags = ["data"]
+text = '''
+`[Organization]` blocks say which companies the denizens come out as: `organization_ids` (e.g. `workers_human`, `militia_bowman`) and `behavior`, one or more of:
+- `WORKER`: comes out to work on the settlement: building, repairing, upgrading, razing;
+- `MILITIA_OFFENSIVE`: comes out to fight when the settlement is under siege;
+- `MILITIA_DEFENSIVE`: comes out to fight when the settlement is under siege and its wall has been breached.
+'''
+
+[[topic.rule]]
+id = "denizens-come-out-when-needed"
+tags = ["code", "data"]
+text = '''Denizens come out only when there's something for them to do. Nothing brings them out at match start, so a side starts with its denizens inside and no companies on the map.'''
+
+[[topic]]
+title = "Militia"
+under = "Denizens"
+
+[[topic.rule]]
+id = "militia-guard-range"
+tags = ["code", "data"]
+text = '''Militia come out when enemies come within the building's `guard_range` (the template default is 10; Kohan II's centres use 38).'''
+
+[[topic.rule]]
+id = "militia-offensive-defensive"
+tags = ["code"]
+text = '''`MILITIA_OFFENSIVE` militia come out whenever there are enemies in range. `MILITIA_DEFENSIVE` militia come out only when the settlement's walls aren't whole: a piece is missing or broken, or it has no walls at all (so a village without walls sends both kinds out), or the building belongs to no settlement. The player's sally order sends them out whatever the walls.'''
+
+[[topic.rule]]
+id = "militia-dispatched"
+tags = ["code", "data"]
+text = '''Militia coming out posts `militia_dispatched` ("%s militia dispatched"), at most once per `DenizenDisplayGameEventTime` seconds for each building (a `UVars.tgi` setting, 5 in both games). The event is only the notice: militia still come out as often as they're needed.'''
+
+[[topic]]
+title = "Work"
+under = "Denizens"
+
+[[topic.rule]]
+id = "worker-jobs"
+tags = ["code"]
+text = '''
+Workers (`WORKER`) come out for these jobs, the building or its settlement taking them most urgent first:
+1. razing the building itself, when it's being razed;
+2. razing structures that aren't the settlement's but stand inside its zone (looked for every 10 seconds);
+3. building or upgrading a structure (the building, or one of the settlement's structures, while it's under construction or being upgraded and below full health);
+4. repairing the building itself when it's damaged;
+5. repairing one of the settlement's damaged structures;
+6. repairing a damaged wall piece;
+7. building a missing wall piece;
+8. upgrading a wall piece to the settlement's level.
+'''
+
+[[topic.rule]]
+id = "jobs-while-short"
+tags = ["code"]
+text = '''Repairs (4 to 6) and building missing walls (7) aren't taken on while the side is short: while its income doesn't cover what it's paying out (see [economy](economy.toml)). Jobs already waiting are dropped then too.'''
+
+[[topic.rule]]
+id = "wall-job-limit"
+tags = ["code"]
+text = '''The building or its settlement can't take on more wall jobs (6 to 8) at once than it has worker companies out, counting at least one.'''
+
+[[topic.rule]]
+id = "workers-under-siege"
+tags = ["code"]
+text = '''Under siege: workers don't come out for any of these jobs while the building is under siege (see [buildings](buildings.toml#under-siege)), and no missing wall piece is built while the centre is. Razing the building itself is the exception: its workers come out for that unless enemies are within its guard range.'''
+
+[[topic]]
+title = "Coming out and going back"
+under = "Denizens"
+
+[[topic.rule]]
+id = "one-company-per-second"
+tags = ["code"]
+text = '''A building sends out at most one company per second (it's checked once a second), and keeps sending one a second while the need lasts and it has denizens to make one.'''
+
+[[topic.rule]]
+id = "which-company"
+tags = ["code"]
+text = '''Which company: the first `[Organization]` block, in the order the building lists them, whose `behavior` includes the job and that can be made up from the denizens inside (below). So of two militia organizations, the first comes out first and the second a second later if it can still be made up.'''
+
+[[topic.rule]]
+id = "company-make-up"
+tags = ["code"]
+text = '''
+It's made up position by position along the organization's own make-up (its template's `[OrganizationComponent]` slots, each slot's `number` of positions), each slot taking denizens whose unit fits its property (`front`, `flank`, ...), all of one unit:
+- Normally only a complete company comes out: every required slot filled to its `number`, from denizens at full health. An optional slot is filled whole if it can be and otherwise left empty.
+- Militia may come out short while the building is under siege ([buildings](buildings.toml#under-siege)): offensive militia whenever it is, defensive militia only when its walls are breached too. Then each required slot needs at least one denizen, slots take as many as there are up to their `number`, and a wounded denizen counts if its unit can't heal (`resupply_rate` 0); others must still be at full health. When workers are wanted at the same moment, only a complete company comes out.
+- Workers always come out complete.
+'''
+
+[[topic.rule]]
+id = "make-up-cap"
+tags = ["code"]
+text = '''A company never takes more than its make-up: the inventory's other denizens stay inside for the next company.'''
+
+[[topic.rule]]
+id = "where-company-appears"
+tags = ["code"]
+text = '''Where it appears: the game starts at the building's position, facing the way the building faces, or towards the job's target when the job is somewhere else (another structure, a wall, an enemy). From there it looks for a clear spot as a recruited unit does in [recruiting](recruiting.toml#a-single-unit), with a ring radius of the building's radius plus that of the company's leader (its primary slot's unit, or the first unit when there's none). Here a clear spot is used as it should be: the company appears at the first one, facing away from the ring's centre. When none of the 33 points is clear, nothing comes out and the denizens stay inside.'''
+
+[[topic.rule]]
+id = "companies-out"
+tags = ["code", "data"]
+text = '''While out they're an ordinary company: a regiment in the [outcome](outcome.toml) sense, so they keep their side alive. They pay no upkeep, produce nothing and don't count against the unit limit ([recruiting](recruiting.toml#cost-limit-and-time)).'''
+
+[[topic.rule]]
+id = "company-goes-back"
+tags = ["code"]
+text = '''When the company has nothing left to do (no enemies to fight, no job waiting) it goes back to its building on its own, as if ordered to join it, and goes inside: its units stop being things on the map and are denizens again. If another job is waiting it takes that instead.'''
+
+[[topic.rule]]
+id = "militia-come-out-again"
+tags = ["code"]
+text = '''Militia that have gone back come out again the next time they're needed, with no wait beyond the once-a-second check, as long as they can be made up: after a fight that usually means waiting for the wounded to heal (below).'''
+
+[[topic]]
+title = "Healing and replacing"
+under = "Denizens"
+
+[[topic.rule]]
+id = "denizens-heal"
+tags = ["code", "data"]
+text = '''Denizens inside heal one at a time: the building picks a wounded one first, and only when none is wounded one that died (Dying outside, below). It gains `resupply_rate` times its maximum health per second (0.1 for most Kohan II units, so about 10 seconds from nothing), times one minus the side's shortage fraction, so a side short of upkeep heals its denizens more slowly ([economy](economy.toml)).'''
+
+[[topic.rule]]
+id = "dying-outside"
+tags = ["code", "guess"]
+text = '''Dying outside: a denizen killed while out in a company is gone from the company, but its place in the inventory stays, inside and at no health. It grows back as above, so a building's denizens are replaced one at a time, each taking about 10 seconds.'''
+
+[[topic]]
+title = "Data"
+
+[[topic.rule]]
+id = "data-left-out"
+tags = ["data"]
+text = '''What the rules above read. Everything else in these definitions is left out here: `[AvailableStructures]`, each level's `max_structures` and `wallset_ids`, `[Placeholders]` (wall placeholders, unrelated to the map placeholders in [match start](match-start.toml)), `[Shape]`, `[StructureLayouts]`, `connected_wall`, `wall_neighbor_damage_factor`, `intruder_raze_property`, `default_layout_ids` (the company editor's blank layout), and the denizen's air parts (`[DenizenGroup]`, `[Runway]`, `[AirAttackCost]`, `[AirReconCost]`) and `[DeploymentInfo]`, which is under where recruits appear in [recruiting](recruiting.toml).'''
+
+[[topic.rule]]
+id = "settlement-component"
+tags = ["code", "data"]
+text = '''`[SettlementComponent]` (`Templates/Components/template_settlement.tgi`; each nation's in `Settlements/<nation>_settlement.tgi`): `[Levels]` with one `[Level]` per settlement level, whose `settlement_center_ids` is the centre for that level; `first_level_has_walls`.'''
+
+[[topic.rule]]
+id = "denizen-component-data"
+tags = ["code", "data"]
+text = '''`[DenizenComponent]` (`Templates/Components/template_denizen.tgi`): `[Organization]` (`organization_ids`, `behavior`), `[Inventory]` (`actor_ids`, `count`), `guard_range` and `guard_operational_range`.'''
+
+[[topic.rule]]
+id = "required-object-ids"
+tags = ["code", "data"]
+text = '''`[ConstructionComponent]` `required_object_ids`: the thing the building must stand on (`marker_settlement` for centres and camps, a resource marker for mines).'''
+
+[[topic.rule]]
+id = "placeholders-random-actors"
+tags = ["data"]
+text = '''A nation's `[Placeholder]` list (`placeholder_IDS`, `thing_IDS`) and a thing's `[RandomActor]` (`random_actor_ids`, `weight`) are in [match start](match-start.toml).'''
+
+[[open]]
+q = '''Is a settlement removed the moment its centre dies, or only once the centre's wreck is gone (`rot_time` and `sink_time` 3 each on Kohan II's buildings)? It keeps its side alive until then.'''
+by = "analysis"
+asked = 2026-11-15
+
+[[open]]
+q = '''When a centre is captured, does its settlement change side with it, and so keep the captor alive instead?'''
+by = "analysis"
+asked = 2026-11-15
+
+[[open]]
+q = '''Whether a wounded denizen that comes out short (under siege) comes out with its wounds or at full health.'''
+by = "analysis"
+asked = 2026-11-16

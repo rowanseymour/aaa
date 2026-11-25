@@ -1,0 +1,304 @@
+subject = "Recruiting"
+summary = '''How a side gets new units and regiments from a recruiter: what a recruiter offers, what makes an entry offered, greyed or hidden, what it costs and what limits it, and where the recruit appears. The menus that show the entries are in [commands](commands.toml#command-grid); a company's make-up and its heroes are in [companies](companies.toml).'''
+games = '''traced in AA, and Kohan II's recruiting at settlements in Kohan II. The two share every rule here not marked as one game's.'''
+
+[[topic]]
+title = "Recruiters"
+
+[[topic.rule]]
+id = "recruit-component"
+tags = ["code", "data"]
+text = '''A recruiter is a thing with a `RecruitComponent`.'''
+
+[[topic.rule]]
+id = "aa-recruiters"
+tags = ["code", "data"]
+text = '''AA: HQs, battleships and carriers recruit what their `RecruitActor` list names, through the Deploy and Deploy to Location menus ([commands](commands.toml#deploy-menus)). A recruit whose template names a `transport_actor` is delivered rather than walking out (see [deliveries](deliveries.toml)).'''
+
+[[topic.rule]]
+id = "settlement-recruits"
+tags = ["code", "data"]
+text = '''
+Kohan II: the settlement recruits, not its centre or any other building; selecting the centre gives the settlement's recruit commands.
+- It offers one command, Recruit (`commission`, "Opens the Recruit menu."), which recruits a whole company from a design (Company designs, below). The Deploy and Deploy to Location commands come only from a `RecruitActor` list, and the `Settlement` template's is empty, so a settlement never shows them.
+- Recruit is disabled while the settlement is under siege ("Cannot recruit while under siege."; [buildings](buildings.toml#under-siege)).
+'''
+
+[[topic]]
+title = "Offered, greyed or hidden"
+
+[[topic.rule]]
+id = "entry-requirements"
+tags = ["code"]
+text = '''Every entry a recruiter could recruit (a `RecruitActor` entry, or a unit in a Kohan II design) is checked against its requirements for the recruiter at hand. The outcome is one of three: offered, greyed (shown but not pressable) or hidden.'''
+
+[[topic.rule]]
+id = "worst-member-outcome"
+tags = ["code"]
+text = '''A regiment or company is checked member by member and takes the worst of its members' outcomes; where members differ the later slot decides.'''
+
+[[topic.rule]]
+id = "required-properties"
+tags = ["code", "data", "guess"]
+text = '''
+The requirements are on a unit's `[ElementComponent]`:
+- `required_properties` is met when the recruiter has the property (in Kohan II, the settlement or the thing recruiting), or, for a technology (`is_technology`), when the side has it (how a side gets one: [research](research.toml));
+- `required_structures` is met by a finished structure of that template, or one upgraded from it however many times, standing in the recruiter's settlement (its centre included) or belonging to no settlement. Structures in the side's other settlements don't count, nor do ones still being built. In Kohan II a town, city or citadel centre counts as `human_center_village`, so a settlement's level matters only through its centre. AA has no settlements, so there any of the side's finished structures counts.
+- Where several structures are listed (`human_woodmill,human_library`) all are needed.
+'''
+
+[[topic.rule]]
+id = "hide-if-missing-properties"
+tags = ["code", "data"]
+text = '''A missing property hides the entry if the template's `hide_if_missing_properties` is true (the default in `template_actor.tgi`) and greys it if false. A missing structure only ever greys it. A greyed entry's tooltip names what's missing ("%s\n Requires: %s", `recruit_error_missing_requirements`).'''
+
+[[topic.rule]]
+id = "type-allowance"
+tags = ["code"]
+text = '''A side also holds an allowance for each unit type, and an entry is hidden when any of its units has none left. Every type the side isn't barred from by its map's restriction groups ([research](research.toml#scenario-restrictions)) gets one when the match starts, without limit; a barred type gets none, which is how a barred unit comes to be hidden.'''
+
+[[topic.rule]]
+id = "hero-allowance"
+tags = ["code"]
+text = '''Kohan II's heroes are the other kind: each hero in the side's pool is an allowance of one, so a design naming a hero is offered only while that hero is available ([companies](companies.toml)).'''
+
+[[topic.rule]]
+id = "aa-allowance-restrictions-only"
+tags = ["code", "data"]
+text = '''In AA's shipped data the allowance hides only what a map's restrictions bar; nothing limits a type to a count.'''
+
+[[topic.rule]]
+id = "amphibious-regiment-example"
+tags = ["code", "data"]
+text = '''An AA example: the amphibious regiment's fourth rifleman (`<nation>_infantry_amphib`) requires `tech_battleship`. That technology is a property each battleship carries itself. Nothing researches it, no starting set or shipped scenario grants it to a side, and no other actor carries it. So a battleship can recruit the regiment, and an Infantry HQ never can. The HQ's entry is hidden, since the rifleman keeps the default `true`. The USA Marine regiment works the same way through `marine_deployment`, a property only the USA battleship carries.'''
+
+[[topic.rule]]
+id = "order-rechecked"
+tags = ["code"]
+text = '''A recruit order is checked again when it's carried out. One for an entry that isn't offered (hidden or greyed) is refused before anything is spent, with no message. So an HQ can't recruit the amphibious regiment by any route.'''
+
+[[topic]]
+title = "Company designs (Kohan II)"
+
+[[topic.rule]]
+id = "company-design"
+tags = ["code", "data"]
+text = '''A company is recruited from a design: a company template plus a unit for each position of its layout ([companies](companies.toml#make-up)). Company templates are the organization definitions that can be recruited, such as `company_pikeman` and `company_bowman` in `Units/<nation>/*.tgi`. An organization's `recruitable` defaults to `WITH_PRIMARY`: recruitable when its layout has a `PrimarySlot` (the captain). The denizen, monster, ambient and tech-militia company templates set `recruitable = no`.'''
+
+[[topic.rule]]
+id = "recruit-menu"
+tags = ["code", "data"]
+text = '''The Recruit menu offers saved designs as favourites, Custom Company (the company editor), Load Last Company, Save to Favorites and Reset Favorites ("Resets this nation's favorites to the default layouts"). Favourites are kept per player and per settlement type (each nation's settlement definition, e.g. `human_settlement`), outside the game's data.'''
+
+[[topic.rule]]
+id = "editor-candidates"
+tags = ["code"]
+text = '''
+In the editor the player places units into positions. A unit is listed for a position when all of these hold:
+- it has the position's property;
+- the side may have it (no side-wide allowance bars it);
+- it's recruitable (units default to `recruitable = YES`) and is an element (has an `ElementComponent`);
+- every structure in its `required_structures` is one this kind of settlement could ever have: its centres at every level, its `[AvailableStructures]`, and what those upgrade into. This is what keeps other nations' units out of a settlement's editor. A unit with no required structures passes for every settlement;
+- it isn't hidden for this settlement (above). Greyed units are listed but can't be placed.
+'''
+
+[[topic.rule]]
+id = "editor-candidate-order"
+tags = ["code", "data"]
+text = '''The editor lists a position's candidates in two groups: first the units that can't build, then, after a divider, the builders (units with a `BuilderComponent` that lists something to build, such as settlers and engineers). Each group is in alphabetical order of the units' displayed names, ignoring case, and by id where names are equal. The captain position's candidates include the side's available heroes ([companies](companies.toml#the-heroes-menu)).'''
+
+[[topic.rule]]
+id = "front-line-template"
+tags = ["code", "data"]
+text = '''The front line picks the template. Choosing a front-line unit the current template can't take switches the design to the first company template, in data order, that the side may have and whose locked position holds that unit, keeping the units already placed wherever the new layout takes them. Flank, support and captain are free choices. With nothing chosen yet, the editor starts from the settlement's `default_layout_ids` (`company_standard`).'''
+
+[[topic.rule]]
+id = "design-hero-captain"
+tags = []
+text = '''A design can name a hero for its captain ([companies](companies.toml#heroes)).'''
+
+[[topic.rule]]
+id = "design-complete"
+tags = ["code"]
+text = '''The design can be recruited when it's complete (locked positions as the template has them, every required position filled) and every unit in it is offered. A design naming a hero is offered only while that hero is available ([companies](companies.toml#joining-and-leaving-a-company)).'''
+
+[[topic.rule]]
+id = "design-tooltip"
+tags = ["code"]
+text = '''A design's tooltip (on a favourite, and on the editor's Recruit button) lists what it still requires ("Requires"), its cost ("Cost") and its upkeep ("Upkeep"): cost and upkeep are the template's own plus every position's unit, as the company will pay them (below).'''
+
+[[topic]]
+title = "Favourites"
+under = "Company designs (Kohan II)"
+
+[[topic.rule]]
+id = "favourite-slots"
+tags = ["code", "data"]
+text = '''There are 20 favourite slots (`FavoritesMax`, an `AVars` setting no shipped file sets, default 20), shown in 2 rows (`FavoritesRows`, default 2).'''
+
+[[topic.rule]]
+id = "favourite-icon"
+tags = ["code", "data"]
+text = '''A favourite's button shows the icon (`[View] icon`) of the unit in the design's first locked position (the front line, which fixes the template; company templates have no icon of their own, only the `banner_icon` their banner uses). Below it, four small icons for the design's flank, flank, support and support positions (`role_property` in `UI/Game/favorites_display.tgi`): each shows the `role_glyph` of that position's unit's role property (a property with `is_role_property`, in `Properties/properties_role.tgi`, e.g. `bow.png` for `role_archer`), or `UI/game/Favorites/Empty.png` when it's empty. The captain gets none.'''
+
+[[topic.rule]]
+id = "favourite-disabled"
+tags = ["code", "guess"]
+text = '''A favourite that isn't offered at this settlement is shown disabled.'''
+
+[[topic.rule]]
+id = "reset-favorites"
+tags = ["code", "data"]
+text = '''Reset Favorites asks "Reset Favorites?" first, then refills this settlement type's slots with its default layouts. A settlement type whose favourites were never saved gets the defaults when its Recruit menu first opens.'''
+
+[[topic.rule]]
+id = "default-layouts"
+tags = ["code"]
+text = '''The default layouts for a settlement type are company templates themselves, each with its own make-up (the template's `[OrganizationComponent]` slots): every template, in data order, that is recruitable, whose every unit could appear in that kind of settlement (as for the editor's lists, above) and whose every unit needs no property (no technology). Templates with a builder unit come first, then the rest, until the 20 slots are full; any slots left over stay empty.'''
+
+[[topic.rule]]
+id = "save-to-favorites"
+tags = ["code", "data", "guess"]
+text = '''Save to Favorites ("Allows you to save your current layout to a favorite slot.", or the editor's Save button) turns the cursor into "Save To Favorite" and the player clicks the slot to store the design in; whatever was there is replaced. There's no "full": any slot can be overwritten.'''
+
+[[topic.rule]]
+id = "load-last-company"
+tags = ["code", "guess"]
+text = '''Load Last Company ("Loads the last company you created.") recruits again the last design this player recruited, at the selected settlement, if that design is offered there; otherwise nothing happens. One design is remembered per player, whichever settlement it was recruited at.'''
+
+[[topic]]
+title = "Cost, limit and time"
+
+[[topic.rule]]
+id = "recruit-cost"
+tags = ["code", "data"]
+text = '''
+A recruit costs its template's `[Cost]` plus, for a regiment or company, every position's unit `[Cost]`, scaled by `RECRUIT_COST` as [economy](economy.toml#paying-for-commissions) describes. It's all paid when the order is given; a side that can't pay is refused with "Insufficient funds for %s. Requires %s." (`recruit_error_affording`).
+- Kohan II: company templates have no `[Cost]` of their own and costs are gold only, so four front-line pikemen (`gold = 8` each) cost 32 gold before the other positions.
+'''
+
+[[topic.rule]]
+id = "recruit-upkeep"
+tags = ["code", "data"]
+text = '''Upkeep is the recruit's and its members' `[Upkeep]`, paid as in [economy](economy.toml) (Kohan II's are `iron`, `wood`, `stone`, `mana`; a pikeman's is `iron = 0.5`).'''
+
+[[topic.rule]]
+id = "upkeep-from-design"
+tags = ["code"]
+text = '''A regiment's or company's upkeep comes from its design, not from the members it has: the template's own plus every position's unit, from the moment it's made. So a new Kohan II company pays for all its positions while they're still filling, and a company that has lost members keeps paying for them.'''
+
+[[topic.rule]]
+id = "denizen-companies-free"
+tags = ["code", "data"]
+text = '''Denizen companies (out of a building) pay no upkeep, produce nothing and take none of the unit limit: their templates aren't recruitable.'''
+
+[[topic.rule]]
+id = "aa-recruit-queue"
+tags = ["code"]
+text = '''AA: the order joins the building's queue, takes the template's recruit time, and has the regiment and building limits checked when it reaches the front: [economy](economy.toml#paying-for-commissions).'''
+
+[[topic.rule]]
+id = "kohan-ii-no-queue"
+tags = ["code", "data"]
+text = '''
+Kohan II: there's no queue and no recruit time (`recruit_time` is 0, and nothing sets it). The company is made the moment the order is given, and the unit limit is checked then instead:
+- every company built on `K2Company` uses `unit_limit_consumed = 1`; denizen companies use 0;
+- a side's limit is the `unit_limit_provided` of what it owns: each centre by its level (village 2, town 3, city 4, citadel 5) and some nations' barracks (1);
+- a company that would take the side over its limit is refused with "Insufficient %s to recruit %s" (`recruit_error_resource_limit`, the limit's name then the company's).
+'''
+
+[[topic.rule]]
+id = "company-fills-in"
+tags = ["code", "guess"]
+text = '''Kohan II: the company is made with only its captain and any hero named in the design; its other positions fill in over the next seconds ([companies](companies.toml#a-new-companys-positions)). The side is told `company_commissioned` ("%s commissioned").'''
+
+[[topic]]
+title = "Where a recruit appears"
+
+[[topic.rule]]
+id = "deployment-info"
+tags = ["code", "data"]
+text = '''A recruiter with a `DeploymentInfo` block creates a single unit at `creation_offset` and sends it to `deployment_offset`, as the block's fields describe. No Kohan II definition has one.'''
+
+[[topic.rule]]
+id = "start-point"
+tags = ["code"]
+text = '''Otherwise the game starts from a start point: the recruiter's position plus `deployment_offset` turned by the recruiter's facing, which with no block is the recruiter's own position. A Kohan II settlement's position is its centre's.'''
+
+[[topic]]
+title = "A single unit"
+under = "Where a recruit appears"
+
+[[topic.rule]]
+id = "clear-spot-rings"
+tags = ["code"]
+text = '''
+From the start point the game looks for a clear spot, the start point first, then 32 more in four rings of eight:
+- The rings' radius is the recruiter's radius plus the recruited unit's.
+- The first ring is around the start point; the others are around points a step of `RecruitSearchRadiusSmall` from it (an SVar no shipped SVars file sets, so 0.5 in both games), along the recruiter's facing and then turned 120° and 240° clockwise from it (seen from above).
+- Each ring's points start along the facing and go round clockwise in 45° steps. A point is clear when the unit's shape there overlaps no blocking thing.
+- Facing at a ring point is away from the start point.
+'''
+
+[[topic.rule]]
+id = "clear-spot-backwards"
+tags = ["code", "data"]
+text = '''But the game uses the result backwards: when it finds a clear spot it creates nothing and refunds the cost, and only when all 33 points are blocked does it create the unit, at the start point with the recruiter's facing. In AA's shipped data only battleships have no `DeploymentInfo`, and their recruits all come by transport, so the player's orders never get here: a battleship in open water, if it were ever told to recruit its truck without a place, would recruit nothing, and one hemmed in would create the truck on top of whatever is in the way.'''
+
+[[topic.rule]]
+id = "denizen-rings"
+tags = []
+text = '''The same rings are used, the right way round, for denizens coming out of a building ([settlements](settlements.toml#coming-out-and-going-back)).'''
+
+[[topic]]
+title = "A regiment or company"
+under = "Where a recruit appears"
+
+[[topic.rule]]
+id = "regiment-placement"
+tags = ["code"]
+text = '''
+Regiments and companies are placed differently, and the result is used the right way round:
+- The game first looks along the line from the start point to the recruiter's position for a spot where the leader fits; when none is found, nothing is created, the cost is refunded and `recruit_error_creating` ("Could not create %s") is posted.
+- From that spot it searches outward in rings, roughly a unit apart, out to the recruiter's radius plus the regiment's (for a settlement, its centre's radius), and takes the first clear point. If none is clear the regiment is still created at the line's spot.
+- The regiment faces the way the recruiter faces.
+'''
+
+[[topic.rule]]
+id = "captain-position"
+tags = ["code", "data"]
+text = '''In Kohan II the captain stands at the company's own position (every layout puts the `captain` at 0,0), and positions filled later appear in their formation places around the company; none walks out of a building.'''
+
+[[topic]]
+title = "Rally point"
+under = "Where a recruit appears"
+
+[[topic.rule]]
+id = "recruit-to-rally-point"
+tags = ["code", "data"]
+text = '''If the recruiter has a rally point (`set_rally_point`, "Set Rally Point": "Commands all units recruited from this building to move to target area."), the new recruit is then ordered to move there.'''
+
+[[topic.rule]]
+id = "settlement-rally-point"
+tags = ["code"]
+text = '''Kohan II: a settlement can have one. Set Rally Point is offered whenever its Recruit command is, so not while it's under siege, and like Recruit it shows when the settlement's centre is selected. Every company recruited there then moves to it. Denizen companies coming out of its buildings don't.'''
+
+[[open]]
+q = '''Where do the members of a regiment that comes complete (AA's) stand when it appears: in formation around the leader's spot?'''
+by = "analysis"
+asked = 2026-11-08
+
+[[open]]
+q = '''What a spot needs to be clear when placing a company: whether the centre's own footprint blocks it (then the start point, inside the centre, would always fail). Check in the game where a new company stands.'''
+by = "analysis"
+asked = 2026-11-15
+
+[[open]]
+q = '''Is AA's structure requirement really met by any of the side's finished structures, as the shared code suggests?'''
+by = "analysis"
+asked = 2026-11-16
+
+[[open]]
+q = '''What clicking a favourite does: recruit it at once, or load it into the editor (and what right-clicking one does).'''
+by = "analysis"
+asked = 2026-11-16

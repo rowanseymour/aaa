@@ -1,0 +1,409 @@
+subject = "Lighting"
+summary = '''The map's sun: the values it holds, where they come from when a match starts (the map, a random map's climate, AA's Time of Day setting), how triggers change them during play, how they shade terrain and models, and the one thing besides light that depends on them.'''
+games = '''traced in AA. Kohan II ships the same `Sun/sun_*.tgi` presets and sun triggers but has no Time of Day world rule; its random maps are unchecked.'''
+
+[[topic]]
+title = "What the sun holds"
+
+[[topic.rule]]
+id = "sun-parts"
+tags = ["code"]
+text = '''One sun per map, made of: a direction; three colours, diffuse, ambient and specular (RGB, 0..1 per channel); and a dimmer (a single number, 1 for full light).'''
+
+[[topic.rule]]
+id = "sun-transitions"
+tags = ["code"]
+text = '''The colours and the dimmer can each be on their way to a new value: the sun keeps the colours it shows now and the colours it's heading for, with the seconds left to get there, and likewise for the dimmer. Both move in a straight line with game time, so they don't move while the game is paused. A change with 0 seconds is immediate.'''
+
+[[topic.rule]]
+id = "sun-section"
+tags = ["code"]
+text = '''A map's `SUN` section saves all of it: direction, the colours shown and heading for, the seconds left, and the dimmer's value, target and seconds left.'''
+
+[[topic.rule]]
+id = "default-sun"
+tags = ["code", "data"]
+text = '''A new map's sun (and the starting point before a map's own `SUN` is read) comes from the constants `SunDirection` (stock 1,1,-2), `SunDimmer` (1), `SunDiffuse`, `SunAmbient` and `SunSpecular`. AA's `SVars_AA.tgi` sets these colours to white, white and black (the same as `sun_default`); `SVars.tgi` alone gives ambient 0.8 grey.'''
+
+[[topic.rule]]
+id = "sun-presets"
+tags = ["data"]
+text = '''The `Sun/sun_*.tgi` presets (`[Sun]`: `diffuse`, `ambient`, `specular`) carry colours only: no direction and no dimmer.'''
+
+[[topic]]
+title = "Time of Day"
+
+[[topic.rule]]
+id = "time-of-day-rule"
+tags = ["data"]
+text = '''AA only: the `Sun` world rule (`Game/world_rules_aa.tgi`, "Time of Day" in the lobby and in the Scenario Map and Random Map dialogs) names a preset: `sun_default` (Default, the rule's default), `sun_morning`, `sun_dusk` or `sun_night`.'''
+
+[[topic.rule]]
+id = "time-of-day-applied"
+tags = ["code"]
+text = '''It is applied once, as the last step of starting a match, after the map (or random map) has set up its own sun.'''
+
+[[topic.rule]]
+id = "time-of-day-default"
+tags = ["code"]
+text = '''With **Default** chosen the rule does nothing: the `sun_default` preset is never applied by it. A scenario map is lit by its own `SUN` section as saved, including any change it was saved part-way through; a random map keeps the sun its climate picked (below).'''
+
+[[topic.rule]]
+id = "time-of-day-colours"
+tags = ["code"]
+text = '''With **Morning**, **Dusk** or **Night** chosen, the preset's diffuse, ambient and specular replace the map's, immediately: both the colours shown and the colours heading for are set to the preset, and any colour change the map was saved part-way through is dropped.'''
+
+[[topic.rule]]
+id = "time-of-day-leaves-rest"
+tags = ["code"]
+text = '''The rule leaves everything else as the map has it: the sun's direction, the dimmer and any dimmer change under way. Nothing else is touched by it: not the map's terrain, water, sky or backdrop, its triggers or its scenery.'''
+
+[[topic.rule]]
+id = "missing-preset"
+tags = ["code"]
+text = '''A preset id that isn't found leaves the map's sun as it was.'''
+
+[[topic]]
+title = "Random maps"
+
+[[topic.rule]]
+id = "random-map-sun"
+tags = ["code", "data"]
+text = '''A random map's sun is picked when the map is generated, at random from its climate's `sun` list (`MetaGame/RandomMap/mg_rmc_*.tgi`, such as `SUN_DEFAULT,SUN_DEFAULT,SUN_DEFAULT,SUN_DUSK,SUN_MORNING,SUN_NIGHT`; ids aren't case sensitive, and listing one several times makes it more likely). Its colours are set at once and the dimmer is set to 1. With an empty list the sun stays as the constants give it.'''
+
+[[topic.rule]]
+id = "random-sun-seed"
+tags = ["code"]
+text = '''The pick uses the match's random seed, so the same seed gives the same sun.'''
+
+[[topic.rule]]
+id = "random-sun-direction"
+tags = ["code"]
+text = '''The direction is always `SunDirection`.'''
+
+[[topic.rule]]
+id = "random-sun-override"
+tags = ["code"]
+text = '''So with Time of Day at Default, a random map can still come out at dusk, morning or night; any other choice overrides the climate's pick.'''
+
+[[topic]]
+title = "Changes during play"
+
+[[topic.rule]]
+id = "set-sun-colors"
+tags = ["code"]
+text = '''`global_set_sun_colors` (in [triggers](triggers.toml)) sets where the colours are heading to the named preset, and they move there from whatever the sun shows at that moment, so from the Time of Day preset if nothing has changed it since the start.'''
+
+[[topic.rule]]
+id = "adjust-sun-dimmer"
+tags = ["code"]
+text = '''`global_adjust_sun_dimmer` moves the dimmer to its value over its seconds, from the dimmer's current value. Time of Day never sets the dimmer, so it starts from the map's.'''
+
+[[topic]]
+title = "How the sun lights the scene"
+
+[[topic.rule]]
+id = "directional-light"
+tags = ["code"]
+text = '''The sun is a single directional light over the whole map: terrain, scenery, buildings and units all take it. There's no other light (lit windows and lamps are glowing effects, not lights).'''
+
+[[topic.rule]]
+id = "light-direction"
+tags = ["code", "data"]
+text = '''The light shines along the sun's direction, so a surface facing against it (normal · −direction = 1) gets full diffuse light, and one turned away gets none. Directions are unit length: a new map's `SunDirection` is normalised, and maps store theirs normalised (`(2v2)Berlin`'s is (0.41, 0.41, −0.82), from (1, 1, −2)). A direction pointing exactly straight down (or up) doesn't turn the light at all, which keeps the direction it had.'''
+
+[[topic.rule]]
+id = "tick-blending"
+tags = ["code"]
+text = '''What's drawn moves smoothly between game ticks: the colours and the dimmer are blended by the time since the last tick, so a slow change doesn't step.'''
+
+[[topic.rule]]
+id = "dimmer-scaling"
+tags = ["code"]
+text = '''The dimmer scales all three colours the light gives, for everything but skinned units (below). A dimmer below 0.01 switches the light off, leaving those things unlit and black apart from their own glow.'''
+
+[[topic.rule]]
+id = "paused-dimmer"
+tags = ["code", "data", "guess"]
+text = '''While the game is paused the light's dimmer is multiplied by `SunDimmerMultiplierWhenPaused` (`AVars.tgi`, 0.8), so the view darkens by a fifth, skinned units excepted. It switches at once on pausing and unpausing, with no fade, and goes with the game's paused state alone, whatever paused it, the game menu and AA's windows in single player included ([interface](interface.toml), While paused). One kind of session never darkens.'''
+
+[[topic]]
+title = "Terrain"
+under = "How the sun lights the scene"
+
+[[topic.rule]]
+id = "terrain-normals"
+tags = ["code"]
+text = '''Each terrain vertex has a normal from the heights around it: (h(x−1, y) − h(x+1, y), h(x, y−1) − h(x, y+1), 4 × the vertex spacing), normalised, with heights past the map's edge taken from the edge. The 4 (where a plain central difference has 2) halves every slope's tilt, so hills shade more gently than their shape.'''
+
+[[topic.rule]]
+id = "terrain-material"
+tags = ["code", "data"]
+text = '''The ground's material has ambient `TerrainAmbient` (`AVars.tgi`, 0.15) and diffuse `TerrainDiffuse` (1), both grey, and no specular or glow; `TerrainSpecular` isn't used.'''
+
+[[topic.rule]]
+id = "terrain-vertex-light"
+tags = ["code", "guess"]
+text = '''So a terrain vertex's light is dimmer × (`TerrainAmbient` × sun ambient + `TerrainDiffuse` × sun diffuse × max(0, normal · −direction)), each channel capped at 1. With Berlin's sun (ambient 0.8, diffuse white, dimmer 1), flat ground facing the sun at 0.82 gets 0.12 + 0.82 ≈ 0.94. The ground's textures are multiplied by that.'''
+
+[[topic.rule]]
+id = "lit-decals"
+tags = ["code"]
+text = '''Lit decals (`respect_lighting`) take the same light; others ignore it ([effects](effects.toml)).'''
+
+[[topic]]
+title = "Models"
+under = "How the sun lights the scene"
+
+[[topic.rule]]
+id = "unskinned-model-light"
+tags = ["code", "guess"]
+text = '''
+Models that aren't skinned (buildings, vehicles, scenery) are lit the same way from their own materials: each channel is the material's glow
++ material ambient × sun ambient × dimmer + material diffuse × sun diffuse × dimmer × max(0, normal · −direction), plus a specular highlight from the sun's specular × dimmer where the model has specular switched on. Material colours come from the model files.
+'''
+
+[[topic.rule]]
+id = "skinned-model-light"
+tags = ["code", "game"]
+text = '''Skinned models (infantry, anything with bones), when the graphics card does the skinning, are lit per vertex as glow + material ambient × sun ambient + material diffuse × sun diffuse × max(0, normal · −direction), capped at 1. Unlike everything else they get no specular highlight and ignore the dimmer, so a dimmer trigger or pausing darkens the ground and buildings around them but not the men. The sun lights skinned shapes this way wherever they're drawn, the object display's portraits included ([object display](object-display.toml#lighting-and-colour)).'''
+
+[[topic.rule]]
+id = "dynamic-shadow-shade"
+tags = ["code", "guess"]
+text = '''A dynamic shadow's shade is set when it's made, from the dimmer at that moment × `DynamicShadowSunModulate` (`AVars.tgi`, 0.5).'''
+
+[[topic]]
+title = "Glowing shapes"
+under = "How the sun lights the scene"
+
+[[topic.rule]]
+id = "vertex-colour-lighting-mode"
+tags = ["code"]
+text = '''
+A model's vertex-colour property (the one on the shape, else the nearest on a node above it) has a lighting mode, "glow only" (0) or "glow, ambient and diffuse" (1), and a source, "ignore" (0), "glow" (1) or "ambient and diffuse" (2). Together they decide what colour a shape's vertices get before its texture:
+
+| Lighting | Source | Vertex colour |
+|---|---|---|
+| glow and light (1) | ignore (0) | lit from the material, as above |
+| glow and light (1) | glow (1) | as above, the vertex colours standing in for the glow |
+| glow and light (1) | ambient and diffuse (2) | as above, the vertex colours standing in for ambient and diffuse (as water does) |
+| glow only (0) | ignore (0) or ambient and diffuse (2) | the material's glow (emissive) alone |
+| glow only (0) | glow (1) | not lit at all: the vertex colours as they are, white where the model has none |
+'''
+
+[[topic.rule]]
+id = "glow-only"
+tags = ["code"]
+text = '''"The material's glow alone" means exactly that: no sun, no ambient from anywhere, no dimmer and no darkening while paused, and the model's vertex colours (if any) ignored. It looks the same by day and by night. It isn't white, and it isn't the diffuse colour: a glow of 0.49 draws at 0.49.'''
+
+[[topic.rule]]
+id = "replace-texture-unlit"
+tags = ["code", "data"]
+text = '''A shape whose texture replaces the colour beneath it (texture apply mode 0, with a base texture) isn't lit at all either: it shows its texture as stored. That holds for skinned shapes too, which then take no sun. None of the stock night lights do this; they all multiply.'''
+
+[[topic.rule]]
+id = "texture-and-alpha"
+tags = ["code", "guess"]
+text = '''The texture multiplies whatever colour the vertices got, and its alpha multiplies the material's alpha. Lighting never touches alpha: a lit shape's alpha is the material's, not darkened by the sun.'''
+
+[[topic.rule]]
+id = "alpha-blend-factors"
+tags = ["code", "data"]
+text = '''The alpha property's blend factors apply to that result as stored (flags bit 0 blend on, bits 1–4 the source factor, bits 5–8 the destination: 0 one, 1 zero, 2 source colour, 3 one minus source colour, 4 destination colour, 5 one minus destination colour, 6 source alpha, 7 one minus source alpha, 8 destination alpha, 9 one minus destination alpha). The night lights' flags (13, or 4109 with bit 12) are source alpha onto one: the screen gains colour × texture × material alpha × texture alpha. Bit 12 makes no difference.'''
+
+[[topic.rule]]
+id = "no-tone-mapping"
+tags = ["code", "guess"]
+text = '''The sums are done on colour values as stored and shown (nothing turns them into linear light first or tone-maps the result), and each channel stops at 1 on the screen. There is no bloom, glare or other pass over the finished picture, and nothing at night brightens these shapes: no different blend, no boost, and the dimmer can only darken lit shapes. The `zMode10` and `billboard` user properties in the model files are not read by the game; any billboard turning comes from the model's own billboard nodes ([models](models.toml#billboard-nodes)).'''
+
+[[topic.rule]]
+id = "night-lights-additive"
+tags = ["data"]
+text = '''
+So the night lights are bright because they pile up. Each is several overlapping additive shapes, with near-white textures (`LightBloom`, `LightBeam` and `small_window` reach 0.9–1 at their centres, alpha 1), and depth not written, so every layer adds. At its brightest texels:
+- `LargeDoor.nif`: two beam planes at 0.49 × 0.6 and two blooms at 0.24 × 1 add about 1.05: the doorway's light saturates to white.
+- `TinyWindow.nif`: the window at 0.49 × 0.75, a bloom at 0.24 × 0.75 and three crossed beam planes at 0.49 × 0.25 add about 0.9.
+- `SpotLight02Bright.NIF`: a bloom at 0.34 and a cone at 0.26, drawn double-sided, so where its near and far walls overlap it adds 0.52; about 0.86 at the lamp. (Its `SelectionBox` is hidden.) Each of those sits on top of the scene behind it, so on lit ground or wall the centre reaches white.
+'''
+
+[[topic]]
+title = "Where the night lights show"
+under = "How the sun lights the scene"
+
+[[topic.rule]]
+id = "night-light-attach"
+tags = ["code", "data"]
+text = '''A night light hangs from its attach point like any attached model effect ([effects](effects.toml#where-an-effect-appears)): at the point's place, turned by the point's whole orientation (`gyroscope = false` in `spotlights.tgi`), at the model's own size. Nothing pushes it out from the wall, stands it upright or scales it: `attached_scale` is 0, and growing with the camera zoom is only for `constant_screen_size` effects.'''
+
+[[topic.rule]]
+id = "night-light-depth"
+tags = ["code", "data"]
+text = '''What hides them is ordinary depth testing and nothing else: they're drawn in the blending pass, after the terrain and every opaque model, with the depth settings their files hold (test on, write off, less-or-equal; see [models](models.toml#depth-and-draw-order)), and with no depth bias. So the ground, the building they're on and any other model hide whatever part of them is behind those, where those faces are drawn.'''
+
+[[topic.rule]]
+id = "one-sided-faces"
+tags = ["code", "data"]
+text = '''Models are one-sided: a triangle whose front faces away from the camera isn't drawn and hides nothing ([models](models.toml#one-sided-faces)). Building shells have no inside faces, so the underside of an eave or porch roof hides nothing: `JPNCorps.nif`'s roof and gable-end fascia over the door face up and outwards, and from below or behind they're not there.'''
+
+[[topic.rule]]
+id = "spotlight-bulb"
+tags = ["code", "game", "data"]
+text = '''The bulb of `SpotLight02Bright.NIF` sits on a camera-facing billboard node (`Plane01`; see [models](models.toml#billboard-nodes)), and its `LightBloom` square (about 1.45 across) lies 1.05 units out along that node's facing axis. So in the world the bulb is drawn 1.05 units from the attach point towards the viewer, square-on to the screen, and on screen it stays over the attach point. At `JPNCorps.nif`'s door (`spotlight_ae_03`, 0.2 out from the door posts, under the fascia) that puts it in front of the wall and eave, so it shows whole: the bright dot at the top of the doorway.'''
+
+[[topic.rule]]
+id = "spotlight-cone"
+tags = ["code", "data"]
+text = '''The cone (`SoftLightPlane01`) isn't billboarded: it runs from the attach point along the point's −y (for `spotlight_ae_03`, down and out from the wall), 2.35 long and 1.3 in radius at its open end, and is hidden by the ground, the wall and the door frame only where it's behind them.'''
+
+[[topic.rule]]
+id = "cone-fade"
+tags = ["code", "game", "data"]
+text = '''The cone is brightest at the bulb and fades to nothing well before its open end. Its four crossed fins take the upper part of `LightBeam.dds` (v about 0.56 at the bulb, about 0 at the open end; see [models](models.toml#texture-coordinates)), whose alpha is highest near the axis at the bulb end and falls to zero towards the image's top. The slot wraps, so right at the open end filtering brings in some of the image's bright bottom rows: a thin faint line along each fin's open edge, the four crossing at the axis, which is the faint X seen near the end of a lamp's beam.'''
+
+[[topic.rule]]
+id = "cone-band"
+tags = ["data"]
+text = '''
+Because each fin's u runs across the cone's whole width (one edge, the axis at u 0.5, the other edge), the beam shows as a soft band about a unit wide for most of its length, not a thin line. Along the cone from the bulb (full-size image, where the alpha is at least 0.13):
+
+| Along | Cone width | Lit width | Peak alpha |
+|---|---|---|---|
+| 0 (bulb) | 0.84 | 0.8 | 0.8 |
+| 0.6 | 1.3 | 1.1 | 0.73 |
+| 1.3 | 1.8 | 1.1 | 0.6 |
+| 1.65 | 2.1 | 1.0 | 0.33 |
+| 2.0 | 2.4 | 0.55 | 0.13 |
+| 2.2–2.35 | 2.6 | none but the open-end lines | 0.07 |
+
+The four fins overlap near the axis, so the middle of the band adds up to several times these.
+'''
+
+[[topic.rule]]
+id = "jpncorps-door-cone"
+tags = ["data"]
+text = '''At `JPNCorps.nif`'s door the cone's axis runs from 0.2 out from the door posts' plane at the bulb to about 1.07 out at the open end, and its radius grows about as fast as it leans out, so only the fin edges pointing back at the wall reach behind that plane, by about 0.2 all the way down. The building hides little of the beam.'''
+
+[[topic.rule]]
+id = "no-ground-spotlight"
+tags = ["code", "game", "data"]
+text = '''Nothing else lights the ground under a building spotlight: no projected texture (only vehicle headlights have one), no light source on the terrain, and the cone isn't drawn where the ground hides it. On `(2v2)Berlin` at night the USSR Corps HQ's lamp beam is bright at the lamp head and fades out down the post, leaving the ground at its foot unlit.'''
+
+[[topic.rule]]
+id = "door-ground-light"
+tags = ["game", "data"]
+text = '''Lit ground in front of a building's doors comes from its `door_large` effects (`LargeDoor.NIF`), not from a spotlight: on the same map the USSR Corps HQ's big door throws a bright patch onto the ground in front of it. Buildings without `door_large`, the Japanese Corps HQ among them, have no such patch.'''
+
+[[topic.rule]]
+id = "berlin-japan-corps-hq"
+tags = ["game"]
+text = '''On `(2v2)Berlin` at night, playing Japan in the default camera, the Corps HQ's door light shows as the rules above give: the bulb under the eave, and a soft beam about a unit wide running down past the door frame and over the right jamb (in front of it, not cut by it), fading smoothly, its lower part and open-end lines lying on screen over the ground in front of the door, about 0.6 down to 0.28 above it. That is the "light on the ground": nothing is drawn on the ground itself. A beam that shows only as a narrow strip with a hard edge, hidden by the jamb or ending two-thirds of the way down, isn't what AA draws.'''
+
+[[topic.rule]]
+id = "berlin-ussr-corps-hq"
+tags = ["game"]
+text = '''On `(2v2)Berlin` at night the USSR Corps HQ's lamp (`RUSCorps.nif`, the same `spotlight_02_bright` on a tilted `spotlight_ae_01` at the lamp head) shows its bulb at the lamp head and its beam running down past the post, leaning slightly left on screen, with the cone's crossing fins seen as a faint X near its end; it matches the point's orientation alone.'''
+
+[[topic.rule]]
+id = "lit-additive-shapes"
+tags = ["code", "data"]
+text = '''A lit additive shape (`StreetLightGlow.nif`: lighting 1, source 0, glow 0.29, alpha 0.6) is lit like any model: glow + material ambient × sun ambient × dimmer + material diffuse × sun diffuse × dimmer × max(0, normal · −direction). The night sun does darken it: under `sun_night` (ambient and diffuse 0.4, 0.4, 0.7) its ambient part is 0.24, 0.24, 0.27 against 0.6, 0.6, 0.38 by day, so it comes to roughly 0.53–0.81 per red and green channel, then × texture and × 0.6 × texture alpha, its two crossed planes adding.'''
+
+[[topic]]
+title = "Side colours and a model's texture layers"
+under = "How the sun lights the scene"
+
+[[topic.rule]]
+id = "repcolor-parts"
+tags = ["code", "data"]
+text = '''A model part tagged `RepColor` (a string the model file attaches to the part, case not mattering; 633 stock models carry it), and everything below that part, is drawn in its owner's side colour where its texture says so: the base texture's alpha is a mask, so each texel is texture × alpha + side colour × (1 − alpha) (alpha 1 shows the texture, 0 the side colour). The part comes out opaque whatever the mask. Which colour a thing shows (the owner as the viewing player knows it, or the default) is in [object display](object-display.toml).'''
+
+[[topic.rule]]
+id = "repcolor-opaque"
+tags = ["code"]
+text = '''Because the alpha is the mask, a `repcolor` part can't also be see-through: loading a model turns off alpha blending and alpha testing on such parts. Shadow and track (`tred`) geometry never takes the side colour.'''
+
+[[topic.rule]]
+id = "side-colour-lit"
+tags = ["code"]
+text = '''The side colour is mixed in before the light, so it's lit and shaded like the rest of the texture: darker at night, under a low dimmer or in shade.'''
+
+[[topic.rule]]
+id = "texture-layer-order"
+tags = ["code", "guess"]
+text = '''
+After the light come a model's other texture layers, in this order:
+1. a `lirp` tint ([effects](effects.toml#tints)): the lit colour is blended towards the tint colour by the tint's level, unlit, so a tint that lifts towards white shows as bright at night as by day. It shows only while a view setting is on (most likely `ViewShowTint`), and leaves opacity alone;
+2. a glow map, added to the lit colour, so it isn't darkened by the light;
+3. decal maps, blended over by their own alpha;
+4. a dark map, multiplied in last. A tint without `lirp` instead scales the material's colours, so it goes through the light like the material does.
+'''
+
+[[topic]]
+title = "Water"
+under = "How the sun lights the scene"
+
+[[topic.rule]]
+id = "water-normals"
+tags = ["code"]
+text = '''The water surface is a mesh whose every normal points straight up, so the sun's diffuse light reaches all of it equally: by −direction.z (0.82 on Berlin), whatever the waves or shore.'''
+
+[[topic.rule]]
+id = "water-vertex-colour"
+tags = ["code", "data"]
+text = '''
+Each surface vertex has its own colour and opacity, from the depth there (the surface, `height − 0.5`, minus the ground beneath it; see [terrain](terrain.toml#water)):
+- with a `WaterInfo` for that water terrain in the biome's terrain file (`Terrain/*.tgi`, `terrain_ids`), its `DepthInfo` entries (`depth`, `color`, `alpha`) are blended linearly between the two entries either side of that depth; at or below the shallowest entry's depth, or at or beyond the deepest's, that entry's values hold;
+- without one, the colour is the water terrain's `color` and the opacity is depth / `WaterOpaqueDepth` (`AVars.tgi`, 1.5), kept within 0..1.
+'''
+
+[[topic.rule]]
+id = "water-vertex-light"
+tags = ["code", "data", "guess"]
+text = '''That vertex colour stands in for the material's ambient and diffuse, so a surface vertex is lit as dimmer × colour × (sun ambient + sun diffuse × −direction.z), each channel capped at 1, with no glow and no highlight. Its opacity is the vertex's, unchanged by the light. On Berlin the factor is 0.8 + 0.82 = 1.62, so the water shows brighter than its `DepthInfo` colours (capped at 1); under `sun_night` it's 0.4 + 0.4 × 0.82 ≈ 0.73 for red and green, 0.7 + 0.7 × 0.82 ≈ 1.27 for blue.'''
+
+[[topic.rule]]
+id = "water-texture"
+tags = ["code", "guess"]
+text = '''The water's animated texture is multiplied by that lit colour and the result blended over the bed by its opacity. Its scrolling doesn't touch the light.'''
+
+[[topic]]
+title = "Night"
+
+[[topic.rule]]
+id = "night-threshold"
+tags = ["code", "data"]
+text = '''It's night whenever the sun's diffuse colour as currently shown has R + G + B below `SunNightThreshold` (AA's `SVars_AA.tgi` 1.6; `SVars.tgi` 1.0). Only diffuse counts, not ambient or the dimmer.'''
+
+[[topic.rule]]
+id = "preset-day-night"
+tags = ["code", "data"]
+text = '''With AA's presets that makes `sun_night` (diffuse sum 1.5) night and `sun_default` and `sun_afternoon` (3.0), `sun_morning` (2.6), `sun_dusk` (2.35) and `sun_desert` (2.2) day. A colour change in progress turns to night at the moment the sum crosses the threshold.'''
+
+[[topic.rule]]
+id = "nightonly-effects"
+tags = ["code", "guess"]
+text = '''`nightonly` effects (AA's lit windows and doors, headlights and spotlights in `Effects/lit_windows.tgi`, `headlights.tgi`, `spotlights.tgi`) show only at night and are hidden by day, checked continuously, so they appear and vanish as the sun changes.'''
+
+[[topic.rule]]
+id = "nothing-else-depends"
+tags = ["code"]
+text = '''Nothing else depends on the sun or on Time of Day: fog of war, sight ranges, combat and music are the same at any time of day.'''
+
+[[topic]]
+title = "Multiplayer and saved games"
+
+[[topic.rule]]
+id = "shared-sun"
+tags = ["code", "guess"]
+text = '''Every player starts with the same sun: the world rules are the host's and are shared with every player, and a random map's pick comes from the shared seed.'''
+
+[[topic.rule]]
+id = "saved-sun"
+tags = ["code", "guess"]
+text = '''A saved game keeps the sun as it stood (colours, dimmer, and any change under way) and Time of Day is not applied again when it's loaded.'''
+
+[[open]]
+q = '''How skinned models are lit when the card can't do the skinning (likely as other models, dimmer included).'''
+by = "analysis"
+asked = 2026-11-20

@@ -1,0 +1,372 @@
+subject = "Selection"
+summary = '''What the player can select, which things can be selected together, and how clicks, Shift and Ctrl, box-dragging and double-clicks change the selection.'''
+games = '''traced in AA. Kohan II runs the same code, but its data hasn't been checked against these rules.'''
+
+[[topic]]
+title = "Selection"
+intro = '''What the player can pick on the map, and how a selection holds together. Any side's things can be selected, not only the player's own; what the player can then do with them is under "With someone else's thing selected" below.'''
+
+[[topic]]
+title = "What a click picks"
+under = "Selection"
+
+[[topic.rule]]
+id = "click-any-owner"
+tags = ["code"]
+text = '''A left click on the map picks the thing under the pointer, of any owner: the player's own, an ally's, an enemy's or a neutral side's.'''
+
+[[topic.rule]]
+id = "click-visible-or-remembered"
+tags = ["code"]
+text = '''The thing must be one the player can see now, or one shown as remembered under the fog (see [fog](fog.toml#what-shows-under-each-state)). Something on unexplored ground, or in the fog without a remembered picture (a unit that walked out of sight), can't be picked, and the pointer doesn't highlight it either.'''
+
+[[topic.rule]]
+id = "what-click-selects"
+tags = ["code"]
+text = '''
+What gets selected for what was clicked:
+- A unit of a regiment selects the regiment. If the player can't see the regiment (a remembered unit picture, say), the unit itself is taken instead.
+- One of a city's buildings selects the city, not the building.
+- Anything else selects itself.
+'''
+
+[[topic.rule]]
+id = "targetable-only"
+tags = ["code", "guess"]
+text = '''Only `targetable` things stay selected (see Keeping a selection), so scenery and other things without the flag can't be selected in practice: at most they're picked for a moment and dropped again. Whether wrecks, projectiles and the like are ever under the pointer at all is unchecked.'''
+
+[[topic.rule]]
+id = "click-replaces"
+tags = ["code"]
+text = '''A plain left click replaces the selection with what was picked. A click on a spot where nothing can be picked clears the selection.'''
+
+[[topic.rule]]
+id = "click-through-pile"
+tags = ["code"]
+text = '''Where several things overlap under the pointer and one of them is the whole selection, clicking there again picks another of them, so repeated clicks step through the pile.'''
+
+[[topic]]
+title = "Who goes together"
+under = "Selection"
+intro = '''A selection holds things of one standing towards the player and one kind, and at most six of them.'''
+
+[[topic.rule]]
+id = "standing-ranks"
+tags = ["code"]
+text = '''Standing ranks: the player's own things above enemies', enemies' above allies', allies' above neutral sides'.'''
+
+[[topic.rule]]
+id = "standing"
+tags = ["code"]
+text = '''
+A thing's standing is how the player's side stands towards the thing's owner, from the map's relations (team relations included): self, enemy, ally or neutral. Whether the owner is a kingdom or one of the map's independent sides plays no part.
+- An independent side the player is at war with (Berlin's `independent_5`, "Civilian (Aggressive)") ranks as an enemy, so its regiments can be selected together with an enemy kingdom's.
+- A kingdom the player stands neutral towards ranks with neutral independents, lowest; their regiments can be selected together.
+- A thing with no owner, or any thing when the player has no side (watching), ranks as neutral.
+- Relations can be one-sided; it's the player's side's view of the owner that counts, not the owner's view of the player.
+'''
+
+[[topic.rule]]
+id = "kinds"
+tags = ["code"]
+text = '''
+Kinds within one standing, highest first:
+1. Regiments, and other things that think for themselves and can move (an HQ truck while packed). Many can be selected together.
+2. Everything else that can't move or has no will of its own: a building, a city, an unpacked HQ, an emplacement. Only one at a time.
+3. Things that move but stand outside any regiment and aren't buildings in motion. Many together.
+'''
+
+[[topic.rule]]
+id = "adding-rule"
+tags = ["code"]
+text = '''
+Adding a thing to a selection (by any of the ways below):
+- if it ranks above what's there, by standing or by kind, the selection is emptied first and it alone is taken;
+- if it ranks below, it isn't added;
+- if it's of the same standing and kind it joins, for the kinds that allow many; for the one-at-a-time kind it isn't added. So enemies of two different enemy sides can be selected together (both are enemies), but never an enemy with an ally or with one's own.
+'''
+
+[[topic.rule]]
+id = "six-thing-cap"
+tags = ["code"]
+text = '''A selection never takes a seventh thing: with six selected, nothing more is added.'''
+
+[[topic.rule]]
+id = "standing-fixed-on-join"
+tags = ["code"]
+text = '''"Standing" is fixed when a thing joins: a thing that changes owner while selected keeps its place and still counts as it did for what may join it later.'''
+
+[[topic]]
+title = "Shift and Ctrl clicks"
+under = "Selection"
+
+[[topic.rule]]
+id = "shift-ctrl-toggle"
+tags = ["code"]
+text = '''A left click with Shift or Ctrl held toggles the thing under the pointer: one already selected is taken out; one not selected is added by the rule above.'''
+
+[[topic.rule]]
+id = "shift-click-examples"
+tags = ["code"]
+text = '''So with own things selected, a Shift-click on an enemy does nothing; with an enemy regiment selected, a Shift-click on another enemy regiment adds it, a Shift-click on an enemy building does nothing, and a Shift-click on an own regiment replaces the selection with it.'''
+
+[[topic]]
+title = "Box-dragging"
+under = "Selection"
+
+[[topic.rule]]
+id = "box-takes-pickable"
+tags = ["code"]
+text = '''Dragging a box takes in every thing drawn inside it that a click could pick (seen now or remembered, standing and kind as for a click, regiment members counting as their regiment). The things it would take are highlighted while dragging.'''
+
+[[topic.rule]]
+id = "box-ranking"
+tags = ["code"]
+text = '''The box applies the same ranking as adding: of what's inside, only the highest-ranked group is taken. A box over own and enemy things takes only the own ones; a box over enemies alone takes enemy regiments; a box over only buildings takes one.'''
+
+[[topic.rule]]
+id = "box-six-thing-cap"
+tags = ["code"]
+text = '''The six-thing cap: when what the box takes, with what's already selected, comes to more than six, the ones taken are those nearest the middle of the existing selection, or of what the box covers when nothing was selected, filling up to six.'''
+
+[[topic.rule]]
+id = "box-release-replaces"
+tags = ["guess"]
+text = '''Whether releasing the box replaces the selection or adds to it (with Shift, say) is unchecked; replacing is the likely plain case.'''
+
+[[topic]]
+title = "Double-clicks"
+under = "Selection"
+
+[[topic.rule]]
+id = "double-click-own"
+tags = ["code"]
+text = '''A double-click with an own thing selected (the first click selects it) selects every thing on screen of the same template, by the adding rule, so up to six, nearest first. Others' things of that template aren't taken, since own things outrank them.'''
+
+[[topic.rule]]
+id = "double-click-others"
+tags = ["code"]
+text = '''A double-click on someone else's thing does nothing more than a single click: there's no select-all-of-a-kind for others' things.'''
+
+[[topic.rule]]
+id = "shift-ctrl-double-click"
+tags = ["code"]
+text = '''With Shift or Ctrl held, a double-click on a selected thing adds every thing on screen of its template the same way; on a thing not selected, it takes every selected thing of that template out.'''
+
+[[topic]]
+title = "Keeping a selection"
+under = "Selection"
+intro = '''The game checks the selection continually and drops what no longer qualifies.'''
+
+[[topic.rule]]
+id = "stays-while-targetable-seen"
+tags = ["code"]
+text = '''A thing stays selected while it is `targetable` and the player can see it or has it shown as remembered.'''
+
+[[topic.rule]]
+id = "out-of-sight-dropped"
+tags = ["code"]
+text = '''So someone else's unit or regiment that goes out of sight is dropped once nothing of it is seen (a regiment stays while any of its men is seen). A building or city that drops into the fog stays selected as its remembered picture.'''
+
+[[topic.rule]]
+id = "destroyed-leaves-selection"
+tags = ["code"]
+text = '''A destroyed thing leaves the selection when it's removed from the world.'''
+
+[[topic.rule]]
+id = "owner-change-kept"
+tags = ["code"]
+text = '''A change of owner doesn't touch the selection: an enemy building the player captures stays selected, and so does the player's own building when someone captures it, now as someone else's.'''
+
+[[topic]]
+title = "With someone else's thing selected"
+under = "Selection"
+
+[[topic.rule]]
+id = "others-no-commands"
+tags = ["code"]
+text = '''No command buttons: only the player's own selected things contribute commands (see [commands](commands.toml), Command grid).'''
+
+[[topic.rule]]
+id = "others-no-orders"
+tags = ["code"]
+text = '''A right click on the map gives no order: orders are only sent for a selection the player may command, and are otherwise dropped without a word or a reply.'''
+
+[[topic.rule]]
+id = "others-not-saved-in-group"
+tags = ["code"]
+text = '''Saving a control group keeps only the player's own selected things. Saving with only others' things selected therefore leaves that group empty, wiping what it held before.'''
+
+[[topic.rule]]
+id = "others-silent"
+tags = ["code"]
+text = '''Selecting someone else's thing is silent (see [sounds](sounds.toml), Unit replies).'''
+
+[[topic]]
+title = "Control groups"
+under = "Selection"
+
+[[topic.rule]]
+id = "ctrl-digit-groups"
+tags = ["code", "data"]
+text = '''Ctrl with a digit saves the selection as that digit's group (Ctrl+1 to Ctrl+9 and Ctrl+0: ten groups, `Localization/Hotkeys/hotkeys_groups.txt`); the digit alone recalls it. The groups are shown as "Group 1" and so on. The number of groups is the keymap's: the game takes any group name.'''
+
+[[topic.rule]]
+id = "saving-empties-group"
+tags = ["code"]
+text = '''Saving empties the group of that name, then puts in the player's own selected things, so a group holds whatever a selection can: up to six, each regiment counted once (regiments and lone movers), or one building or city on its own.'''
+
+[[topic.rule]]
+id = "one-group-per-thing"
+tags = ["code"]
+text = '''A thing is in at most one group: saving it into another takes it out of the old one, and a group left with nothing in it is deleted. So is the group saved over with none of the player's things selected.'''
+
+[[topic.rule]]
+id = "recalling-group"
+tags = ["code", "data"]
+text = '''Recalling clears the selection and selects what's left of the group, under the usual rules, with the selection reply. Pressing the digit again while the group is still exactly the selection, within `UICenterGroupTimeMS` (1000 ms) of the last recall, centres the camera on the group (the average of its things' positions) instead, selecting nothing new.'''
+
+[[topic.rule]]
+id = "current-group"
+tags = ["code"]
+text = '''The selection's **current group** is the saved group whose things are exactly what's selected, if there is one. Any other selection of two or more of the player's things shares one stand-in group of the player's own. One thing or none has no current group. Group Behavior ([movement](movement.toml#groups)) is a switch on the current group.'''
+
+[[topic]]
+title = "The group strip"
+under = "Selection"
+intro = '''The row of group buttons along the top of the screen (`GroupFloater` in `UI/Game/floaters.tgi`).'''
+
+[[topic.rule]]
+id = "ten-group-buttons"
+tags = ["code", "data"]
+text = '''Always ten buttons, one per name in the `Groups` block's `groups_shown` (`group_1` to `group_10`, the names the keymap's digits use), in that order from left to right, each in a fixed place whether its group exists or not: nothing is packed or hidden. The ten places divide the `Groups` block's width (339) evenly, a tenth each (33.9), from its left edge, each button 32 by 32.'''
+
+[[topic.rule]]
+id = "empty-group-texture"
+tags = ["code", "data"]
+text = '''A button whose group doesn't exist (never saved, or emptied) shows `empty_group_texture` (`UI/Game/Floaters/ButtonGroupUnassigned.tga`).'''
+
+[[topic.rule]]
+id = "group-button-icon"
+tags = ["code"]
+text = '''
+A group's button shows the `icon` of one of its things, chosen afresh every frame, so it follows deaths and saving over at once:
+- Each thing in the group puts forward a picture. A lone unit or a building puts forward its own template's `icon`. A regiment puts forward the `icon` of one of its unit types, taken from its layout and template rather than from whoever is alive: the unit type of its first `locked` slot, in layout order; failing that, its leader's slot (`PrimarySlot`); failing that, its first slot with a unit type. So an infantry regiment shows its riflemen, never the regiment's own `icon`.
+- Going through the group's things in the group's order, the first picture put forward by at least half of them (rounded up: 2 of 3, 3 of 6) is shown. With no such picture, one of those put forward is shown. A thing with no `icon` puts nothing forward but still counts towards the half.
+'''
+
+[[topic.rule]]
+id = "group-button-nothing-else"
+tags = ["code", "data"]
+text = '''Nothing else is drawn on a button: no digit, count or health, and no different look for the selection's current group, for Group Behavior being on or for things in combat. Pointing at or pressing a button doesn't change its look either: the button layout has only the picture.'''
+
+[[topic.rule]]
+id = "group-button-left-click"
+tags = ["code", "data"]
+text = '''A left click on a group's button recalls the group, as its digit does. A double-click recalls it twice, so the second recall centres the camera on it under the rule above (the group still the selection, within `UICenterGroupTimeMS`). A left click on a button without a group does nothing.'''
+
+[[topic.rule]]
+id = "group-button-right-click"
+tags = ["code", "data"]
+text = '''A right click saves the selection as that button's group, as Ctrl with its digit does, whether or not the group exists.'''
+
+[[topic.rule]]
+id = "group-button-modifiers"
+tags = ["code"]
+text = '''Ctrl, Shift and Alt change nothing about a click on a group button.'''
+
+[[topic.rule]]
+id = "group-button-tooltip"
+tags = ["code", "data"]
+text = '''
+The tooltip, the same for every button bar its keys:
+- Title "Groups" (`groups_tooltip_title`).
+- For a group that exists, a line with the key that recalls it, then " Select Group" (`hotkey_select_group|s`, "%s Select Group").
+- Then, whether or not the group exists, a line with the key that saves it, then " Save Group" (`hotkey_save_group|s`).
+- Then "Right-Click on a group button to save.  Double-Click on a group button to center." (`groups_tooltip_description`).
+- Each key is written as the bracketed form of [hotkeys in tooltips](commands.toml#hotkeys-in-tooltips), coloured the same way: "(1) Select Group", "(Ctrl-1) Save Group" for the first button. The keys are the ones the keymap gives to `SelectGroup group_1` and `SaveGroup group_1` and so on (`hotkeys_groups.txt`).
+'''
+
+[[topic.rule]]
+id = "strip-open-at-start"
+tags = ["code", "data"]
+text = '''The strip is open at the start of a match when `UIGroupFloaterIsOpen` is true, as `UVars.tgi` ships it. Its toggle on the left (`ShowButton`, tooltip "Groups" / "Opens/closes the group buttons.") shows its selected look while the strip is open; clicking it hides or shows the ten buttons, together with the tab at the strip's right end (`EndDecal`, `GroupsTab.png`, drawn because `AVars_AA.tgi` sets `UIFloatersDisplayEndCap = true`). The strip's background with the toggle (`GroupsFloater.png`) stays either way.'''
+
+[[topic.rule]]
+id = "strip-toggle-remembered"
+tags = ["code"]
+text = '''Toggling sets `UIGroupFloaterIsOpen`, so a later match in the same run starts the strip as the player left it.'''
+
+[[topic]]
+title = "Cycling idle trucks and engineers"
+under = "Selection"
+
+[[topic.rule]]
+id = "cycle-idle-trucks"
+tags = ["code", "data"]
+text = '''AA's Cycle Idle Trucks & Engineers (F6, `CycleSelection 1` in the shipped hotkeys, or the floating button `IdleButtonBuilder`, which does the same thing) works as Cycle Detached Regiments does ([supply](supply.toml#what-the-player-sees)) with its own test. Kohan II has the same control (F6 and its "Idle Builder" button, "Focuses on next idle builder company.").'''
+
+[[topic.rule]]
+id = "idle-cycle-counts"
+tags = ["code", "data", "guess"]
+text = '''
+What counts: your own things that aren't members of a regiment, so regiments (companies in Kohan II) and lone things, never a unit inside a regiment. One counts when it's idle and it is, or has a member that is, either:
+- a builder, a template with a `BuilderComponent`: in AA the five nations' engineers, so an engineer regiment counts; in Kohan II a company holding one of its builders (engineers, settlers and the like);
+- a truck: a thing with a `MobileDeploymentComponent` that no truck packs into, i.e. the packed side of a pack pair. In AA that's every `<nation>_truck_*`: depot trucks (supply, ammo, oil), the Corps HQ truck, the airfield and motor pool trucks, the brigade trucks, and the Division HQ trucks. So a lone truck counts, and so does a packed Division HQ regiment. An unpacked building never counts, being the side a truck packs into. There may be one more condition on trucks that wasn't pinned down; it's believed to hold for any truck on the map.
+- a regiment's other members (its captain, fighting units) don't matter.
+'''
+
+[[topic.rule]]
+id = "idle-meaning"
+tags = ["code"]
+text = '''Idle means the regiment, or the lone thing, is doing nothing at all: no order being carried out (moving, building, repairing, guarding, packing, unpacking, attacking), not fighting, not routing, reforming or regrouping. Being given any order makes it not idle at once; it's idle again as soon as it finishes or gives up. A regiment's own state is what counts, not its members'. A thing that has no mind at all counts as idle.'''
+
+[[topic.rule]]
+id = "idle-cycle-skipped"
+tags = ["code"]
+text = '''Skipped by the cycle: things that can't be selected, as for the detached cycle. Cargo isn't a thing until it's unloaded, so nothing aboard a transport is ever in it.'''
+
+[[topic.rule]]
+id = "idle-cycle-step"
+tags = ["code", "data", "guess"]
+text = '''Each step, as for the detached cycle: the order is your side's list of things (probably oldest first), starting after what's selected now and wrapping round; the step replaces the selection with that one thing and moves the camera to it. If the only candidate is already selected, or there's none, nothing happens (the camera stays). No reverse key is shipped.'''
+
+[[topic.rule]]
+id = "idle-button-shown"
+tags = ["code"]
+text = '''The button shows while at least one of your things passes the test above (idle, and a builder or truck or holding one); it doesn't check selectability. It's re-checked about once a second, so it can lag a change by up to a second. With no side of your own (watching only), it's hidden.'''
+
+[[topic.rule]]
+id = "k2-idle-button"
+tags = ["data"]
+text = '''Kohan II: the button is at 10, 493, 36 by 38, a border (`ButtonWorkerIdleBorderUnfocused.png` / `...Focused.png`) round `ButtonWorkerIdleDecal.png`. Its `IdleButtonDetachedOrganization` is zero-sized with no image, so it's never seen, and its hotkeys map only F6.'''
+
+[[open]]
+q = '''Does every idle lone truck on the map make the idle-trucks button show and get a turn in its cycle, packed Division HQs included? A check in the real game would settle the truck rule's last condition.'''
+by = "analysis"
+asked = 2026-11-22
+
+[[open]]
+q = '''Is `UIGroupFloaterIsOpen` kept when the game is quit, so the strip's open or closed state carries over to the next run? And are the group tooltip's lines separated by blank lines?'''
+by = "implementer"
+asked = 2026-11-22
+
+[[open]]
+q = '''When no picture is put forward by half a group's things, which one is shown?'''
+by = "implementer"
+asked = 2026-11-22
+
+[[open]]
+q = '''Selection rules are read from the code and haven't been tried in the game: check the six-thing cap, box-dragging over own and enemy regiments, and Shift-clicking an enemy with own things selected.'''
+by = "analysis"
+asked = 2026-11-14
+
+[[open]]
+q = '''Does releasing a drag box replace the selection, and does Shift or Ctrl make it add instead?'''
+by = "analysis"
+asked = 2026-11-14
+
+[[open]]
+q = '''Which things outside regiments rank in the lowest kind (moving, not in a regiment): aircraft, lone vehicles? And can wrecks, projectiles or scenery ever be under the pointer?'''
+by = "analysis"
+asked = 2026-11-14

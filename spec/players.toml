@@ -1,0 +1,244 @@
+subject = "Players"
+summary = '''The sides (kingdoms) of a match: how two of them stand towards each other, what a side is called, and the Easy / Medium / Hard handicap a side can be given.'''
+games = '''traced in AA. Kohan II runs the same code, but its data hasn't been checked against these rules.'''
+
+[[topic]]
+title = "Relations"
+
+[[topic.rule]]
+id = "relation-kinds"
+tags = ["code"]
+text = '''Each player stands to another as `SELF`, `ALLY`, `NEUTRAL` or `ENEMY`.'''
+
+[[topic.rule]]
+id = "relations-one-way"
+tags = ["code"]
+text = '''Relations are one-way: each player holds its own relation towards every other player and towards every team, and asking how A stands to B reads only A's side. A can be B's ally while B is A's enemy.'''
+
+[[topic.rule]]
+id = "how-a-stands-to-b"
+tags = ["code"]
+text = '''
+How A stands to B:
+- `SELF` when they're the same player.
+- `NEUTRAL` when B has no player (things belonging to nobody); likewise a thing with no player stands `NEUTRAL` to everyone.
+- If A is in a team, the team's relation is used instead of A's own: towards B's team if B is in one, else towards B.
+- Otherwise A's own relation: towards B's team if B is in one, else towards B.
+'''
+
+[[topic.rule]]
+id = "enemy-by-default"
+tags = ["code"]
+text = '''Anything the map doesn't set is `ENEMY`: every player and team starts as an enemy of every other.'''
+
+[[topic.rule]]
+id = "team-allied-to-itself"
+tags = ["code", "data"]
+text = '''A team stands `ALLY` to itself: a newly made team is set so, and the stock team maps set it in their data ((2v2)Berlin's two teams are each allied to themselves and enemies of each other).'''
+
+[[topic.rule]]
+id = "lobby-teams"
+tags = ["code"]
+text = '''At launch each side a player takes joins the team of its lobby slot, so teammates are allies from the start.'''
+
+[[topic]]
+title = "Side names"
+
+[[topic.rule]]
+id = "where-side-names-show"
+tags = ["code"]
+text = '''A side's name is what the selection panel's owner line and the message lines that name a side show (see [object display](object-display.toml) and [messages](messages.toml)).'''
+
+[[topic.rule]]
+id = "map-side-names"
+tags = ["code", "data"]
+text = '''Each side starts with the name the map's strings give it (`kingdom_N`, `independent_N`).'''
+
+[[topic.rule]]
+id = "named-after-player"
+tags = ["code"]
+text = '''In a skirmish or multiplayer match (anything but a campaign mission), each side that a player takes at launch is renamed to that player's name, person or computer. Sides nobody takes, the independent ones among them, keep the map's name ("Civilian (Aggressive)").'''
+
+[[topic.rule]]
+id = "session-player-name"
+tags = ["code", "data"]
+text = '''That is the player's name as the session holds it, number included, so a second Bob's side is "Bob (1)" (see Player names in [multiplayer](multiplayer.toml)). A single-player skirmish is a session too, and the person's side there takes their LAN nickname, "Player" for someone who has never set one.'''
+
+[[topic.rule]]
+id = "computer-player-name"
+tags = ["code", "data"]
+text = '''A computer player is named after its AI profile's `name` in `SAI/`: a Kesselring computer player is "Kesselring AI" (`Germany_Kesselring_SAI_kesselring_sai_name`), never the general's "Field Marshal Kesselring". So a computer side's lines and panel read "Kesselring AI". A computer slot whose profile is left to chance shows "Random" (`staging_and_session_random_sai_name`) in the lobby until launch picks one (see Choosing a profile at launch in [multiplayer](multiplayer.toml)).'''
+
+[[topic.rule]]
+id = "renaming-mid-match"
+tags = ["code", "guess"]
+text = '''A person renaming themselves during a skirmish or multiplayer match renames their side too ("%s changed name to %s", `networking_player_changed_name`).'''
+
+[[topic.rule]]
+id = "takeover-name"
+tags = ["code", "data"]
+text = '''When a computer player takes over a side mid-match, it is named after the side with `sai_midgame_name_postfix` (" AI") added, so Bob's side becomes "Bob AI" ([multiplayer](multiplayer.toml)).'''
+
+[[topic.rule]]
+id = "campaign-side-names"
+tags = ["code", "guess"]
+text = '''In a campaign mission every side keeps the map's name. In a battle fought from the WWII campaign's map each side that a player takes is named from the campaign's own data for it rather than after the player.'''
+
+[[topic]]
+title = "Handicaps"
+intro = '''The Easy / Medium / Hard setting a side can be given in the custom-game lobby (`Game/handicaps.tgi`): which sides have one, what it gives them at the start of a match, and what that changes in play.'''
+
+[[topic]]
+title = "Who has a handicap"
+under = "Handicaps"
+
+[[topic.rule]]
+id = "handicap-belongs-to-side"
+tags = ["code"]
+text = '''A handicap belongs to a side (a map player), not to whoever plays it. Whatever handicap a side holds when the match starts is applied to it, whether a person or the computer plays it.'''
+
+[[topic.rule]]
+id = "lobby-handicap"
+tags = ["code"]
+text = '''The match uses the side's handicap as the lobby leaves it. The map's own per-player `handicap` (in MAP_HEADER) is only where that starts: the lobby's choice replaces it. A side the lobby never touches, an independent one included, keeps the map's value.'''
+
+[[topic.rule]]
+id = "no-map-handicaps"
+tags = ["data"]
+text = '''No shipped map sets one: the field is empty for every player in all 80 maps, campaign maps included. So a side starts with no handicap unless the lobby gives it one, and campaign missions have none.'''
+
+[[topic.rule]]
+id = "no-handicap-is-medium"
+tags = ["code", "data"]
+text = '''No handicap plays exactly like Medium, which gives nothing.'''
+
+[[topic.rule]]
+id = "handicap-for-computer-sides"
+tags = ["code", "data", "guess"]
+text = '''The lobby's handicap choice is meant for computer-played sides: the setting is named for the AI, and the stock descriptions all speak of "the AI" ("EASY: Gives a military and economic penalty to the AI."). It's offered only on slots the local player may change, only when handicaps are defined, and not in some game modes (the campaign's, probably). Whether a slot a person holds can be given one is unsettled.'''
+
+[[topic]]
+title = "What a handicap gives"
+under = "Handicaps"
+
+[[topic.rule]]
+id = "handicap-grants"
+tags = ["code"]
+text = '''
+A handicap (`[Handicap Template=Handicap]`) can give two things, both once, as the match starts:
+- the technology its `property_ids` names, given to the side like a start technology;
+- its `ExtraResources`, added to the side's starting money (see [economy](economy.toml#starting-money)).
+'''
+
+[[topic.rule]]
+id = "stock-handicaps"
+tags = ["data"]
+text = '''
+Stock handicaps:
+- Easy (`handicap_easy`) gives `property_handicap_easy`: `RECRUIT_COST` and `health` each multiplied by −0.25.
+- Medium (`handicap_medium`) gives nothing.
+- Hard (`handicap_hard`) gives `property_handicap_hard`: `RECRUIT_COST` and `health` each multiplied by +0.25.
+- None has `ExtraResources`.
+'''
+
+[[topic.rule]]
+id = "handicap-only-at-start"
+tags = ["code"]
+text = '''A handicap does nothing else. It isn't consulted after the start: not by the computer player (its aggression, what it builds, any cheating), not for production, upkeep, sight or anything else. How hard the computer plays is the separate Difficulty option.'''
+
+[[topic.rule]]
+id = "handicap-technology-conditions"
+tags = ["code", "data"]
+text = '''The technology is given only if the side doesn't already hold it. A restriction group that bars it from the side keeps it from being given (see [research](research.toml#scenario-restrictions)); no shipped group does.'''
+
+[[topic.rule]]
+id = "handicap-applies-to-all"
+tags = ["code", "data"]
+text = '''The handicap technologies have no `required_properties`, so they apply to every thing the side owns that has a `[PropertiesComponent]`, which in the stock data is every unit, vehicle, truck, regiment and building.'''
+
+[[topic]]
+title = "What the multipliers do"
+under = "Handicaps"
+
+[[topic.rule]]
+id = "multipliers-add"
+tags = ["code"]
+text = '''A multiplier of amount a makes the value × (1 + a), added together with any other multipliers of the same attribute the thing has, not compounded, and never below `ModifierAttributeClampMultiply` (0.05). So Easy is × 0.75 and Hard × 1.25; Easy with a +0.10 health technology is × 0.85.'''
+
+[[topic.rule]]
+id = "attribute-case"
+tags = ["code", "game"]
+text = '''Attribute names are matched without regard to case: the data's `health` is `HEALTH`.'''
+
+[[topic.rule]]
+id = "recruit-cost-multiplier"
+tags = ["code", "data"]
+text = '''
+`RECRUIT_COST` scales what recruiting costs (see [economy](economy.toml#paying-for-commissions)): regiments, Division HQ and other trucks, and anything else a building or HQ recruits. It doesn't touch:
+- things built in place by a builder, such as bunkers and supply depots, which go by `STRUCTURE_COST` instead;
+- research costs;
+- upkeep, production, or the regiment and building limits a thing uses. Shipped costs are all money, so only money is affected.
+'''
+
+[[topic.rule]]
+id = "health-multiplier"
+tags = ["code", "guess"]
+text = '''
+`HEALTH` scales the maximum health of every unit, vehicle and building the side owns (in a regiment, each man and vehicle).
+- Things the side already has when the handicap is given, the starting forces and buildings, keep the share of health they had: at full health they're at full scaled health.
+- Things that join the side later (recruited, unpacked, captured, given) take on its technologies as they join, and keep their share of health the same way, so a new unit starts at full scaled health.
+- A thing that leaves the side, captured by another say, loses the multiplier, keeping its share of health again.
+'''
+
+[[topic.rule]]
+id = "easy-and-hard-effect"
+tags = ["data"]
+text = '''So on Easy a side pays three quarters for its recruits but its things have three quarters of their health; on Hard it pays a quarter more but everything is a quarter tougher. That cost goes the other way to the descriptions, which call Easy a penalty and Hard a bonus in both.'''
+
+[[topic]]
+title = "Seeing it"
+under = "Handicaps"
+
+[[topic.rule]]
+id = "technology-gained-message"
+tags = ["code", "data"]
+text = '''The side gets "Easy technology gained" or "Hard technology gained" in its message log as the match starts (see [messages](messages.toml)); a computer side's message reaches no one.'''
+
+[[topic.rule]]
+id = "technology-display"
+tags = ["code", "data"]
+text = '''The technology display lists it as a technology named Easy or Hard, with the economic icon (`IconPropertyEconomic`); see [object display](object-display.toml#technology-display).'''
+
+[[topic.rule]]
+id = "scaled-costs-shown"
+tags = ["code"]
+text = '''Costs shown to the side's player, in tooltips and in "Insufficient funds for X. Requires Y.", are the scaled ones, rounded up to a whole number.'''
+
+[[topic]]
+title = "Losing it"
+under = "Handicaps"
+
+[[topic.rule]]
+id = "handicap-never-lost"
+tags = ["code", "data"]
+text = '''Nothing in normal play takes it away. Only the `kingdom_loses_technology` trigger effect naming it would, and no shipped map does.'''
+
+[[topic.rule]]
+id = "saved-game-handicap"
+tags = ["guess"]
+text = '''A saved game keeps it; it isn't given again on loading.'''
+
+[[open]]
+q = '''What makes a player independent, as the `independent` target type in [combat](combat.toml) uses it?'''
+by = "analysis"
+asked = 2026-11-08
+
+[[open]]
+q = '''Can the lobby give a handicap to a slot a person holds, and in which game modes is the setting offered?'''
+by = "analysis"
+asked = 2026-11-12
+
+[[open]]
+q = '''What does the lobby show for a computer side whose map value is empty, and what does a new computer slot start at?'''
+by = "analysis"
+asked = 2026-11-12

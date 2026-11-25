@@ -1,7 +1,7 @@
 subject = "Supply"
 summary = '''Which buildings give supply and over what ground, how regiments attach to Division HQs, how a regiment is judged in or out of supply, what each state does to it, and how supply ties into the economy and the display.'''
 games = '''traced in AA. Kohan II runs the same code, but its data hasn't been checked against these rules.'''
-intro = '''There is one kind of supply. Ammo and oil are economy resources ([economy](economy.md)), not kinds of supply: they have no zones or providers of their own, and reach supply only through the upkeep shortage below. [code]'''
+intro = '''There is one kind of supply. Ammo and oil are economy resources ([economy](economy.toml)), not kinds of supply: they have no zones or providers of their own, and reach supply only through the upkeep shortage below. [code]'''
 
 [[topic]]
 title = "Who gives supply"
@@ -67,12 +67,12 @@ text = '''Under construction means being built up from a construction site. Stoc
 [[topic.rule]]
 id = "provide-under-siege"
 tags = ["code", "data"]
-text = '''`SupplyProvideUnderSiege` (true in AA's SVars) lets a provider that's under siege ([buildings](buildings.md), Under siege) keep giving supply. Were it false, a provider under siege would stop.'''
+text = '''`SupplyProvideUnderSiege` (true in AA's SVars) lets a provider that's under siege ([buildings](buildings.toml), Under siege) keep giving supply. Were it false, a provider under siege would stop.'''
 
 [[topic.rule]]
 id = "city-centre-contested"
 tags = ["code"]
-text = '''A city centre gives supply only while its city isn't contested ([buildings](buildings.md), Holding a city): while nobody is in the city's zone, or the owner's side (the owner and its allies) has more weight there than the owner's enemies do. With equal weights it gives none. So an empty owned city supplies its side, and so does one where the owner's side has any weight and no enemy is there. The city is re-weighed, and the provider re-checked, once a second each, so the zone follows within a second or two.'''
+text = '''A city centre gives supply only while its city isn't contested ([buildings](buildings.toml), Holding a city): while nobody is in the city's zone, or the owner's side (the owner and its allies) has more weight there than the owner's enemies do. With equal weights it gives none. So an empty owned city supplies its side, and so does one where the owner's side has any weight and no enemy is there. The city is re-weighed, and the provider re-checked, once a second each, so the zone follows within a second or two.'''
 
 [[topic.rule]]
 id = "empty-city-supplies"
@@ -153,17 +153,17 @@ text = '''Where it may be aimed: anywhere on the map. Fog, unexplored ground, en
 [[topic.rule]]
 id = "supply-drop-room"
 tags = ["code", "data"]
-text = '''What decides whether it goes is room for the crate (a circle of radius 0.5), looked for when the operation is used: the aimed point, else the nearest clear spot out to 12 world units, as [special operations](special-ops.md) describes for summons. Clear means on the map, on ground a land unit can pass, and overlapping no blocking thing (units, buildings, scenery). So a point on water or impassable ground is fine while there's land within reach; with none (open sea, the middle of a lake), the side is told "Failed to summon" with the crate's name, no plane comes, and the 400 experience and the 600 seconds' recharge are spent all the same.'''
+text = '''What decides whether it goes is room for the crate (a circle of radius 0.5), looked for when the operation is used: the aimed point, else the nearest clear spot out to 12 world units, as [special operations](special-ops.toml) describes for summons. Clear means on the map, on ground a land unit can pass, and overlapping no blocking thing (units, buildings, scenery). So a point on water or impassable ground is fine while there's land within reach; with none (open sea, the middle of a lake), the side is told "Failed to summon" with the crate's name, no plane comes, and the 400 experience and the 600 seconds' recharge are spent all the same.'''
 
 [[topic.rule]]
 id = "supply-drop-flight"
 tags = ["code", "data"]
-text = '''The plane then flies to the spot found, from the map edge farthest from it, as for any delivery ([deliveries](deliveries.md#special-operations-and-triggers)). How long that takes depends on the distance: it starts from rest at the edge, so a long run takes tens of seconds. It releases the crate right over the spot (the crate's `fall_drag` of 10 cancels any lead), and as it lands the crate looks for room again, out to 16; if that fails it's simply removed, with no message and nothing given back.'''
+text = '''The plane then flies to the spot found, from the map edge farthest from it, as for any delivery ([deliveries](deliveries.toml#special-operations-and-triggers)). How long that takes depends on the distance: it starts from rest at the edge, so a long run takes tens of seconds. It releases the crate right over the spot (the crate's `fall_drag` of 10 cancels any lead), and as it lands the crate looks for room again, out to 16; if that fails it's simply removed, with no message and nothing given back.'''
 
 [[topic.rule]]
 id = "crate-fall"
 tags = ["code", "data"]
-text = '''The fall itself: the crate leaves 2 (its `height`) below the plane, which flies at its `operational_height` of 17, so 15 above the ground, and drops at about 3.07 a second ([deliveries](deliveries.md#coming-down)): about 4.9 seconds from release to landing over level ground.'''
+text = '''The fall itself: the crate leaves 2 (its `height`) below the plane, which flies at its `operational_height` of 17, so 15 above the ground, and drops at about 3.07 a second ([deliveries](deliveries.toml#coming-down)): about 4.9 seconds from release to landing over level ground.'''
 
 [[topic.rule]]
 id = "crate-is-source"
@@ -197,7 +197,7 @@ title = "Supply zones"
 id = "zone-shape"
 tags = ["code"]
 text = '''
-A provider's zone is a zone as [objects](objects.md) describes (Zones), around the provider's centre with radius `supply_range`: whole tiles, those a walk from the centre tile reaches for less than the radius. It's measured from the centre, not the building's edge, in world units along the walk.
+A provider's zone is a zone as [objects](objects.toml) describes (Zones), around the provider's centre with radius `supply_range`: whole tiles, those a walk from the centre tile reaches for less than the radius. It's measured from the centre, not the building's edge, in world units along the walk.
 - With 2-unit tiles a range of 60 reaches 29 tiles straight out and 21 along a diagonal; 50 reaches 24 and 17.
 - The reach is that walk exactly: straight steps one tile, diagonal steps 1.4142135 tiles, the cheapest such walk, nothing finer. No straight-line distance enters into it, so on open ground the zone is the octagon of tiles, not a disc. The rounder outline seen in the game comes from how the border is drawn (What the player sees), not from the zone.
 - As for every such zone, the walk doesn't cross between land and water. A provider on land supplies only land tiles, reached overland: its zone stops at the shore, and ground across a river is in it only where a way round (a bridge, a ford) is short enough.
@@ -273,12 +273,12 @@ note = "capped at stockpile_max"
 [[topic.rule]]
 id = "relay-out-of-supply"
 tags = ["code"]
-text = '''A relay that isn't connected and has no stockpile is out of supply: it gives no zone, its production drops ([economy](economy.md)) and its queue pauses.'''
+text = '''A relay that isn't connected and has no stockpile is out of supply: it gives no zone, its production drops ([economy](economy.toml)) and its queue pauses.'''
 
 [[topic.rule]]
 id = "unpacking-outside-supply"
 tags = ["code", "data"]
-text = '''So a relay unpacked outside every friendly zone never works, and one unpacked inside works as soon as its unpacking finishes. Nothing stops the player unpacking outside supply: the unpack order tests only room to stand ([buildings](buildings.md)), and the game has no message for it.'''
+text = '''So a relay unpacked outside every friendly zone never works, and one unpacked inside works as soon as its unpacking finishes. Nothing stops the player unpacking outside supply: the unpack order tests only room to stand ([buildings](buildings.toml)), and the game has no message for it.'''
 
 [[topic.rule]]
 id = "chain-sources"
@@ -311,7 +311,7 @@ Recruiting attaches:
 - An order to recruit a regiment at an HQ that has no free place is refused, with "Cannot attach to X. HQ is full.", before anything is paid.
 - An accepted order holds a place at that HQ while the regiment is queued and built; cancelling frees it.
 - The regiment is attached to that HQ the moment it appears.
-- A regiment that is flown or shipped in rather than walking out of the building keeps the place too: the transport bringing it holds the place from when it's given the delivery, and hands it to the regiment as the regiment's first member is put down. If the transport is lost first, the place is freed. The delivery itself: [deliveries](deliveries.md).
+- A regiment that is flown or shipped in rather than walking out of the building keeps the place too: the transport bringing it holds the place from when it's given the delivery, and hands it to the regiment as the regiment's first member is put down. If the transport is lost first, the place is freed. The delivery itself: [deliveries](deliveries.toml).
 '''
 
 [[topic.rule]]
@@ -347,7 +347,7 @@ text = '''
 An attachment ends when:
 - the regiment is ordered to detach, or to another HQ;
 - the regiment is destroyed;
-- the HQ regiment is destroyed (its building or truck is lost), sold or disbanded ([buildings](buildings.md#disbanding-and-selling)), or changes side. Every regiment attached to it is detached at once. A place a transport holds goes too: the regiment it's bringing arrives unattached (Recruiting attaches).
+- the HQ regiment is destroyed (its building or truck is lost), sold or disbanded ([buildings](buildings.toml#disbanding-and-selling)), or changes side. Every regiment attached to it is detached at once. A place a transport holds goes too: the regiment it's bringing arrives unattached (Recruiting attaches).
 '''
 
 [[topic.rule]]
@@ -363,7 +363,7 @@ text = '''Nothing in a stock skirmish changes a regiment's side, so an attached 
 [[topic.rule]]
 id = "packing-keeps-attachments"
 tags = ["code"]
-text = '''Packing and unpacking don't end it: the HQ regiment is the same thing packed or unpacked ([buildings](buildings.md)), and a packed HQ keeps its regiments and can take new ones.'''
+text = '''Packing and unpacking don't end it: the HQ regiment is the same thing packed or unpacked ([buildings](buildings.toml)), and a packed HQ keeps its regiments and can take new ones.'''
 
 [[topic.rule]]
 id = "hq-lost"
@@ -373,7 +373,7 @@ text = '''A regiment whose HQ is gone does nothing about it by itself: it carrie
 [[topic.rule]]
 id = "map-attachments"
 tags = ["code"]
-text = '''Regiments a map starts with are attached only where the map says so: each HQ's saved state lists the regiments in its places ([saved-state](saved-state.md)).'''
+text = '''Regiments a map starts with are attached only where the map says so: each HQ's saved state lists the regiments in its places ([saved-state](saved-state.toml)).'''
 
 [[topic.rule]]
 id = "attachment-has-no-bonus"
@@ -384,7 +384,7 @@ text = '''Attachment does nothing else to the regiment that the data shows: the 
 id = "hq-badge"
 tags = ["code", "data"]
 text = '''
-Each HQ has a badge, one of its nation's `Badge` textures (20 a nation, 28 for the USA), held while the HQ exists. The list is the `[Badge]` entries' `badge_texture` in `Nations/<nation>.tgi`, in file order, the pictures beside it (`Nations/JPN/JPNBadge01.png` and on). Where the badge shows is in [object display](object-display.md#the-regiments-banner).
+Each HQ has a badge, one of its nation's `Badge` textures (20 a nation, 28 for the USA), held while the HQ exists. The list is the `[Badge]` entries' `badge_texture` in `Nations/<nation>.tgi`, in file order, the pictures beside it (`Nations/JPN/JPNBadge01.png` and on). Where the badge shows is in [object display](object-display.toml#the-regiments-banner).
 - A new HQ draws one at random from the whole list (the game's own random numbers, so the same in every player's game). If no other HQ of its side holds that one it takes it; if one does, it takes the first in the nation's list that none holds. With every badge held it gets none. It's a pick, not a running count.
 - The badge is freed when the HQ is lost, and can be drawn again.
 - An HQ that changes side frees its badge and draws again from its new side's.
@@ -410,11 +410,11 @@ tags = ["code", "data"]
 text = '''
 Any other regiment is in supply when all of these hold:
 - its side is a player's, not an independent one;
-- nothing is engaging it: no enemy regiment or defending building has it as a target of its engagement ([combat](combat.md), Engagement). This lasts exactly as long as the engagements do, not for a time after the last shot. Being seen isn't being engaged. An enemy regiment counts from when it adds this regiment to the targets of its own engagement until it drops it or its engagement ends. A defending building (a bunker, an HQ's guns) counts only while one of its weapons has a member of this regiment as its current target: from when the weapon picks it, which needs it in the weapon's reach, until the weapon drops it or picks another. A building that has merely noticed the regiment, or is firing at something else, doesn't count;
+- nothing is engaging it: no enemy regiment or defending building has it as a target of its engagement ([combat](combat.toml), Engagement). This lasts exactly as long as the engagements do, not for a time after the last shot. Being seen isn't being engaged. An enemy regiment counts from when it adds this regiment to the targets of its own engagement until it drops it or its engagement ends. A defending building (a bunker, an HQ's guns) counts only while one of its weapons has a member of this regiment as its current target: from when the weapon picks it, which needs it in the weapon's reach, until the weapon drops it or picks another. A building that has merely noticed the regiment, or is firing at something else, doesn't count;
 - nothing has bombarded it lately (Bombardment, below);
 - it isn't still arriving by transport. Regiments aren't carried about in play; a transport only brings one onto the map (a drop, a landing, reinforcements). The regiment exists from when its first member is put down, and counts as with the transport until the transport has put down the last, or is lost: noticed at the regiment's next once-a-second check. Until then it's out of supply;
 - it's attached to an HQ that still exists, or its template has `in_supply_detached = true`, or it is itself an HQ regiment. Every stock fighting regiment has `in_supply_detached = false`, so it must be attached; the first tutorial's Russian infantry is the exception. The HQ may be packed or unpacked, near or far, in supply or not: only that it exists counts;
-- the tile under the regiment's own position is in a supply zone of its side or an ally's. One tile decides: not each member's, and not all of them. The regiment's position follows its leader's ([movement](movement.md)), so in effect it's where the leader is, not the middle of the members nor where the regiment was sent.
+- the tile under the regiment's own position is in a supply zone of its side or an ally's. One tile decides: not each member's, and not all of them. The regiment's position follows its leader's ([movement](movement.toml)), so in effect it's where the leader is, not the middle of the members nor where the regiment was sent.
 '''
 
 [[topic.rule]]
@@ -461,7 +461,7 @@ tags = ["code", "data"]
 text = '''
 A hit is a bombardment hit when the attack that did the damage was started as a bombardment by a unit or building. Two kinds of attack are:
 - any shot by a unit that is carrying out a bombard order, at a target or at a spot on the ground. That's every unit that picks its own shots, on land or sea, in a regiment or alone: mortar infantry, artillery halftracks, self-propelled artillery, battleships. For these the order decides, not the weapon: the same weapon fired without a bombard order (in an ordinary engagement, or answering fire) makes an ordinary hit, even though its ability has `bombard = true`. The flag only says which weapons a bombard order may use, and so which units can be given one;
-- a shot that isn't the unit's own choice, when the ability fired has `bombard = true` in its `[Flags]`. There are three such ways to fire: a `[DefenderComponent]` weapon firing at what it has noticed (no stock one is flagged); an aircraft on its attack run (bombers' `AAAirplaneAttackBomb` is flagged, so every bomb hit is one); and a thing told by the `Ability` script command to use one of its weapons on a target ([combat](combat.md#told-to-use-an-ability)), the only way the Normandy artillery bunkers' `AABunkerAttackArtilleryBombard` is ever fired. No shipped map or script gives that command.
+- a shot that isn't the unit's own choice, when the ability fired has `bombard = true` in its `[Flags]`. There are three such ways to fire: a `[DefenderComponent]` weapon firing at what it has noticed (no stock one is flagged); an aircraft on its attack run (bombers' `AAAirplaneAttackBomb` is flagged, so every bomb hit is one); and a thing told by the `Ability` script command to use one of its weapons on a target ([combat](combat.toml#told-to-use-an-ability)), the only way the Normandy artillery bunkers' `AABunkerAttackArtilleryBombard` is ever fired. No shipped map or script gives that command.
 '''
 
 [[topic.rule]]
@@ -472,7 +472,7 @@ text = '''A special operation's damage (Carpet Bomb, V-Weapons, Kamikaze, the At
 [[topic.rule]]
 id = "bombardment-by-how-started"
 tags = ["code", "data"]
-text = '''So neither the flag alone nor the kind of thing settles it, but how the shot was started. A battleship's guns (`AAAttackBattleshipBombard`, flagged) make bombardment hits when it has been ordered to bombard and ordinary hits if it fires them any other way. That holds within a bombard order too: while a bombarding regiment fights an enemy that came near ([combat](combat.md#bombard-orders)), its units fire as in any engagement, and those hits are ordinary; it's back to bombardment hits once it returns to shelling.'''
+text = '''So neither the flag alone nor the kind of thing settles it, but how the shot was started. A battleship's guns (`AAAttackBattleshipBombard`, flagged) make bombardment hits when it has been ordered to bombard and ordinary hits if it fires them any other way. That holds within a bombard order too: while a bombarding regiment fights an enemy that came near ([combat](combat.toml#bombard-orders)), its units fire as in any engagement, and those hits are ordinary; it's back to bombardment hits once it returns to shelling.'''
 
 [[topic.rule]]
 id = "only-damage-counts"
@@ -502,7 +502,7 @@ text = '''So a regiment shelled by a unit under a bombard order stays out of sup
 [[topic.rule]]
 id = "bombardment-no-engagement"
 tags = ["code"]
-text = '''Bombardment hits don't start an engagement ([combat](combat.md)), so this is the only way shelling from out of reach touches supply.'''
+text = '''Bombardment hits don't start an engagement ([combat](combat.toml)), so this is the only way shelling from out of reach touches supply.'''
 
 [[topic.rule]]
 id = "ordinary-fire-doesnt-count"
@@ -599,7 +599,7 @@ Resupply works on one member at a time, chosen each second:
 [[topic.rule]]
 id = "member-with-regiment"
 tags = ["code"]
-text = '''A member is with the regiment when it's the leader, or it stands inside the regiment's control zone (`control_range`, 18 for stock regiments, a zone as in [objects](objects.md)) and isn't falling by parachute. This is settled when the member ends a move and when the regiment's zone is laid again, not continuously. A member away from the regiment isn't healed until it's back.'''
+text = '''A member is with the regiment when it's the leader, or it stands inside the regiment's control zone (`control_range`, 18 for stock regiments, a zone as in [objects](objects.toml)) and isn't falling by parachute. This is settled when the member ends a move and when the regiment's zone is laid again, not continuously. A member away from the regiment isn't healed until it's back.'''
 
 [[topic.rule]]
 id = "healing-rate"
@@ -609,12 +609,12 @@ text = '''A damaged member gains `resupply_rate` × its maximum health each seco
 [[topic.rule]]
 id = "replacement-rate"
 tags = ["code"]
-text = '''A lost member's replacement builds up at the same rate (the member template's `resupply_rate` × its maximum health per second); when it reaches full health the member appears, at full health. Until then the empty position shows the progress as its health ([saved-state](saved-state.md)).'''
+text = '''A lost member's replacement builds up at the same rate (the member template's `resupply_rate` × its maximum health per second); when it reaches full health the member appears, at full health. Until then the empty position shows the progress as its health ([saved-state](saved-state.toml)).'''
 
 [[topic.rule]]
 id = "empty-on-death"
 tags = ["code", "data"]
-text = '''A member's position falls empty the moment it dies, not when its remains leave the map: the body lying there, dying, rotting and sinking ([combat](combat.md#death)), is no longer a member, so a replacement can start building up on the next second of resupply and often appears (an infantryman from nothing in about 3.3 seconds) while the old body still lies where it fell. The empty position keeps its own place in the formation; nobody closes up into it, and the body doesn't follow the regiment.'''
+text = '''A member's position falls empty the moment it dies, not when its remains leave the map: the body lying there, dying, rotting and sinking ([combat](combat.toml#death)), is no longer a member, so a replacement can start building up on the next second of resupply and often appears (an infantryman from nothing in about 3.3 seconds) while the old body still lies where it fell. The empty position keeps its own place in the formation; nobody closes up into it, and the body doesn't follow the regiment.'''
 
 [[topic.rule]]
 id = "one-position-at-a-time"
@@ -626,7 +626,7 @@ id = "replacement-appears"
 tags = ["code"]
 text = '''
 Where the new member appears:
-- If a building of its side or an ally's that recruits the member's kind of regiment, and has a `DeploymentInfo` block, stands within the regiment's `control_range` of the regiment's position, the member comes out of the nearest such building, exactly the way a recruit does ([recruiting](recruiting.md#where-a-recruit-appears)): made at `creation_offset`, walking to `deployment_offset` first, and only from there rejoining the regiment. It doesn't cut straight across to its place. It belongs to the regiment from the moment it's made. Only those three things pick the building, nearest first among those that pass: what it's doing doesn't matter, so one that is unpacking, packing, under construction or busy with its queue serves as well.
+- If a building of its side or an ally's that recruits the member's kind of regiment, and has a `DeploymentInfo` block, stands within the regiment's `control_range` of the regiment's position, the member comes out of the nearest such building, exactly the way a recruit does ([recruiting](recruiting.toml#where-a-recruit-appears)): made at `creation_offset`, walking to `deployment_offset` first, and only from there rejoining the regiment. It doesn't cut straight across to its place. It belongs to the regiment from the moment it's made. Only those three things pick the building, nearest first among those that pass: what it's doing doesn't matter, so one that is unpacking, packing, under construction or busy with its queue serves as well.
 - Otherwise it appears in its own place in the formation, around the regiment's position, facing as the regiment does.
 - Either way it appears whether the regiment is standing or moving.
 '''
@@ -666,7 +666,7 @@ note = "clamped"
 [[topic.rule]]
 id = "shortage-slows-resupply"
 tags = ["code"]
-text = '''An upkeep shortage slows resupply: both rates are multiplied by 1 − the shortage fraction, 1 − income ÷ costs in money terms (the "N% short" of [economy](economy.md), as a fraction). It's the fraction as it stands at that moment, unrounded, not the figure last shown in the message, which is posted again only when it moves by more than 5 points.'''
+text = '''An upkeep shortage slows resupply: both rates are multiplied by 1 − the shortage fraction, 1 − income ÷ costs in money terms (the "N% short" of [economy](economy.toml), as a fraction). It's the fraction as it stands at that moment, unrounded, not the figure last shown in the message, which is posted again only when it moves by more than 5 points.'''
 
 [[topic.rule.example]]
 given = { resupply_rate = 0.3, multiplier = 1.0, shortage = 0.0 }
@@ -688,12 +688,12 @@ text = '''Resupply costs nothing: no money, ammo or oil is taken for healing or 
 [[topic.rule]]
 id = "stored-missing-members"
 tags = ["code"]
-text = '''Nothing records why a position is empty. A regiment a map stores with members missing fills them by the same resupply as one that lost them in play, starting from whatever progress the map stored for the empty position ([saved-state](saved-state.md)), up to full strength.'''
+text = '''Nothing records why a position is empty. A regiment a map stores with members missing fills them by the same resupply as one that lost them in play, starting from whatever progress the map stored for the empty position ([saved-state](saved-state.toml)), up to full strength.'''
 
 [[topic.rule]]
 id = "recruits-fill-by-resupply"
 tags = ["code", "data"]
-text = '''A newly recruited regiment arrives as its leader alone (`recruit_full = false`) and fills its ranks by this same resupply, so it needs supply to grow. It costs its full upkeep and limit from the start ([economy](economy.md), Who produces).'''
+text = '''A newly recruited regiment arrives as its leader alone (`recruit_full = false`) and fills its ranks by this same resupply, so it needs supply to grow. It costs its full upkeep and limit from the start ([economy](economy.toml), Who produces).'''
 
 [[topic.rule]]
 id = "morale-supply-bonus"
@@ -727,7 +727,7 @@ text = '''On its own, being out of supply only stops resupply. It doesn't slow t
 id = "attrition"
 tags = ["code"]
 text = '''
-A regiment that is out of supply while its side is in an upkeep shortage (money would run below 0, [economy](economy.md)) takes attrition: every living member loses health each second, all at once.
+A regiment that is out of supply while its side is in an upkeep shortage (money would run below 0, [economy](economy.toml)) takes attrition: every living member loses health each second, all at once.
 - The loss is `shortfall_damage_rate` (the regiment's `OrganizationComponent`, 0.01 in stock data) × the member's maximum health, times a random factor drawn afresh for each member each second, evenly between 0.75 and 1.75. That's about 1.25% of full health a second, so some 80 seconds from full health to none.
 - It doesn't scale with how big the shortage is.
 - There's no grace period and no floor: it starts with the next once-a-second check and it kills. Members die of it as of any damage, and the regiment with them.
@@ -759,12 +759,12 @@ title = "Ties to the economy"
 [[topic.rule]]
 id = "ammo-oil-shortfall"
 tags = ["code"]
-text = '''An ammo or oil shortfall does nothing to supply directly. It's charged in money ([economy](economy.md)); only if that drives the money stockpile to 0 with costs above income does the side enter an upkeep shortage, and it's the shortage that slows resupply and starts attrition, for that side's regiments only.'''
+text = '''An ammo or oil shortfall does nothing to supply directly. It's charged in money ([economy](economy.toml)); only if that drives the money stockpile to 0 with costs above income does the side enter an upkeep shortage, and it's the shortage that slows resupply and starts attrition, for that side's regiments only.'''
 
 [[topic.rule]]
 id = "out-of-supply-production"
 tags = ["code"]
-text = '''Production: a Division HQ or depot that is out of supply (cut off, with its stockpile spent) produces its truck's `[Production]` instead of its own, the packed-rate rule of [economy](economy.md). It's back to its own rate when it reconnects. Its upkeep doesn't change.'''
+text = '''Production: a Division HQ or depot that is out of supply (cut off, with its stockpile spent) produces its truck's `[Production]` instead of its own, the packed-rate rule of [economy](economy.toml). It's back to its own rate when it reconnects. Its upkeep doesn't change.'''
 
 [[topic.rule]]
 id = "production-while-packing"
@@ -774,7 +774,7 @@ text = '''Unpacking and packing don't stop production. A building earns from the
 [[topic.rule]]
 id = "queues-pause"
 tags = ["code"]
-text = '''Queues: the same buildings pause their recruiting and research queues while out of supply ([economy](economy.md), Paying for commissions).'''
+text = '''Queues: the same buildings pause their recruiting and research queues while out of supply ([economy](economy.toml), Paying for commissions).'''
 
 [[topic.rule]]
 id = "other-buildings-unjudged"
@@ -886,7 +886,7 @@ id = "minimap-blinking"
 tags = ["code"]
 text = '''
 The minimap also flags trouble on the viewing side's own things, and only those: an ally's things never blink, whatever state they're in. It does so by blinking their marker between its normal colour and a warning colour, swapping every half of `MinimapPeriodUpdateObjects` (so every 0.5 seconds):
-- `color_under_siege` (red) while the thing is engaged or under siege. Each marked thing is judged by its own state: a building by its under-siege state ([buildings](buildings.md), Under siege), which ends 7 to 8 seconds after the last enemy damage; a regiment or unit by being engaged or under siege ([combat](combat.md), Engaged and under siege). Seeing or having seen enemies doesn't count;
+- `color_under_siege` (red) while the thing is engaged or under siege. Each marked thing is judged by its own state: a building by its under-siege state ([buildings](buildings.toml), Under siege), which ends 7 to 8 seconds after the last enemy damage; a regiment or unit by being engaged or under siege ([combat](combat.toml), Engaged and under siege). Seeing or having seen enemies doesn't count;
 - otherwise `color_requires_supply` (green) while it's out of supply and its economy sets `supply_required` (HQs and depots, not ordinary regiments).
 - Things without either condition, and other sides' things (allies included), never blink. The out-of-supply marker isn't otherwise recoloured, and nothing matches the building tint's grey-green.
 '''
@@ -904,7 +904,7 @@ An HQ's panel shows a slot for each place, filled with the attached regiment or 
 - there are six at most, three across and two down, filled in the order of the HQ's places: left to right along the top row, then the bottom row. Slots beyond the HQ's number of places aren't shown;
 - each is the layout's 42 by 50 slot. The first sits at the top left of the 148 by 101 area; each column is 53 further right (half of 148 − 42) and the second row 51 further down (101 − 50), which leaves 11 between columns and 1 between rows;
 - an attached regiment shows as its model, with a health bar (the average over its members) and a morale bar;
-- a left click on a place holding a regiment or a transport selects it alone, and a right click centres the camera on it; what hovering a place shows is in [object display](object-display.md#an-hqs-places);
+- a left click on a place holding a regiment or a transport selects it alone, and a right click centres the camera on it; what hovering a place shows is in [object display](object-display.toml#an-hqs-places);
 - a place held for a regiment still in the HQ's queue shows that regiment's icon and a progress bar in place of the other bars: the build's progress while it's the item being built, empty while it waits behind another. Clicking the slot cancels that queue item;
 - a transport holding a place shows its icon and one health bar;
 - an empty place shows the bare frame, with the tooltip "Empty attachment slot".
@@ -973,12 +973,12 @@ A regiment out of supply:
 [[topic.rule]]
 id = "out-of-supply-tint"
 tags = ["code", "data"]
-text = '''A building out of supply pulses grey-green (`out_of_supply_vfx`, colour 0.5, 0.55, 0.5) for as long as it lasts: a repeating tint, which keeps pulsing while the game is paused and gives way to the under-siege tint. How tints change over time, start, stop and override each other is in [effects](effects.md#tints).'''
+text = '''A building out of supply pulses grey-green (`out_of_supply_vfx`, colour 0.5, 0.55, 0.5) for as long as it lasts: a repeating tint, which keeps pulsing while the game is paused and gives way to the under-siege tint. How tints change over time, start, stop and override each other is in [effects](effects.toml#tints).'''
 
 [[topic.rule]]
 id = "stockpile-bar"
 tags = ["code", "data"]
-text = '''A relay shows a supply stockpile bar over the building and in its panel. Hovering the panel's bar gives the relay's whole tooltip, whose "Supply Stockpile" line is the stockpile over `stockpile_max` in whole numbers; the bar's own "Supply N/M" string isn't what shows (see [object display](object-display.md#object-display-tooltips-and-clicks)).'''
+text = '''A relay shows a supply stockpile bar over the building and in its panel. Hovering the panel's bar gives the relay's whole tooltip, whose "Supply Stockpile" line is the stockpile over `stockpile_max` in whole numbers; the bar's own "Supply N/M" string isn't what shows (see [object display](object-display.toml#object-display-tooltips-and-clicks)).'''
 
 [[topic.rule]]
 id = "paused-queue-display"
