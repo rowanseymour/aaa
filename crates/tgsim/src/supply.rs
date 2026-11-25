@@ -62,10 +62,22 @@ impl World {
     }
 
     /// Whether a building that passes supply on has none to pass: nothing
-    /// reaches it and its stockpile is spent.
+    /// reaches it and its stockpile is spent. One that needs supply but
+    /// gives none goes without off its side's ground.
     pub fn out_of_supply(&self, b: usize) -> bool {
         let s = &self.buildings[b].supply;
-        s.judged && !s.connected && s.stockpile <= 0.0 && self.supply_of(b).is_some_and(|p| p.relay)
+        let judged = match self.supply_of(b) {
+            Some(p) => p.relay,
+            None => self.needs_supply(b),
+        };
+        s.judged && !s.connected && s.stockpile <= 0.0 && judged
+    }
+
+    /// Whether the building at `b` needs supply but gives none of its own,
+    /// so is judged by the ground it stands on.
+    fn needs_supply(&self, b: usize) -> bool {
+        let building = &self.buildings[b];
+        self.supply_of(b).is_none() && self.economy_of(&building.template).supply_required
     }
 
     /// Whether `player`'s supply covers `at`: its own zones' and its
@@ -262,6 +274,13 @@ impl World {
     /// or lifting its zone to match, and on its beat filling or draining a
     /// relay's stockpile. Returns whether its zone came, went or changed.
     fn judge(&mut self, b: usize, beat: bool) -> bool {
+        if self.needs_supply(b) {
+            let covered = self.covered(b);
+            let busy = self.buildings[b].busy();
+            let s = &mut self.buildings[b].supply;
+            (s.connected, s.busy) = (covered, busy);
+            return false;
+        }
         let (Some(supply), Some(range)) = (self.supply_of(b), self.supply_range(b)) else {
             return false;
         };
@@ -856,6 +875,26 @@ mod tests {
         w.rules.supply_rules.under_siege = false;
         run(&mut w, 1.0);
         assert!(w.buildings[2].supply.zone.is_none());
+    }
+
+    #[test]
+    fn buildings_that_need_supply_but_give_none_go_by_their_ground() {
+        let mut w = chain();
+        let economy = tgmap::Economy {
+            supply_required: true,
+            ..tgmap::Economy::default()
+        };
+        w.rules.economies.insert(Id::from("works"), economy);
+        let works = |id, at| {
+            let mut works = building(id, 1, at);
+            works.template = "works".into();
+            works
+        };
+        w.add_buildings(&[works(8, [20.0, 80.0]), works(9, [20.0, 30.0])]);
+        let far = w.buildings.len() - 2;
+        run(&mut w, 1.0);
+        assert!(w.out_of_supply(far));
+        assert!(!w.out_of_supply(far + 1));
     }
 
     #[test]
