@@ -70,6 +70,30 @@ asked = <date asked>
 - A link's `#fragment` into a TOML spec names a topic (its title in
   kebab case) or a rule ID.
 
+## Audits
+
+`audits/<subject>.toml` says how far this repo's code follows a TOML
+spec, rule by rule, as an analysis session found it (`/reconcile`). It's
+the one place a spec's folder speaks of our code. Implementers fix what it
+lists and the next audit re-checks it; nobody else edits it.
+
+```toml
+subject = "<subject>"
+aaa = "<the commit last audited>"
+audited = <date>
+
+[[rule]]
+id = "<rule-id>"
+verdict = "<matches|partial|deviates|missing>"
+where = ["<file:lines>", ...]     # where our code does it, or would
+detail = '''<What differs, as the player would see it.>'''
+checked = <true|false>            # confirmed in the code, or as reported
+aaa = "<the commit this rule was audited at>"
+spec = "<the rule as audited, hashed>"
+```
+
+A rule the spec has but the audit doesn't list hasn't been audited.
+
 ## Index
 
 Each subject lives in one spec; others link to it rather than repeat it.
