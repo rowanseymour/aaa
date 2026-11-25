@@ -587,6 +587,14 @@ impl World {
         }
     }
 
+    /// Whether the organization at `r` is still with the aircraft bringing
+    /// it: it has members yet to let go, and isn't lost.
+    pub(crate) fn with_transport(&self, r: usize) -> bool {
+        let members = self.organizations[r].units.len();
+        (self.deliveries.iter())
+            .any(|d| d.organization == Some(r) && d.released < members && d.plunge.is_none())
+    }
+
     /// Has the delivery at `d`'s aircraft, just shot down, drop out of its
     /// flight: what it's yet to drop is lost with it, freeing its place
     /// at its HQ, and it carries on the way it was heading at the speed
@@ -736,6 +744,8 @@ impl World {
             let organization = &mut self.organizations[r];
             (organization.position, organization.facing) = (target, line);
             (organization.hq, organization.arriving) = (hq, true);
+            // With its aircraft, so out of supply from the start.
+            organization.in_supply = false;
             for u in organization.units.clone() {
                 self.units[u].awaited = true;
             }
@@ -1216,6 +1226,33 @@ mod tests {
         let rot = (5.0 / crate::TICK).round() as u64;
         assert_eq!(w.unit_remains(man).expect("down").sinking, landed + rot);
         assert!(!w.units[man].moving());
+    }
+
+    #[test]
+    fn paratroopers_are_out_of_supply_until_the_last_is_let_go() {
+        let mut w = airfield();
+        (w.rules.supplies).insert(Id::from("house"), crate::testing::supply(100.0, false, 0.0));
+        let logistics = tgmap::Logistics {
+            detached: true,
+            ..crate::testing::logistics(None)
+        };
+        w.rules.logistics.insert(Id::from("company"), logistics);
+        w.apply(1, deliver([40.0, 20.0])).unwrap();
+        let out =
+            |w: &World| (w.deliveries.first()).and_then(|d| Some((d.organization?, d.released)));
+        while out(&w).is_none_or(|(_, released)| released < 3) {
+            w.tick();
+            if let Some((r, _)) = out(&w).filter(|&(_, released)| released < 3) {
+                assert!(w.with_transport(r) && !w.organizations[r].in_supply);
+            }
+        }
+        // The last let go is still coming down, but it's done with the plane.
+        let (r, _) = out(&w).unwrap();
+        let members = &w.organizations[r].units;
+        assert!(members.iter().any(|&u| w.units[u].descent.is_some()));
+        assert!(!w.with_transport(r));
+        run(&mut w, 1.0);
+        assert!(w.organizations[r].in_supply);
     }
 
     fn deliver(to: [f32; 2]) -> Command {

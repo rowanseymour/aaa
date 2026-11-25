@@ -460,6 +460,11 @@ impl World {
                     (b.fired_ago.clone(), b.target, b.shot, false)
                 }
             };
+            let mut aimed = match s {
+                Target::Building(b) => self.buildings[b].aimed.clone(),
+                Target::Unit(_) => Vec::new(),
+            };
+            aimed.resize(fighter.weapons.len(), None);
             // Only a weapon that's fired since its shooter last stood still
             // needs the rate: one that hasn't is ready at any.
             let mut rate = None;
@@ -476,6 +481,12 @@ impl World {
                 // The rate is read as the time is checked, so a change to it
                 // shortens or lengthens a recharge under way.
                 fired_ago[w] += TICK;
+                // A weapon drops what's left its reach.
+                if aimed[w]
+                    .is_some_and(|t| self.fighter(t).is_none() || !self.can_hit(s, weapon, t))
+                {
+                    aimed[w] = None;
+                }
                 if held || moving && !weapon.turret {
                     continue;
                 }
@@ -497,7 +508,15 @@ impl World {
                 {
                     continue;
                 }
-                let Some(t) = self.aim(s, weapon, target) else {
+                let last = match s {
+                    Target::Building(_) => aimed[w],
+                    Target::Unit(_) => target,
+                };
+                let picked = self.aim(s, weapon, last);
+                if let Target::Building(_) = s {
+                    aimed[w] = picked;
+                }
+                let Some(t) = picked else {
                     continue;
                 };
                 target = Some(t);
@@ -541,6 +560,7 @@ impl World {
                         }
                     }
                     (b.fired_ago, b.target, b.shot, b.turrets) = (fired_ago, target, shot, turrets);
+                    b.aimed = aimed;
                 }
             }
         }

@@ -789,6 +789,9 @@ pub struct Building {
     fired_ago: Vec<f32>,
     /// What it last fired on.
     pub target: Option<Target>,
+    /// Each of its weapons' current target, from when the weapon picks it
+    /// until it drops it, finds it out of reach or picks another.
+    pub aimed: Vec<Option<Target>>,
     /// For one that defends itself, what it's noticed, which is all it
     /// fires on. Never forgotten, so not a sign of a fight.
     pub noticed: Vec<Piece>,
@@ -1567,7 +1570,7 @@ digest!(Trailer {
 });
 
 digest!(Building {
-    id, template, number, owner, position, facing, health, health_factor, fired_ago, target,
+    id, template, number, owner, position, facing, health, health_factor, fired_ago, target, aimed,
     noticed, awake,
     inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
     captured, unpacked_from, zone, members, supply, properties, created, remembered, constructing,

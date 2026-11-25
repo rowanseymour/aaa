@@ -12,6 +12,7 @@ impl World {
         let building = &mut self.buildings[b];
         building.health = 0.0;
         building.target = None;
+        building.aimed.clear();
         if building.fighter.destructible {
             building.besieged = None;
         }
@@ -49,6 +50,7 @@ impl World {
         if building.fighter.capturable && building.zone.is_none() {
             building.health = 1.0;
             building.target = None;
+            building.aimed.clear();
             building.state = State::Disabled;
         } else {
             self.fall(b, None);
@@ -92,6 +94,7 @@ impl World {
             building.owner = owner;
             building.captured = Some(self.ticks);
             building.target = None;
+            building.aimed.clear();
             building.rally = None;
             // A relay has to connect on its new side.
             building.supply.judged = false;

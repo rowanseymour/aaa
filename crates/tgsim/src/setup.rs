@@ -431,6 +431,7 @@ impl World {
                 position: b.position,
                 facing: b.facing,
                 fired_ago: vec![f32::INFINITY; b.fighter.weapons.len()],
+                aimed: vec![None; b.fighter.weapons.len()],
                 turrets: (b.fighter.turrets.iter())
                     .map(|t| TurretAim {
                         yaw: wrap(t.start),

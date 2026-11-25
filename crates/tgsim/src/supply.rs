@@ -398,11 +398,13 @@ impl World {
         (0..self.organizations.len())
             .any(|e| self.organizations[e].engaged.contains(&them) && !self.destroyed(e))
             || (self.buildings.iter()).any(|b| {
-                // A building counts only while it has one of them as its
-                // target, not for having noticed them.
-                let aimed =
-                    matches!(b.target, Some(Target::Unit(u)) if self.units[u].organization == r);
-                b.standing() && aimed
+                // A building counts only while one of its weapons has one
+                // of them as its target, not for having noticed them. One
+                // that defends itself fires on while disabled.
+                let aimed = (b.aimed.iter().flatten())
+                    .any(|&t| matches!(t, Target::Unit(u) if self.units[u].organization == r));
+                let firing = b.standing() || b.fighter.notice.is_some() && !b.gone();
+                firing && aimed
             })
     }
 
@@ -525,8 +527,7 @@ impl World {
             self.forget_bombarders(r);
             let organization = &self.organizations[r];
             let used = self.logistics_of(&organization.template);
-            // One still being dropped is with its aircraft, not in supply.
-            let present = !self.destroyed(r) && !organization.arriving;
+            let present = !self.destroyed(r);
             let Some(logistics) = used.filter(|l| l.supply_used && present) else {
                 self.organizations[r].in_supply = false;
                 continue;
@@ -541,7 +542,9 @@ impl World {
             let held = &organization.properties;
             let flagged =
                 (self.effects(owner, &organization.template, held, &on)).any(|e| e.supplied);
+            // One still being let go of is with its aircraft, not in supply.
             let in_supply = sided
+                && !self.with_transport(r)
                 && !self.engaged_by(r)
                 && organization.bombarded.is_empty()
                 && (organization.hq.is_some() || logistics.detached || flagged)
@@ -1091,8 +1094,34 @@ mod tests {
         w.buildings[0].noticed.push(Piece::Organization(1));
         assert!(!w.engaged_by(1));
         let member = w.organizations[1].units[0];
-        w.buildings[0].target = Some(Target::Unit(member));
+        // Any of its weapons, whatever the others aim at.
+        w.buildings[0].aimed = vec![None, Some(Target::Unit(member))];
         assert!(w.engaged_by(1));
+        // One that defends itself still fires while disabled.
+        w.buildings[0].state = State::Disabled;
+        assert!(!w.engaged_by(1));
+        w.buildings[0].fighter.notice = Some(10.0);
+        assert!(w.engaged_by(1));
+    }
+
+    #[test]
+    fn a_bunker_stops_engaging_a_regiment_that_leaves_its_reach() {
+        let mut bunker = building(20, 2, [10.0, 24.0]);
+        bunker.fighter.weapons = vec![rifle(12.0, 10.0)];
+        bunker.fighter.notice = Some(10.0);
+        let mut w = siege(&[bunker]);
+        w.units[0].fighter = Some(soldier(Vec::new()));
+        w.tick();
+        // Walking in wakes it.
+        w.units[0].position = [10.0, 16.0];
+        w.tick();
+        assert!(w.engaged_by(0));
+        // Nothing else in reach for it to pick, and it's still the one it
+        // last fired on.
+        w.units[0].position = [10.0, -20.0];
+        w.tick();
+        assert!(!w.engaged_by(0));
+        assert_eq!(w.buildings[0].target, Some(Target::Unit(0)));
     }
 
     #[test]
@@ -1169,6 +1198,21 @@ mod tests {
         w.apply(1, Command::Detach { organization: 1 }).unwrap();
         run(&mut w, 200.0);
         assert!(w.destroyed(1));
+    }
+
+    #[test]
+    fn organizations_still_arriving_wear_away_while_their_side_is_short() {
+        let mut w = division();
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[("money", 500.0)]);
+        w.set_stockpile(1, 0.0);
+        w.organizations[1].arriving = true;
+        run(&mut w, 3.0);
+        let a = w.organizations[1].units[0];
+        assert!(w.units[a].health < 100.0);
     }
 
     #[test]
