@@ -2005,12 +2005,16 @@ pub(crate) fn share(sim: &World, fill: Fill) -> f32 {
 /// progress out of 100, or supply. Nothing of nothing for what has no
 /// such measure.
 fn measure(sim: &World, fill: Fill) -> (f32, f32) {
+    // An empty position shows its replacement's progress as its health.
     let unit = |u: usize| {
         let unit = &sim.units[u];
         let full = sim.max_health(u);
+        let organization = &sim.organizations[unit.organization];
+        let place = organization.units.iter().position(|&m| m == u);
+        let replaced = place.and_then(|p| organization.replacing.get(p).copied());
         match unit.alive() {
             true => (unit.health, full),
-            false => (0.0, full),
+            false => (replaced.unwrap_or(0.0), full),
         }
     };
     match fill {
@@ -2943,6 +2947,14 @@ pub(crate) fn cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_position_shows_its_replacements_progress_as_health() {
+        let mut w = crate::orders::testing::fresh();
+        w.units[0].died = Some(0);
+        w.organizations[0].replacing[0] = 0.25;
+        assert_eq!(measure(&w, Fill::Unit(0)).0, 0.25);
+    }
 
     #[test]
     fn the_efficiency_marker_comes_from_its_bars_layout() {
