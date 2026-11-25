@@ -51,6 +51,9 @@ pub(crate) struct RecruitWords {
     pub(crate) attach_full: String,
     /// For one at a settlement under siege.
     pub(crate) besieged: String,
+    /// For an order to attach to an HQ the side can't afford, given the
+    /// regiment's name and the cost.
+    pub(crate) attach_affording: String,
 }
 
 impl RecruitWords {
@@ -415,6 +418,10 @@ pub fn setup(
         "Insufficient funds for %s. Requires %s.",
     );
     let attach_full = title("hq_error_attach_full|s", "Cannot attach to %s. HQ is full.");
+    let attach_affording = title(
+        "hq_error_attach_affording|ss",
+        "Insufficient funds to attach %s. Requires %s.",
+    );
     let besieged = title(
         "ui_tooltip_cannot_recruit_while_under_siege",
         "Cannot recruit while under siege.",
@@ -621,6 +628,7 @@ pub fn setup(
             affording,
             attach_full,
             besieged,
+            attach_affording,
         },
         research_affording,
         research_refused,
@@ -694,6 +702,7 @@ mod tests {
             affording: "Insufficient funds for %s. Requires %s.".into(),
             attach_full: "Cannot attach to %s. HQ is full.".into(),
             besieged: "Cannot recruit while under siege.".into(),
+            attach_affording: "Insufficient funds to attach %s. Requires %s.".into(),
         };
         let said = |refused| {
             words.refused(

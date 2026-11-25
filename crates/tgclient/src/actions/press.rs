@@ -158,8 +158,13 @@ impl Presser<'_, '_> {
                 }
                 Some(give @ (Give::Rout | Give::Attach | Give::Detach | Give::DetachHero)) => {
                     let mut given = false;
+                    let mut short = Vec::new();
                     for &organization in &self.selected.0 {
                         if let Some(command) = give.command(organization) {
+                            let check = sim.check(player, &command);
+                            if give == Give::Attach && check == Err(tgsim::Refused::Unaffordable) {
+                                short.push(organization);
+                            }
                             given |= self.orders.give(sim, player, command).is_ok();
                         }
                     }
@@ -173,6 +178,9 @@ impl Presser<'_, '_> {
                             player,
                             selected,
                         );
+                    }
+                    for r in short {
+                        self.refuse_attach(r);
                     }
                 }
                 // A side with no heroes is refused without a word.
@@ -371,6 +379,29 @@ impl Presser<'_, '_> {
         self.failed.write(Failed {
             text,
             about: Some(About::Building(building)),
+            at: None,
+        });
+    }
+
+    /// Tells the player their side can't afford to attach the organization
+    /// at `r`, pointing at the HQ it would go to.
+    fn refuse_attach(&mut self, r: usize) {
+        let sim = &self.sim.0;
+        let name = match self.log.as_deref() {
+            Some(log) => log.look.organization(sim, r),
+            None => sim.organizations[r].template.to_string(),
+        };
+        let cost = sim.attach_cost(r).ceil().to_string();
+        let text = fill(&self.looks.recruit.attach_affording, &[&name, &cost]);
+        let hq = sim.attaches_to(r);
+        let building = (0..sim.buildings.len()).find(|&b| hq.is_some() && sim.hq_of(b) == hq);
+        let packed = (0..sim.organizations.len()).find(|&o| hq.is_some() && sim.packed_hq(o) == hq);
+        let about = building
+            .map(About::Building)
+            .or(packed.map(About::Organization));
+        self.failed.write(Failed {
+            text,
+            about,
             at: None,
         });
     }

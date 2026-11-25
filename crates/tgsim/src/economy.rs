@@ -438,6 +438,32 @@ impl World {
         listed * self.recruit_multiplier(recruiter)
     }
 
+    /// What an order to attach the organization at `r` to an HQ costs:
+    /// a share of what recruiting it does, scaled by what it holds itself.
+    pub fn attach_cost(&self, r: usize) -> f32 {
+        let share = self.rules.supply_rules.attach_cost;
+        let organization = &self.organizations[r];
+        let Some(raised) = self.rules.raisable.get(&organization.template) else {
+            return 0.0;
+        };
+        if share == 0.0 {
+            return 0.0;
+        }
+        let money = money(&self.rules.economy);
+        let members = raised.members.iter().map(|m| &m.template);
+        let own = (!raised.lone()).then_some(&raised.template);
+        let listed: f32 = (members.chain(own))
+            .map(|t| self.economy_of(t).cost.get(money))
+            .sum();
+        let on = [Thing::Organization(r)];
+        let held = &organization.properties;
+        let effects =
+            self.economy_effects(organization.owner, &organization.template, &[], held, &on);
+        let added: f32 = effects.iter().map(|e| e.recruit_cost).sum();
+        let multiplier = (1.0 + added).max(self.rules.supply_rules.multiply_floor);
+        listed * multiplier * share
+    }
+
     /// What the building at `recruiter` charges for what it recruits is
     /// multiplied by: 1 and what its properties add.
     pub fn recruit_multiplier(&self, recruiter: usize) -> f32 {

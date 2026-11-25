@@ -428,7 +428,15 @@ pub(crate) fn ready(
             (
                 Some(give @ (Give::Attach | Give::Detach | Give::Disband | Give::DetachHero)),
                 Some(player),
-            ) => selected.iter().any(|&r| can(sim, Some(player), give, r)),
+            ) => selected.iter().any(|&r| {
+                // What only money stands in the way of is pressed, and refused
+                // with word of what it costs.
+                let short = give == Give::Attach
+                    && give.command(r).is_some_and(|c| {
+                        sim.check(player, &c) == Err(tgsim::Refused::Unaffordable)
+                    });
+                short || can(sim, Some(player), give, r)
+            }),
             (give, _) => give.is_some(),
         },
         Entry::Research(i) => researches[i] == Researchable::Ready,

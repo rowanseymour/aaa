@@ -1526,6 +1526,10 @@ pub struct SVars {
     pub allow_sell_under_siege: Option<bool>,
     /// Whether a provider under siege goes on giving supply.
     pub supply_provide_under_siege: Option<bool>,
+    /// What attaching a regiment to an HQ costs, as a share of its
+    /// recruit cost.
+    #[serde(rename = "HQAttachCostPercentage")]
+    pub hq_attach_cost_percentage: Option<f32>,
     /// What stockpiles start at on new and random maps.
     pub resource_stockpile_default: Option<f32>,
     /// Seconds a connected relay's stockpile gains each second.
