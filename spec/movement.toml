@@ -113,7 +113,7 @@ Terrain sets a speed limit. Each terrain has at most one, for everyone on it:
 - It seldom comes up. A terrain says who may cross it with `land` and `water`; `MountainTerrain` sets both false and no stock mountain changes them, so mountain tiles are closed to everything that moves on land or water. Aircraft, which do cross them, have no terrain looked at and so no limit ([terrain](terrain.toml)). The mountain limit only bites on a ground unit whose terrain is a mountain anyway: one a map placed there, or a regiment member whose leader's tile is one.
 - Each step, after the unit's speed has moved towards its travel speed, a speed above the limit is cut to it at once (a regiment member keeping its place then stretches its step, so it can go faster: [keeping place](#keeping-place)). It's an absolute speed, not a share of `speed_max`: a unit slower than the limit isn't affected.
 - Whether the unit holds the terrain's property plays no part, nor whether it's infantry or a vehicle: foot soldiers in forest are held to 2 like the tanks.
-- The terrain is the unit's terrain as [terrain](terrain.toml) has it: a member with its regiment (the leader, or a member inside the regiment's control zone, `control_range`) is limited by the terrain under the regiment's position, not by the tile it's on, so one lagging behind in forest while the regiment's position is on open ground has no limit at all. Whether a member is with its regiment is settled when the regiment's zone is laid again or the member ends a move, not continuously. so the body of a regiment shares one terrain limit, on top of moving at its slowest member's top speed ([a regiment's speed](#a-regiments-speed)). A straggler is limited by its own tile.
+- The terrain is the unit's terrain as [terrain](terrain.toml) has it: a member with its regiment (the leader, or a member inside the regiment's control zone, `control_range`) is limited by the terrain under the regiment's position, not by the tile it's on, so one lagging behind in forest while the regiment's position is on open ground has no limit at all. Whether a member is with its regiment is judged as [supply](supply.toml#member-with-regiment) has it, so the body of a regiment shares one terrain limit, on top of moving at its slowest member's top speed ([a regiment's speed](#a-regiments-speed)). A straggler is limited by its own tile.
 - A unit with the `TRAILBLAZING` flag (property `trailblazing`, held by the stock recon regiments) ignores the limit.
 '''
 
@@ -568,7 +568,7 @@ A regiment's leader is one of its members:
 [[topic.rule]]
 id = "regiment-position"
 tags = ["code"]
-text = '''A regiment's own position follows its leader's. A regiment sent somewhere plans a route and hands it to its leader, who drives it as above, counting as arrived within 0.5 of the route's last point.'''
+text = '''A regiment's own position follows its leader's. While the regiment moves, about once a second its position is aimed at where the leader is then, and it slides there in a straight line at `MoverCatchupSpeed` × the regiment's speed R per second, but never slower than `BannerMinCatchupSpeed` (1.75 × R and 0.5 in the stock SVars). So on the march it trails the leader. A regiment sent somewhere plans a route and hands it to its leader, who drives it as above, counting as arrived within 0.5 of the route's last point.'''
 
 [[topic.rule]]
 id = "regiment-arrival"

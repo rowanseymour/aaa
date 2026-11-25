@@ -231,7 +231,7 @@ A thing comes into a zone either by moving onto one of its tiles or by the zone 
 [[topic.rule]]
 id = "zone-follows-owner"
 tags = ["code"]
-text = '''A zone moves with its owner, re-laid around the tile now under the owner's centre. How soon after the owner moves is open.'''
+text = '''A zone moves with its owner. It's laid again round the tile now under the owner's centre the moment that centre moves onto another tile, however it moved. A regiment's zones go with the regiment's own position, which trails its leader on the march ([movement](movement.toml#regiment-position)).'''
 
 [[topic]]
 title = "Loading a map"
@@ -280,11 +280,6 @@ text = '''Its height is set afresh by the placement rule in [terrain](terrain.to
 q = '''Do maps store units inside a building or transport as things of their own, and if so are they placed (and so checked for room) at load like any other thing?'''
 by = "implementer"
 asked = 2026-11-08
-
-[[open]]
-q = '''How soon after its owner moves is a zone re-laid: as soon as the owner's centre crosses into another tile, or on a slower beat?'''
-by = "analysis"
-asked = 2026-11-09
 
 [[open]]
 q = '''A tile-blocking thing's footprint for being in a zone: is it the box of its blocking shape or of its soft shape? Both turn up, depending on whether the thing moved or the zone did.'''
