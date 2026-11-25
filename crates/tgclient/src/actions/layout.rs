@@ -10,7 +10,7 @@ use tgsim::{Lacking, Researchable};
 use crate::control_groups;
 
 use super::looks::{Looks, look_of};
-use super::press::{sell_command, shown_hq};
+use super::press::{first_hq, sell_command};
 use super::{
     CANCEL, COMMAND_ALL, Entry, Face, Give, MENU_CANCEL, MOST_ALLIES, Menu, ONE_ALLY, ORDERS,
     Offer, Page, SLOTS, Shown, TEAM_CHAT, Target,
@@ -490,7 +490,7 @@ pub(crate) fn contents(
     behavior: Option<bool>,
     people: &[u32],
 ) -> Shown {
-    let hq = shown_hq(sim, selected, building);
+    let hq = first_hq(sim, selected, building);
     let menu = looks.menu(sim, building);
     let lacks: Vec<Lacking> = (menu.iter())
         .map(|r| match (building, &r.organization, local) {

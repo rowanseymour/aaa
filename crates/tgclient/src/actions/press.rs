@@ -248,11 +248,17 @@ impl Presser<'_, '_> {
             }
             Entry::CommandAll => {
                 let building = self.chosen.0.filter(|_| self.selected.0.is_empty());
-                let attached: Vec<usize> = shown_hq(sim, &self.selected.0, building)
-                    .map_or(Vec::new(), |hq| sim.attached(hq).collect());
-                // As the game does, even where that leaves nothing selected.
-                self.selected.0 = attached;
-                self.chosen.0 = None;
+                // One thing alone: an HQ, or a regiment attached to one.
+                let one = match &self.selected.0[..] {
+                    &[r] => sim.organizations[r].hq,
+                    _ => None,
+                };
+                if let Some(hq) = shown_hq(sim, &self.selected.0, building).or(one) {
+                    // As the game does, even where that leaves nothing
+                    // selected.
+                    self.selected.0 = sim.attached(hq).collect();
+                    self.chosen.0 = None;
+                }
             }
             Entry::Sell => {
                 if let Some(b) = self.chosen.0 {
@@ -475,6 +481,20 @@ pub(super) fn recruit_refused(
         }
     };
     looks.recruit.refused(refused, &recruit.look.name, cost, hq)
+}
+
+/// The HQ the selection begins with, by its id, which shows Command All:
+/// the selected building, or the first selected organization, packed.
+pub(crate) fn first_hq(
+    sim: &tgsim::World,
+    selected: &[usize],
+    building: Option<usize>,
+) -> Option<u32> {
+    match (selected, building) {
+        ([], Some(b)) => sim.hq_of(b),
+        ([r, ..], _) => sim.packed_hq(*r),
+        _ => None,
+    }
 }
 
 /// The HQ the selection is, by its id: the selected building, or the one
