@@ -12,4 +12,5 @@ publish = false
 log = "0.4"
 tgck = { path = "../tgck" }
 serde = { version = "1", features = ["derive"] }
+smart-default = "0.7"
 tgi = { path = "../tgi", features = ["serde"] }
