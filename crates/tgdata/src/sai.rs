@@ -5,6 +5,7 @@
 //! entries, which inherit nothing.
 
 use serde::Deserialize;
+use smart_default::SmartDefault;
 
 pub use crate::defs::Named;
 use crate::{GameData, Id, scoped};
@@ -29,52 +30,31 @@ pub struct Profile {
 }
 
 /// A profile as its block holds it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub(crate) struct SaiBlock {
     ids: Option<Id>,
+    #[default(200.0)]
     ego_fuzziness: f32,
+    #[default(100)]
     max_ge_commands: usize,
+    #[default(40)]
     max_rai_commands: usize,
     initial_ego: Option<Id>,
     ego: Vec<Named>,
 }
 
-impl Default for SaiBlock {
-    fn default() -> Self {
-        SaiBlock {
-            ids: None,
-            ego_fuzziness: 200.0,
-            max_ge_commands: 100,
-            max_rai_commands: 40,
-            initial_ego: None,
-            ego: Vec::new(),
-        }
-    }
-}
-
 /// A mood: everything a computer player goes by while it's in it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Ego {
     pub ids: Option<Id>,
     /// Which mood wins when several fit.
+    #[default(500.0)]
     pub priority: f32,
     pub filters: Filters,
     pub goal_engine: GoalEngine,
     pub reactive_ai: Reacting,
-}
-
-impl Default for Ego {
-    fn default() -> Self {
-        Ego {
-            ids: None,
-            priority: 500.0,
-            filters: Filters::default(),
-            goal_engine: GoalEngine::default(),
-            reactive_ai: Reacting::default(),
-        }
-    }
 }
 
 /// The scoring statistics a mood needs to lie within.
@@ -94,7 +74,7 @@ pub struct Filter {
 }
 
 /// What the planning goes by.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct GoalEngine {
     pub general_settings: GeneralSettings,
@@ -102,11 +82,21 @@ pub struct GoalEngine {
     pub resource_management: ResourceManagement,
     pub actor_value: ActorValue,
     pub offensive_cv: Strength,
+    #[default(Strength {
+        cv_advantage_target: 2.0,
+        cv_advantage_max: 10.0,
+        cv_exponent_under_target: 1.5,
+        cv_max_mult_over_target: 4.0,
+        min_cv_to_assign: 75.0,
+        ..Strength::default()
+    })]
     pub defensive_cv: Strength,
     pub travel_time: TravelTime,
     pub actor_priority: Vec<ActorPriority>,
+    #[default(1)]
     pub default_max_recruited_per_think: u32,
     /// The most of its own items it has queued at one building.
+    #[default(1)]
     pub build_queue_max_items: u32,
     pub combat: Combat,
     pub exploration: Exploration,
@@ -118,40 +108,6 @@ pub struct GoalEngine {
     pub attach: Attach,
     pub research: Research,
     pub general_powers: GeneralPowers,
-}
-
-impl Default for GoalEngine {
-    fn default() -> Self {
-        GoalEngine {
-            general_settings: Default::default(),
-            goal_priority: Vec::new(),
-            resource_management: Default::default(),
-            actor_value: Default::default(),
-            offensive_cv: Strength::default(),
-            defensive_cv: Strength {
-                cv_advantage_target: 2.0,
-                cv_advantage_max: 10.0,
-                cv_exponent_under_target: 1.5,
-                cv_max_mult_over_target: 4.0,
-                min_cv_to_assign: 75.0,
-                ..Strength::default()
-            },
-            travel_time: Default::default(),
-            actor_priority: Vec::new(),
-            default_max_recruited_per_think: 1,
-            build_queue_max_items: 1,
-            combat: Default::default(),
-            exploration: Default::default(),
-            construction: Default::default(),
-            unpacking: Default::default(),
-            packing: Default::default(),
-            recover: Default::default(),
-            recruiting: Default::default(),
-            attach: Default::default(),
-            research: Default::default(),
-            general_powers: Default::default(),
-        }
-    }
 }
 
 impl GoalEngine {
@@ -166,111 +122,73 @@ impl GoalEngine {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct GeneralSettings {
     /// Seconds of play between plans.
+    #[default(30.0)]
     pub think_frequency: f32,
+    #[default(200.0)]
     pub fuzziness: f32,
+    #[default(250.0)]
     pub goal_inertia: f32,
+    #[default(2)]
     pub immediate_think_on_build_max_settlements: u32,
+    #[default(600.0)]
     pub immediate_think_on_build_max_time: f32,
 }
 
-impl Default for GeneralSettings {
-    fn default() -> Self {
-        GeneralSettings {
-            think_frequency: 30.0,
-            fuzziness: 200.0,
-            goal_inertia: 250.0,
-            immediate_think_on_build_max_settlements: 2,
-            immediate_think_on_build_max_time: 600.0,
-        }
-    }
-}
-
 /// How a mood changes one kind of goal's priority.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct GoalPriority {
     pub goal_ids: Option<Id>,
+    #[default(1.0)]
     pub multiplier: f32,
     pub bonus: f32,
     pub minimum: f32,
     /// Below 0 for the mood's own.
+    #[default(-1.0)]
     pub fuzziness: f32,
+    #[default(-1.0)]
     pub inertia: f32,
     pub actor_preference: Vec<ActorPreference>,
 }
 
-impl Default for GoalPriority {
-    fn default() -> Self {
-        GoalPriority {
-            goal_ids: None,
-            multiplier: 1.0,
-            bonus: 0.0,
-            minimum: 0.0,
-            fuzziness: -1.0,
-            inertia: -1.0,
-            actor_preference: Vec::new(),
-        }
-    }
-}
-
 /// How much a goal likes having some kind of thing on it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ActorPreference {
     pub property_ids: Option<Id>,
     pub actor_ids: Option<Id>,
     pub value: f32,
+    #[default(true)]
     pub count_value_once_per_company: bool,
+    #[default(1.0)]
     pub multiplier: f32,
 }
 
-impl Default for ActorPreference {
-    fn default() -> Self {
-        ActorPreference {
-            property_ids: None,
-            actor_ids: None,
-            value: 0.0,
-            count_value_once_per_company: true,
-            multiplier: 1.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ResourceManagement {
     /// Seconds of income a goal may count on.
+    #[default(180.0)]
     pub saving_time_limit: f32,
+    #[default(50.0)]
     pub stockpilable_short_need: f32,
+    #[default(25.0)]
     pub stockpilable_enough_need: f32,
     pub stockpilable_plenty_value: f32,
+    #[default(25.0)]
     pub stockpilable_plenty_need: f32,
     pub other_short_need: f32,
+    #[default(10.0)]
     pub other_enough_need: f32,
+    #[default(10.0)]
     pub other_plenty_value: f32,
+    #[default(1.0)]
     pub other_plenty_need: f32,
     pub resource_need: Vec<ResourceNeed>,
-}
-
-impl Default for ResourceManagement {
-    fn default() -> Self {
-        ResourceManagement {
-            saving_time_limit: 180.0,
-            stockpilable_short_need: 50.0,
-            stockpilable_enough_need: 25.0,
-            stockpilable_plenty_value: 0.0,
-            stockpilable_plenty_need: 25.0,
-            other_short_need: 0.0,
-            other_enough_need: 10.0,
-            other_plenty_value: 10.0,
-            other_plenty_need: 1.0,
-            resource_need: Vec::new(),
-        }
-    }
 }
 
 impl ResourceManagement {
@@ -334,72 +252,52 @@ impl ResourceNeed {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ActorValue {
+    #[default(0.3)]
     pub scaling_mult: f32,
+    #[default(5.0)]
     pub military_cv_mult: f32,
 }
 
-impl Default for ActorValue {
-    fn default() -> Self {
-        ActorValue {
-            scaling_mult: 0.3,
-            military_cv_mult: 5.0,
-        }
-    }
-}
-
 /// How much strength an attack or defence wants.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Strength {
+    #[default(1.0)]
     pub cv_advantage_target: f32,
+    #[default(5.0)]
     pub cv_advantage_max: f32,
+    #[default(4.0)]
     pub cv_exponent_under_target: f32,
+    #[default(15.0)]
     pub cv_max_mult_over_target: f32,
+    #[default(50.0)]
     pub min_cv_to_assign: f32,
+    #[default(500.0)]
     pub no_primary_supply_bonus: f32,
+    #[default(true)]
     pub count_static_cv: bool,
 }
 
-impl Default for Strength {
-    fn default() -> Self {
-        Strength {
-            cv_advantage_target: 1.0,
-            cv_advantage_max: 5.0,
-            cv_exponent_under_target: 4.0,
-            cv_max_mult_over_target: 15.0,
-            min_cv_to_assign: 50.0,
-            no_primary_supply_bonus: 500.0,
-            count_static_cv: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct TravelTime {
+    #[default(300.0)]
     pub max_travel_time: f32,
+    #[default(2.0)]
     pub travel_time_exponent: f32,
-}
-
-impl Default for TravelTime {
-    fn default() -> Self {
-        TravelTime {
-            max_travel_time: 300.0,
-            travel_time_exponent: 2.0,
-        }
-    }
 }
 
 /// How much it likes recruiting, building or attacking some kind of
 /// thing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ActorPriority {
     pub property_ids: Option<Id>,
     pub actor_ids: Option<Id>,
+    #[default(true)]
     pub count_all_property_actors: bool,
     pub value: f32,
     pub repeat_penalty: f32,
@@ -408,141 +306,93 @@ pub struct ActorPriority {
     pub one_time_bonus: f32,
 }
 
-impl Default for ActorPriority {
-    fn default() -> Self {
-        ActorPriority {
-            property_ids: None,
-            actor_ids: None,
-            count_all_property_actors: true,
-            value: 0.0,
-            repeat_penalty: 0.0,
-            max_recruited_per_think: 0,
-            one_time_bonus: 0.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Combat {
+    #[default(1.0)]
     pub penalty_to_builder_cv: f32,
     /// How many regions apart fights can be and still share their units'
     /// strength.
+    #[default(2)]
     pub linked_region_distance: u32,
     /// How many regions from its attack a unit is held to it.
+    #[default(3)]
     pub attack_commit_distance: u32,
     pub defend_priority: DefendPriority,
     pub air_attacks: AirAttacks,
     pub bombardement: Bombardement,
 }
 
-impl Default for Combat {
-    fn default() -> Self {
-        Combat {
-            penalty_to_builder_cv: 1.0,
-            linked_region_distance: 2,
-            attack_commit_distance: 3,
-            defend_priority: Default::default(),
-            air_attacks: Default::default(),
-            bombardement: Default::default(),
-        }
-    }
-}
-
 /// What bombarding a thing is worth.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Bombardement {
     /// What a target is multiplied by when it isn't fighting and isn't in
     /// a region being attacked.
+    #[default(0.1)]
     pub unengaged_target_multiplier: f32,
     /// What a bombarder's combat value is divided by in its worth.
+    #[default(0.001)]
     pub balancing_constant: f32,
 }
 
-impl Default for Bombardement {
-    fn default() -> Self {
-        Bombardement {
-            unengaged_target_multiplier: 0.1,
-            balancing_constant: 0.001,
-        }
-    }
-}
-
 /// What an air attack on a thing is worth, by how the thing stands.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AirAttacks {
+    #[default(2.0)]
     pub engaged_bonus: f32,
     /// The share of its health from which a thing counts as damaged, and
     /// up to which, not including it.
+    #[default(0.5)]
     pub target_damage_floor: f32,
+    #[default(0.8)]
     pub target_damage_ceiling: f32,
+    #[default(2.0)]
     pub target_damage_bonus: f32,
+    #[default(2.0)]
     pub support_ground_attack_bonus: f32,
     /// What it's multiplied by when no other factor applies.
     pub no_bonus_penalty: f32,
     /// The share of its health below which a thing is nearly dead.
+    #[default(0.3)]
     pub absolute_min_health: f32,
     pub absolute_min_health_engaged_mult: f32,
+    #[default(5.0)]
     pub absolute_min_health_unengaged_mult: f32,
     pub resupplying_mult: f32,
     /// Seconds before a thing attacked from the air can be again.
+    #[default(120.0)]
     pub min_time_between_attacks: f32,
+    #[default(2.0)]
     pub extra_planes_multiplier_max: f32,
+    #[default(0.5)]
     pub extra_planes_multiplier_per_plane: f32,
 }
 
-impl Default for AirAttacks {
-    fn default() -> Self {
-        AirAttacks {
-            engaged_bonus: 2.0,
-            target_damage_floor: 0.5,
-            target_damage_ceiling: 0.8,
-            target_damage_bonus: 2.0,
-            support_ground_attack_bonus: 2.0,
-            no_bonus_penalty: 0.0,
-            absolute_min_health: 0.3,
-            absolute_min_health_engaged_mult: 0.0,
-            absolute_min_health_unengaged_mult: 5.0,
-            resupplying_mult: 0.0,
-            min_time_between_attacks: 120.0,
-            extra_planes_multiplier_max: 2.0,
-            extra_planes_multiplier_per_plane: 0.5,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct DefendPriority {
+    #[default(0.5)]
     pub economic_value_exponent: f32,
+    #[default(2.0)]
     pub economic_value_multiplier: f32,
+    #[default(1.0)]
     pub enemy_influence_exponent: f32,
+    #[default(0.5)]
     pub enemy_influence_multiplier: f32,
+    #[default(1.0)]
     pub enemy_border_influence_exponent: f32,
+    #[default(0.2)]
     pub enemy_border_influence_multiplier: f32,
+    #[default(80.0)]
     pub enemy_forces_threat_distance: f32,
+    #[default(3.0)]
     pub enemy_forces_bonus: f32,
+    #[default(1.0)]
     pub capture_risk_ratio: f32,
+    #[default(2.0)]
     pub capture_risk_bonus: f32,
-}
-
-impl Default for DefendPriority {
-    fn default() -> Self {
-        DefendPriority {
-            economic_value_exponent: 0.5,
-            economic_value_multiplier: 2.0,
-            enemy_influence_exponent: 1.0,
-            enemy_influence_multiplier: 0.5,
-            enemy_border_influence_exponent: 1.0,
-            enemy_border_influence_multiplier: 0.2,
-            enemy_forces_threat_distance: 80.0,
-            enemy_forces_bonus: 3.0,
-            capture_risk_ratio: 1.0,
-            capture_risk_bonus: 2.0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -554,223 +404,154 @@ pub struct Exploration {
 }
 
 /// How many explore goals of one kind, and how much each is worth.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Explore {
     pub num_goals: u32,
+    #[default(200.0)]
     pub base_priority: f32,
     pub repeat_penalty: f32,
     pub min_priority: f32,
 }
 
-impl Default for Explore {
-    fn default() -> Self {
-        Explore {
-            num_goals: 0,
-            base_priority: 200.0,
-            repeat_penalty: 0.0,
-            min_priority: 0.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Construction {
+    #[default(2000.0)]
     pub construct_in_progress_bonus: f32,
+    #[default(200.0)]
     pub construct_city_defense_max_bonus: f32,
+    #[default(1.0)]
     pub construct_city_defense_exponent: f32,
+    #[default(400.0)]
     pub construct_supply_defense_bonus: f32,
     pub construct_in_supply_only: bool,
+    #[default(true)]
     pub construct_in_all_regions: bool,
+    #[default(true)]
     pub construct_to_defend_research: bool,
+    #[default(true)]
     pub construct_to_defend_recruiters: bool,
+    #[default(true)]
     pub construct_to_defend_cities: bool,
 }
 
-impl Default for Construction {
-    fn default() -> Self {
-        Construction {
-            construct_in_progress_bonus: 2000.0,
-            construct_city_defense_max_bonus: 200.0,
-            construct_city_defense_exponent: 1.0,
-            construct_supply_defense_bonus: 400.0,
-            construct_in_supply_only: false,
-            construct_in_all_regions: true,
-            construct_to_defend_research: true,
-            construct_to_defend_recruiters: true,
-            construct_to_defend_cities: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Unpacking {
+    #[default(1)]
     pub adjacent_region_depth: u32,
+    #[default(20)]
     pub num_random_regions: u32,
+    #[default(500.0)]
     pub base_priority: f32,
+    #[default(3.0)]
     pub enemy_static_influence_mult: f32,
+    #[default(3.0)]
     pub enemy_dynamic_influence_mult: f32,
+    #[default(500.0)]
     pub max_friendly_building_bonus: f32,
+    #[default(200.0)]
     pub max_friendly_building_bonus_per_building: f32,
+    #[default(30.0)]
     pub max_distance: f32,
+    #[default(1.0)]
     pub distance_exponent: f32,
+    #[default(5.0)]
     pub travel_distance_mult: f32,
+    #[default(1.0)]
     pub travel_distance_exponent: f32,
+    #[default(150.0)]
     pub fuzzy_factor: f32,
+    #[default(300.0)]
     pub inertia: f32,
 }
 
-impl Default for Unpacking {
-    fn default() -> Self {
-        Unpacking {
-            adjacent_region_depth: 1,
-            num_random_regions: 20,
-            base_priority: 500.0,
-            enemy_static_influence_mult: 3.0,
-            enemy_dynamic_influence_mult: 3.0,
-            max_friendly_building_bonus: 500.0,
-            max_friendly_building_bonus_per_building: 200.0,
-            max_distance: 30.0,
-            distance_exponent: 1.0,
-            travel_distance_mult: 5.0,
-            travel_distance_exponent: 1.0,
-            fuzzy_factor: 150.0,
-            inertia: 300.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Packing {
+    #[default(1000.0)]
     pub pack_out_of_supply_priority: f32,
 }
 
-impl Default for Packing {
-    fn default() -> Self {
-        Packing {
-            pack_out_of_supply_priority: 1000.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Recover {
+    #[default(500.0)]
     pub base_priority_hp: f32,
+    #[default(3.0)]
     pub exponent_hp: f32,
+    #[default(0.4)]
     pub max_hp: f32,
+    #[default(500.0)]
     pub base_priority_morale: f32,
+    #[default(3.0)]
     pub exponent_morale: f32,
+    #[default(0.5)]
     pub max_morale: f32,
+    #[default(0.3)]
     pub critical_morale: f32,
 }
 
-impl Default for Recover {
-    fn default() -> Self {
-        Recover {
-            base_priority_hp: 500.0,
-            exponent_hp: 3.0,
-            max_hp: 0.4,
-            base_priority_morale: 500.0,
-            exponent_morale: 3.0,
-            max_morale: 0.5,
-            critical_morale: 0.3,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Recruiting {
+    #[default(1)]
     pub max_goals_per_think: u32,
+    #[default(1)]
     pub num_military_goals: u32,
+    #[default(3.0)]
     pub core_cv_multiplier: f32,
     pub core_cv_ratio_multiplier: f32,
+    #[default(3.0)]
     pub support_cv_multiplier: f32,
     pub support_cv_ratio_multiplier: f32,
+    #[default(0.2)]
     pub economic_value_multiplier: f32,
+    #[default(20.0)]
     pub decreased_income_penalty: f32,
+    #[default(40.0)]
     pub insufficient_income_level: f32,
+    #[default(350.0)]
     pub insufficient_income_penalty: f32,
+    #[default(500.0)]
     pub matching_builder_bonus: f32,
+    #[default(500.0)]
     pub mismatching_builder_penalty: f32,
+    #[default(50.0)]
     pub candidate_fuzziness: f32,
+    #[default(100.0)]
     pub base_value: f32,
+    #[default(50.0)]
     pub building_bonus: f32,
+    #[default(100.0)]
     pub location_fuzziness: f32,
     pub specific_recruit_request: Vec<RecruitRequest>,
 }
 
-impl Default for Recruiting {
-    fn default() -> Self {
-        Recruiting {
-            max_goals_per_think: 1,
-            num_military_goals: 1,
-            core_cv_multiplier: 3.0,
-            core_cv_ratio_multiplier: 0.0,
-            support_cv_multiplier: 3.0,
-            support_cv_ratio_multiplier: 0.0,
-            economic_value_multiplier: 0.2,
-            decreased_income_penalty: 20.0,
-            insufficient_income_level: 40.0,
-            insufficient_income_penalty: 350.0,
-            matching_builder_bonus: 500.0,
-            mismatching_builder_penalty: 500.0,
-            candidate_fuzziness: 50.0,
-            base_value: 100.0,
-            building_bonus: 50.0,
-            location_fuzziness: 100.0,
-            specific_recruit_request: Vec::new(),
-        }
-    }
-}
-
 /// A mood's standing request for a kind of thing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct RecruitRequest {
     pub recruit_ids: Option<Id>,
     pub property_ids: Option<Id>,
+    #[default(1)]
     pub number_to_request: u32,
     pub base_priority: f32,
+    #[default(1.0)]
     pub economic_value_multiplier: f32,
     pub repeat_penalty: f32,
     pub one_time_bonus: f32,
+    #[default(1100.0)]
     pub hq_type_not_available_bonus: f32,
 }
 
-impl Default for RecruitRequest {
-    fn default() -> Self {
-        RecruitRequest {
-            recruit_ids: None,
-            property_ids: None,
-            number_to_request: 1,
-            base_priority: 0.0,
-            economic_value_multiplier: 1.0,
-            repeat_penalty: 0.0,
-            one_time_bonus: 0.0,
-            hq_type_not_available_bonus: 1100.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Attach {
     pub attach_when_engaged: bool,
+    #[default(5.0)]
     pub cv_multiplier: f32,
-}
-
-impl Default for Attach {
-    fn default() -> Self {
-        Attach {
-            attach_when_engaged: false,
-            cv_multiplier: 5.0,
-        }
-    }
 }
 
 /// The general's special operations a mood uses, and how it picks where.
@@ -803,10 +584,11 @@ pub struct PowerLocation {
 }
 
 /// What a thing has to be to count.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ActorRequirements {
     /// The most of its full health it has, as a share.
+    #[default(1.0)]
     pub max_percent_health: f32,
     pub must_be_engaged: bool,
     pub must_not_be_engaged: bool,
@@ -817,48 +599,28 @@ pub struct ActorRequirements {
     /// Properties it has to have one of, if any.
     pub required_property: Vec<Named>,
     /// What a thing matching it, as a category, counts for.
+    #[default(1.0)]
     pub multiplier: f32,
 }
 
-impl Default for ActorRequirements {
-    fn default() -> Self {
-        ActorRequirements {
-            max_percent_health: 1.0,
-            must_be_engaged: false,
-            must_not_be_engaged: false,
-            must_be_friendly: false,
-            must_be_enemy: false,
-            must_be_owned: false,
-            required_property: Vec::new(),
-            multiplier: 1.0,
-        }
-    }
-}
-
 /// How spots near a thing are drawn.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Placement {
+    #[default(-1.0)]
     pub radius: f32,
+    #[default(3)]
     pub num_candidates: u32,
 }
 
-impl Default for Placement {
-    fn default() -> Self {
-        Placement {
-            radius: -1.0,
-            num_candidates: 3,
-        }
-    }
-}
-
 /// How a spot for an operation is scored.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct PowerPriority {
     /// What weighs its place in the order, and starts every spot's score.
     pub base: f32,
     pub minimum: f32,
+    #[default(100.0)]
     pub fuzzy_factor: f32,
     pub cv: Tally,
     pub actor_value: Tally,
@@ -868,31 +630,16 @@ pub struct PowerPriority {
     pub economy_generated: EconomyGenerated,
 }
 
-impl Default for PowerPriority {
-    fn default() -> Self {
-        PowerPriority {
-            base: 0.0,
-            minimum: 0.0,
-            fuzzy_factor: 100.0,
-            cv: Default::default(),
-            actor_value: Default::default(),
-            enemy_influence: Default::default(),
-            influence_ratio: Default::default(),
-            time_since_explored: Default::default(),
-            economy_generated: Default::default(),
-        }
-    }
-}
-
 /// A factor that adds up things in reach, each by the category it
 /// matches.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Tally {
     pub minimum: f32,
     /// For things matching no category.
     pub multiplier: f32,
     /// A cap when 0 or more.
+    #[default(-1.0)]
     pub maximum: f32,
     pub consider_friendly: bool,
     pub consider_enemy: bool,
@@ -900,82 +647,40 @@ pub struct Tally {
     pub category: Vec<ActorRequirements>,
 }
 
-impl Default for Tally {
-    fn default() -> Self {
-        Tally {
-            minimum: 0.0,
-            multiplier: 0.0,
-            maximum: -1.0,
-            consider_friendly: false,
-            consider_enemy: false,
-            consider_owned: false,
-            category: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct EnemyInfluence {
     pub minimum: f32,
     pub multiplier: f32,
+    #[default(-1.0)]
     pub maximum: f32,
+    #[default(1.0)]
     pub exponent: f32,
 }
 
-impl Default for EnemyInfluence {
-    fn default() -> Self {
-        EnemyInfluence {
-            minimum: 0.0,
-            multiplier: 0.0,
-            maximum: -1.0,
-            exponent: 1.0,
-        }
-    }
-}
-
 /// Friendly over enemy influence.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct InfluenceRatio {
     pub minimum: f32,
     pub multiplier: f32,
+    #[default(-1.0)]
     pub maximum: f32,
     /// Counting its own side's alone, not its allies'.
     pub count_owned_only: bool,
+    #[default(1.0)]
     pub exponent_over_one: f32,
+    #[default(1.0)]
     pub exponent_under_one: f32,
 }
 
-impl Default for InfluenceRatio {
-    fn default() -> Self {
-        InfluenceRatio {
-            minimum: 0.0,
-            multiplier: 0.0,
-            maximum: -1.0,
-            count_owned_only: false,
-            exponent_over_one: 1.0,
-            exponent_under_one: 1.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Factor {
     pub minimum: f32,
     pub multiplier: f32,
+    #[default(-1.0)]
     pub maximum: f32,
-}
-
-impl Default for Factor {
-    fn default() -> Self {
-        Factor {
-            minimum: 0.0,
-            multiplier: 0.0,
-            maximum: -1.0,
-        }
-    }
 }
 
 /// What an operation that gives resources makes.
@@ -994,20 +699,12 @@ pub struct Generated {
     pub amount: f32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Research {
+    #[default(100.0)]
     pub base_priority: f32,
     pub tech_priority: Vec<TechPriority>,
-}
-
-impl Default for Research {
-    fn default() -> Self {
-        Research {
-            base_priority: 100.0,
-            tech_priority: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1027,31 +724,24 @@ impl Research {
 }
 
 /// What the reacting goes by.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(SmartDefault, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Reacting {
     /// Seconds of play between reactions.
+    #[default(2.0)]
     pub think_frequency: f32,
+    #[default(0.3)]
     pub unit_retreat_max_health: f32,
+    #[default(0.9)]
     pub unit_retreat_cv_ratio: f32,
+    #[default(1.0)]
     pub unit_retreat_probability: f32,
+    #[default(2)]
     pub attack_distance: u32,
+    #[default(1.0)]
     pub min_attack_advantage: f32,
+    #[default(1.5)]
     pub max_attack_advantage: f32,
-}
-
-impl Default for Reacting {
-    fn default() -> Self {
-        Reacting {
-            think_frequency: 2.0,
-            unit_retreat_max_health: 0.3,
-            unit_retreat_cv_ratio: 0.9,
-            unit_retreat_probability: 1.0,
-            attack_distance: 2,
-            min_attack_advantage: 1.0,
-            max_attack_advantage: 1.5,
-        }
-    }
 }
 
 impl GameData {
