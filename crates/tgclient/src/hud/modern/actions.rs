@@ -1,5 +1,6 @@
 //! Our command grid in the window's lower right corner: the shared
-//! [`Shown`] slots as buttons, with the tooltip [`Said`] in a box above.
+//! [`Shown`] slots as buttons, with the tooltip [`Said`] in a box above,
+//! and the formation buttons in a tab on its left side.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::system::SystemParam;
@@ -23,6 +24,13 @@ pub const PAD: f32 = 8.0;
 /// The grid's size, in logical pixels.
 pub const SIZE: Vec2 = Vec2::new(span(COLUMNS), span(ROWS));
 
+/// A formation button's side, and the margin round them in their tab.
+const FORMATION: f32 = 40.0;
+const TAB_PAD: f32 = 4.0;
+
+/// How wide the panel is, the formation tab included.
+pub const WIDTH: f32 = FORMATION + 2.0 * TAB_PAD + SIZE.x;
+
 /// Across `n` buttons and the padding either side.
 const fn span(n: usize) -> f32 {
     n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD
@@ -38,6 +46,10 @@ pub struct Panel;
 /// The grid, whose cursor position says whether clicks are for it.
 #[derive(Component)]
 pub struct Grid;
+
+/// The tab of formation buttons, shown while any are offered.
+#[derive(Component)]
+pub struct FormationTab;
 
 /// The box above the grid saying what the button under the cursor is.
 #[derive(Component)]
@@ -74,55 +86,127 @@ pub fn spawn(mut commands: Commands) {
                     ..default()
                 }),
             ));
-            root.spawn((
-                Grid,
-                Blocks,
-                RelativeCursorPosition::default(),
-                ui::shelf(
-                    Surface::Hud,
+            // Where the formation buttons' hints are said, as wide as the
+            // grid's tooltip.
+            let hints = root
+                .spawn(ui::hint_box(
                     Node {
-                        display: Display::Grid,
                         width: px(SIZE.x),
-                        height: px(SIZE.y),
-                        grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
-                        grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
-                        column_gap: px(GAP),
-                        row_gap: px(GAP),
-                        padding: UiRect::all(px(PAD)),
                         ..default()
                     },
-                ),
-            ))
-            .with_children(|grid| {
-                for s in 0..SLOTS {
-                    grid.spawn((
-                        Slot(s),
-                        Button,
-                        ui::called(format!("action.{}", s + 1)),
-                        Asks::new(widget(s)),
-                        Hovered::default(),
-                        Pickable::default(),
-                        Click::COMMAND,
+                    Val::Percent(100.0),
+                ))
+                .id();
+            root.spawn(Node {
+                align_items: AlignItems::End,
+                ..default()
+            })
+            .with_children(|row| {
+                formations(row, hints);
+                row.spawn((
+                    Grid,
+                    Blocks,
+                    RelativeCursorPosition::default(),
+                    ui::shelf(
+                        Surface::Hud,
                         Node {
-                            border: UiRect::all(px(2)),
+                            display: Display::Grid,
+                            width: px(SIZE.x),
+                            height: px(SIZE.y),
+                            grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
+                            grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
+                            column_gap: px(GAP),
+                            row_gap: px(GAP),
+                            padding: UiRect::all(px(PAD)),
                             ..default()
                         },
-                        Surface::Slot,
-                        Edge::Clear,
-                        children![(
-                            SlotIcon,
-                            Shade::Full,
+                    ),
+                ))
+                .with_children(|grid| {
+                    for s in 0..SLOTS {
+                        grid.spawn((
+                            Slot(s),
+                            Button,
+                            ui::called(format!("action.{}", s + 1)),
+                            Asks::new(widget(s)),
+                            Hovered::default(),
+                            Pickable::default(),
+                            Click::COMMAND,
                             Node {
-                                width: percent(100),
-                                height: percent(100),
+                                border: UiRect::all(px(2)),
                                 ..default()
                             },
-                            Pickable::IGNORE,
-                        )],
-                    ));
-                }
+                            Surface::Slot,
+                            Edge::Clear,
+                            children![(
+                                SlotIcon,
+                                Shade::Full,
+                                Node {
+                                    width: percent(100),
+                                    height: percent(100),
+                                    ..default()
+                                },
+                                Pickable::IGNORE,
+                            )],
+                        ));
+                    }
+                });
             });
         });
+}
+
+/// The formation buttons, top to bottom in a tab against the grid's
+/// left side, which it shares the background of, their hints said in
+/// `hints`.
+fn formations(row: &mut ChildSpawnerCommands, hints: Entity) {
+    let rows = crate::formations::MOST as u16;
+    row.spawn((
+        FormationTab,
+        ui::Docks(hints),
+        Blocks,
+        Visibility::Hidden,
+        ui::backed(
+            Surface::Hud,
+            Node {
+                display: Display::Grid,
+                grid_template_rows: RepeatedGridTrack::px(rows, FORMATION),
+                grid_template_columns: RepeatedGridTrack::px(1, FORMATION),
+                row_gap: px(GAP),
+                padding: UiRect::all(px(TAB_PAD)),
+                border_radius: BorderRadius::top_left(px(ui::CORNER)),
+                ..default()
+            },
+        ),
+    ))
+    .with_children(|tab| {
+        for n in 0..crate::formations::MOST {
+            tab.spawn((
+                crate::formations::button_bundle(n),
+                Node {
+                    border: UiRect::all(px(2)),
+                    ..default()
+                },
+                Surface::Slot,
+                Edge::Clear,
+                children![(
+                    crate::formations::FormationIcon,
+                    Node {
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                )],
+            ));
+        }
+    });
+}
+
+/// Shows the formation tab while it has buttons.
+pub fn show_formation_tab(
+    formations: Res<crate::formations::Formations>,
+    mut tab: Single<&mut Visibility, With<FormationTab>>,
+) {
+    tab.set_if_neq(ui::visible(!formations.offered.is_empty()));
 }
 
 type SlotParts<'a> = (

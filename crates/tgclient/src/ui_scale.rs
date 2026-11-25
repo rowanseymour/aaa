@@ -99,7 +99,7 @@ pub(crate) fn fit_ui(
 /// `setting`, shrunk as [`fit_ui`] says for a window `size` across, and
 /// for the `top` row as wide as that, if there is one.
 pub(crate) fn fitted(setting: f32, size: Vec2, top: Option<f32>) -> f32 {
-    let side = MARGIN + modern::minimap::DISC.max(modern::actions::SIZE.x) + MARGIN;
+    let side = MARGIN + modern::minimap::DISC.max(modern::actions::WIDTH) + MARGIN;
     let wide = size.x / (2.0 * side + modern::object_display::SIZE.x);
     let wide = top.map_or(wide, |top| wide.min(size.x / top));
     let tallest = modern::minimap::DISC
