@@ -1,4 +1,4 @@
-//! The formation buttons beside the object display: one for each
+//! The formation buttons: one for each
 //! formation the player's selected organizations can be switched to,
 //! top to bottom, the one they're in lit. Each interface draws the
 //! buttons as [`FormationButton`]s; what they offer, which is lit and what

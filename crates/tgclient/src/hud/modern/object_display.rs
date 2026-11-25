@@ -23,7 +23,9 @@ use crate::{Loaded, Local, Sim};
 /// Our pixels to one of the game's interface units, in which its layout is
 /// given, chosen so the display stands as tall as the action buttons beside it.
 const SCALE: f32 = super::actions::SIZE.y / HEIGHT;
-const WIDTH: f32 = 495.0;
+/// Narrower than the game's: as wide as the most cards a group shows, with
+/// the margin they have on the left, which every other layout fits within.
+const WIDTH: f32 = 438.0;
 
 /// The display's size, in logical pixels.
 pub const SIZE: Vec2 = Vec2::new(WIDTH * SCALE, HEIGHT * SCALE);
@@ -98,9 +100,9 @@ const DEFENSE: [f32; 4] = [196.0, 46.0, 16.0, 16.0];
 const WEAPON: [f32; 4] = [144.0, 46.0, 16.0, 16.0];
 const WEAPON_ROW: f32 = 21.0;
 
-/// The game's layout's box for what a lone thing's template says of it,
-/// and how far in its words start.
-const DESCRIPTION: [f32; 4] = [244.0, 46.0, 239.0, 104.0];
+/// The box for what a lone thing's template says of it, the game's layout's
+/// cut to end with the status line, and how far in its words start.
+const DESCRIPTION: [f32; 4] = [244.0, 46.0, 186.0, 104.0];
 const DESCRIPTION_IN: f32 = 5.0;
 
 /// How much of the display's height the player's nation's emblem fills,
@@ -253,12 +255,6 @@ pub fn lay_out(
     }
 }
 
-/// The game's layout's place for the formation buttons, the size of each
-/// and how far apart their tops are.
-const FORMATIONS_AT: Vec2 = Vec2::new(444.0, 36.0);
-const FORMATION_BUTTON: f32 = 46.0;
-const FORMATION_ROW: f32 = 47.0;
-
 /// What laying the display out reads, and where it's drawn.
 struct Ui<'a, 'w, 's> {
     commands: &'a mut Commands<'w, 's>,
@@ -375,31 +371,8 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
         }
     }
 
-    fn formation_buttons(&mut self) {
-        self.commands.entity(self.root).with_children(|display| {
-            for n in 0..crate::formations::MOST {
-                let top = FORMATIONS_AT.y + FORMATION_ROW * n as f32;
-                let node = at(FORMATIONS_AT.x, top, FORMATION_BUTTON, FORMATION_BUTTON);
-                display.spawn((
-                    crate::formations::button_bundle(n),
-                    Node {
-                        border: UiRect::all(px(2)),
-                        ..node
-                    },
-                    Surface::Slot,
-                    ui::Edge::Clear,
-                    children![(
-                        crate::formations::FormationIcon,
-                        Node {
-                            width: percent(100),
-                            height: percent(100),
-                            ..default()
-                        },
-                    )],
-                ));
-            }
-        });
-    }
+    /// Ours are beside the command grid instead.
+    fn formation_buttons(&mut self) {}
 
     /// The strip across the top: the name over the owner, and, where it
     /// has `properties`, the icons for those that show on its right.

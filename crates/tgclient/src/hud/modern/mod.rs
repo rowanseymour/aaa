@@ -83,6 +83,7 @@ impl Plugin for ModernHudPlugin {
                     chat::light_button,
                     displays::light_buttons,
                     actions::show,
+                    actions::show_formation_tab,
                     // For the buttons on the cards it borrows from the original's.
                     crate::hud::original::show_pressables,
                     resource_bar::show,
