@@ -2252,29 +2252,6 @@ mod tests {
     }
 
     #[test]
-    fn bombardment_that_only_takes_morale_leaves_supply_alone() {
-        let shelled = |hits: Vec<WeaponHit>| {
-            let shell = Weapon {
-                bombard: true,
-                hits,
-                ..rifle(12.0, 30.0)
-            };
-            let mut w = battle(&[1, 2], vec![soldier(vec![shell]); 2], at_war());
-            w.organizations[0].bombarding = true;
-            // It engages, then fires.
-            w.tick();
-            w.tick();
-            w.organizations[1].bombarded.len()
-        };
-        assert_eq!(shelled(vec![hit("", false, Does::Morale(2.0))]), 0);
-        let damage = Does::Add(Damage {
-            kind: Id::from("explosive"),
-            amount: 1.0,
-        });
-        assert_eq!(shelled(vec![hit("", false, damage)]), 1);
-    }
-
-    #[test]
     fn sabotage_takes_a_buildings_supply_for_a_minute_once_at_a_time() {
         let mut w = siege(&[building(20, 2, [10.0, 24.0])]);
         w.rules

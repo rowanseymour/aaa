@@ -409,13 +409,17 @@ impl World {
     }
 
     /// Whether a shot `s` fires with `weapon` is bombardment. For what
-    /// picks its own shots the order decides, whatever the weapon; a
-    /// building defending itself or an aircraft on its attack run doesn't,
-    /// so there the weapon does.
+    /// picks its own shots the order decides, whatever the weapon, and only
+    /// while it's shelling: fighting an enemy that came near, it fires as
+    /// in any engagement. A building defending itself or an aircraft on
+    /// its attack run doesn't pick, so there the weapon does.
     pub(crate) fn bombards(&self, s: Target, weapon: &Weapon) -> bool {
         match s {
             Target::Unit(u) if self.units[u].aloft => weapon.bombard,
-            Target::Unit(u) => self.organizations[self.units[u].organization].bombarding,
+            Target::Unit(u) => {
+                let organization = &self.organizations[self.units[u].organization];
+                organization.bombarding && organization.engaged.is_empty()
+            }
             Target::Building(b) => weapon.bombard && self.buildings[b].fighter.notice.is_some(),
         }
     }
@@ -1363,9 +1367,7 @@ mod tests {
         let (bombarded, engaged) = shelled(false);
         assert!(bombarded.is_empty());
         assert_eq!(engaged, [Piece::Building(1)]);
-        // A building that picks its own shots makes ordinary hits, and a
-        // organization ordered to bombard does so, with its bombarding
-        // weapons.
+        // A building that picks its own shots makes ordinary hits.
         let mut w = supplied_division();
         let mut gun = building(30, 2, [40.0, 14.0]);
         gun.fighter.weapons = vec![Weapon {
@@ -1375,17 +1377,6 @@ mod tests {
         w.add_buildings(&[gun]);
         w.tick();
         assert!(w.organizations[1].bombarded.is_empty());
-        let shell = Weapon {
-            bombard: true,
-            ..rifle(12.0, 30.0)
-        };
-        let mut w = battle(&[1, 2], vec![soldier(vec![shell]); 2], at_war());
-        w.organizations[0].bombarding = true;
-        // It engages, then fires.
-        w.tick();
-        w.tick();
-        assert_eq!(w.organizations[1].bombarded[0].by, Piece::Organization(0));
-        assert!(w.organizations[0].bombarded.is_empty());
     }
 
     #[test]
