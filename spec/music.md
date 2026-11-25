@@ -1,0 +1,160 @@
+# Music
+
+What music plays where (menus, matches, the editor), how a music entry
+works through its files, and how music fades, switches and sits with
+the rest of the game's sound. Music entries are the `AudioMusic` entries
+in `Audio/music.tgi` and `Audio/music_aa.tgi`; how any audio entry picks a
+file is in [sounds](sounds.md), Picking a sound's file.
+
+Games: traced in AA. Kohan II runs the same code, but its data hasn't been
+checked against these rules.
+
+## One music at a time
+
+- At most one music entry plays at a time, heard by the local player only
+  (`who_flags = LOCAL`), and it's never paused when the game is. [code, data]
+- Asking for the music that's already playing does nothing: it carries on
+  where it is, with no restart and no fade. [code]
+- Asking for different music replaces what's playing: the old music fades
+  out over its own fade-out time while the new one starts at once and
+  fades in over its own fade-in, so the two overlap (see Fades). [code]
+- Music and speech share three streams (`MilesStreamingChannels = 3`).
+  If all three are busy when new music starts (say two speeches and the
+  old music), the old music stops dead instead of fading, and the new one
+  takes its place, still fading in. [code, data]
+- Asked for again and again before any of it has started, only the latest
+  music plays. [code]
+- `stop_music` and screens that ask for silence play `music_silent`
+  (AVar `AudioMusicSilent`): an entry at 0% with no files. It replaces the
+  current music like any other, so that fades out, and then nothing
+  plays. [code, data]
+
+## How an entry plays
+
+All stock music has `control_flags = ALL, INTERRUPT` from the
+`AudioMusic` template, `simultaneous_limit = 1`, and no `fallout`.
+
+- Music loops for as long as it's left playing: first one file from
+  `leadin`, if the entry has one, then a file from `files`, then another,
+  and so on until something replaces or stops it. `fallout` never plays
+  for music, since the files never run out. [code, data]
+- The `leadin` plays once each time the music starts, not on each pass:
+  `main_title_music` opens with `MainTheme.mp3` and then goes on to its
+  files. [code, data]
+- Each file after the lead-in is a fresh random pick from `files`, every
+  entry in the list equally likely and each pick independent of the ones
+  before. There's no shuffle and no memory: a file listed twice comes up
+  twice as often as one listed once, and the same file can play twice or
+  more running. [code]
+  - `main_title_music`: after the lead-in, `MainTheme`, `MenuAmbient01`
+    and `MenuAmbient02` a third each, so the theme can play twice in a
+    row straight after its own lead-in. [code, data]
+  - The nation playlists (`usa_ambient` and the rest) list 20 files: their
+    nation's three tracks twice each and the side's four cinematic tracks
+    twice each (10% a pick each), and the six `GeneralAmbient` tracks once
+    each (5% each). [data]
+- The picks come from the same local, clock-seeded random stream as other
+  sounds' picks ([sounds](sounds.md)), so the order differs between runs and
+  between players. [code]
+- The next file starts as soon as the last one ends, with no gap and no
+  fade between them. [code]
+- A file the archive doesn't have is swapped, when the data loads, for
+  `Audio/Default/StreamDefault.wav`, half a second of silence. The slot
+  stays in the list and its picks play that: a half-second pause, then
+  the next pick. [code, game]
+  - `ger_ambient` and `jpn_ambient` name both `CinematicAxisMoscowFall.mp3`
+    and `CinematicAxisLondonFall.mp3`, neither of which is in the archive
+    (the game's log reports both missing), so 4 of their 20 slots, a fifth
+    of the picks, give the half-second pause. [data, game]
+- An entry whose `files` list is empty (`music_silent`) plays its lead-in,
+  if any, and ends. [code]
+
+## Fades
+
+`fade_time_s = in, out`, in seconds.
+
+- Fade-in: when the music starts, its level rises in a straight line from
+  silent to full over `in` seconds. It happens once per start, never at
+  the start of each file. [code]
+- Fade-out: only when the music is replaced or stopped. Its level falls in
+  a straight line to silence over `out` seconds, then it stops. Files
+  ending and the next starting never fade. [code]
+- With 0 for either, that fade is skipped (full at once, or cut
+  at once). [code]
+- Music stopped while still fading in fades out on a clock that started
+  when it did: its level jumps to 1 − (seconds since it started ÷ `out`)
+  and falls from there, or it stops at once if that's already 0 or
+  less. [code]
+- Stock values: 4 s in, 2 s out for the menu, win and loss music; 3 s in,
+  1 s out for the nation and cutscene music. So switching from the main
+  menu into a match gives 2 s of the menu music falling while the nation
+  music rises over 3 s. [data]
+
+## Loudness
+
+- A music file plays at Main volume × Music volume × the entry's `volume`
+  × the fade level × the duck level (below). Main and Music are the
+  options sliders (`AudioMainVolume`, stock 80%, and `AudioMusicVolume`,
+  stock 70%). [code, data]
+- `volume = 133%` on `main_title_music` makes it a third louder than the
+  rest (all at 100% from the `AAMusic` template): 80% × 70% × 133% ≈ 74%
+  at the stock settings. Whether a product over 100% (sliders near the
+  top) is held at full or distorts isn't known. [code, data; guess]
+- Ducking: while a sound flagged `CAUSEFADE` plays, every other kind of
+  sound fades towards `AudioFadeVolume` (50%) of its level, in a straight
+  line over `AudioFadeTime` (1 s). For speech that's music, interface
+  sounds and world sounds; music ducking is the same whichever kind
+  causes it. Every speech entry built on the `AudioSpeech` or
+  `AudioCutscene` template has the flag. [code, data]
+- Ducking lifts once no `CAUSEFADE` sound has played for
+  `AudioRecoverFromFadeTime` (2 s): everything then rises back to full
+  over `AudioFadeTime` (1 s). A new one during the wait cancels it, and
+  the wait starts again when that one ends. [code, data]
+
+## Menus and other screens
+
+- Each screen may name music in `interface_music`. When a screen is shown
+  it asks for that music; a screen with none (`NULL`, the default) leaves
+  whatever is playing alone. Screens built on `SilentInterface` ask for
+  `music_silent`. [code, data]
+- Only the main menu and the dynamic campaign screen name music, both
+  `main_title_music`. Going between them, or through any screen that
+  names none (lobby, campaign choice, options, loading, debriefing,
+  scoring), the music carries on without a break, since asking for the
+  playing music does nothing. [code, data]
+- The scenario editor is a `SilentInterface`: entering it fades the music
+  out over its fade-out and leaves silence. [code, data]
+- `menu_background_music` is used only as the observers' match music
+  (below). `win_interface_music` and `loss_interface_music` aren't used
+  by the stock data: the debriefing screen's `victory_music` and
+  `defeat_music` are both `null`, so after a match the match music plays
+  on through the debriefing and scoring until the main menu replaces it.
+  [code, data]
+- Given entries, the debriefing would play the victory one when the local
+  player won and the defeat one otherwise. [guess]
+
+## In a match
+
+- The match music starts on the match's first game tick, once loading is
+  over; until then the menu music keeps playing through the loading
+  screen. The game interface names no music, so nothing else changes it.
+  [code, data]
+- It's the `game_music` of the local player's nation (`usa_ambient` for
+  the USA, and so on), whatever the other players' nations. [code, data]
+- With no local player (an observer), it's the music named by AVar
+  `ObserverGameMusic`, stock `menu_background_music`. A local player
+  whose nation has no `game_music` (`null`) gets no new music: whatever
+  was playing carries on. [code, data]
+- Map triggers can change it: `play_music` plays the named entry (as music,
+  replacing the current one), `play_game_music` plays the match music by
+  the rule above, and `stop_music` plays `music_silent`. Victory, defeat
+  and speech don't change the music; speech only ducks it. [code, data]
+
+## Open questions
+
+- Does a match loaded from a save start its match music, or does the menu
+  music carry on into it? (analysis, 2026-11-12)
+- Does music play during the Bink cutscene videos, and is it ducked or
+  stopped for them? (analysis, 2026-11-12)
+- Is a combined music level above 100% held at full or does it distort?
+  (analysis, 2026-11-12)

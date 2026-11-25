@@ -1,0 +1,215 @@
+# Campaigns
+
+AA's scripted campaigns (Tutorial, Allies, Axis), from the main menu's
+Campaign button to the debriefing: the campaign screen, which missions
+are open, difficulty, videos, who plays which side, the loading screen,
+the debriefing and the progress kept on disk. Not the World War II
+campaign map. What a mission's own triggers do is in
+[triggers](triggers.md); winning and losing in [outcome](outcome.md).
+
+Games: traced in AA. Kohan II's campaigns are unchecked.
+
+## The campaigns and their missions
+
+- `Campaign/campaign_aa.tgi` lists the campaigns in the order the screen
+  shows them, each with its missions in the order they're played
+  ("missions are listed in the linear progression order",
+  `Templates/template_campaign.tgi`). [code, data]
+- A mission is one of three kinds (`mission_type`): `PLAYABLE`, a map
+  played to a win or a loss; `CINEMATIC`, a video (`cinematic`, a
+  `.bik`); `CUTSCENE`, a map that plays itself. AA ships only the first
+  two: the Allies and Axis campaigns open with a video and have
+  videos between missions (D-Day, Berlin, London, Moscow) and after the
+  last one (the victory video). [code, data]
+- `cinematic_intro`, `cinematic_outro` and `preview_texture` are read
+  but none of AA's missions or the screen uses them ("preview_texture is
+  archaic"). [code, data]
+
+## The campaign screen
+
+- The Campaign button of the single-player menu opens the campaign
+  screen (`UI/Menus/choose_campaign.tgi`). [data]
+- Down the left, a button for each campaign: its name, and its
+  `complete_texture` once every mission in it is complete, its
+  `incomplete_texture` until then. The campaign last chosen is selected
+  on arrival (remembered with the player's preferences); the first time,
+  the first campaign (the Tutorial). [code, data]
+- In the middle, the selected campaign's missions, by `name`, in order.
+  Only missions that have been opened are listed: a fresh campaign shows
+  just its first mission, and the list grows by one each time the
+  newest is completed (see Progress). [code]
+- A mission's name is drawn in the campaign's `complete_color` once it's
+  complete (stock 0, 0.75, 0, a green) and `incomplete_color` until then
+  (stock white); a `CUTSCENE` mission's always in the interface's
+  cutscene colour. [code, data]
+- On arrival and on choosing a campaign, the first open mission that
+  isn't complete is selected. When every mission is complete nothing is
+  selected and there's no Play button until the player picks one.
+  [code]
+- Beneath the list, a Difficulty dropdown (Easy, Normal, Hard; below).
+- Buttons along the bottom: Play, Load, Back. Play reads "Play" either
+  way, but it's a different button for a mission not yet complete (play
+  on) and a complete one (replay); they differ only in what follows a
+  video (below). [code, data]
+- A campaign with a `dependent_campaign_ids` that isn't complete asks
+  first: "Playing the Tutorial is recommended before playing Allies
+  Campaign. Do you wish to continue?" (`campaign_dependent_campaign_confirm`,
+  the two campaigns' names). Yes plays and turns the warning off for good
+  (the user setting `UICampaignConfirmDependentCampaign`, on by default);
+  no stays. Allies depends on the Tutorial, Axis on Allies. Nothing is
+  ever locked: any campaign can be started. [code, data]
+- Load opens the saved-game list for campaign saves (below). Back returns
+  to the single-player menu. [code, data]
+
+## Progress
+
+- Each mission of a campaign is locked, open or complete. A fresh
+  campaign has its first mission open and the rest locked. [code]
+- Completing a mission marks it complete and opens the one after it. Only
+  the newest can open a new one: completing an already complete mission
+  again changes nothing. [code]
+- A playable mission is completed by winning it: the player's side has
+  won (outcome won) when the player leaves the match. A video is
+  completed by being watched (see Videos). Losing, or leaving before the
+  outcome is decided, completes nothing. [code]
+- Completion is recorded when the player leaves the match for the
+  debriefing, not at the moment of winning. [code]
+- The campaign is complete once its last mission is. [code]
+- Progress is linear: the player can play the open mission or replay any
+  complete one, but can't jump ahead to a locked one. [code]
+
+## Difficulty
+
+- The Difficulty dropdown sets the campaign's difficulty: Easy, Normal
+  or Hard (`Game/difficulty_level.tgi`, ids `easy`, `medium`, `hard`).
+  Each campaign keeps its own; a fresh one starts at Normal, the
+  `DifficultyLevel` world rule's default. [code, data]
+- Every mission of the campaign is launched at that difficulty: it
+  becomes the match's `DifficultyLevel` world rule. [code]
+- That rule changes nothing by itself: no handicap, no change to the
+  computer players. It matters only where a map's triggers test it
+  (`difficulty_compare_difficulty`, in [triggers](triggers.md)).
+  [code, data]
+- A difficulty chosen and never followed by a completion isn't kept: it's
+  written to disk only along with a change of progress. [code]
+
+## Videos
+
+- Playing a `CINEMATIC` mission plays its video full screen with its
+  sound, over everything. [code, data]
+- Esc stops the video, and it then counts as having ended. [guess]
+- When it ends it counts as watched and is marked complete, and then:
+  [code]
+  - chosen with Play (not yet complete): the next mission starts at once,
+    straight to its loading screen, so the Allies intro leads into El
+    Alamein; a video that is the campaign's last returns to the menus;
+  - chosen with replay (already complete): back to the campaign screen.
+- The same goes for a video reached by Next Mission from a debriefing:
+  it plays, then the mission after it starts. [code]
+- Whether a key or click ends a video early is unsettled; the video
+  widget plays to its end unless told to stop. [guess]
+
+## Who plays which side
+
+- There's no lobby. The map decides everything about the sides: their
+  nations, generals, colours, teams, which are independent, what each
+  starts with. [code, data]
+- The player plays the one side the map's header names as the local
+  human player: `kingdom_0` in most missions, `kingdom_3` in Allies 5
+  (Monte Cassino) and Axis 6 (Kursk), `kingdom_1` in Axis 4
+  (Stalingrad). [code, data]
+- Every other side that isn't independent is given a computer player
+  as the mission launches, using the AI profile its kingdom setup names
+  (`ai`, e.g. `ger_sai`), or, where it names none (every side in both
+  tutorials but Tutorial 2's German side, most of the Axis missions'), a
+  profile picked at random for that side's nation. Independent sides get
+  none. [code, data, guess]
+- Whether a computer player actually plays is then up to the map's
+  triggers, which can switch a side's or a thing's computer control off
+  and on ([triggers](triggers.md#computer-control)); most missions switch
+  the enemy off at the start and on later, and the Tutorial keeps it
+  off. [code, data]
+- No handicaps ([players](players.md#handicaps)), no extra starting
+  money: every campaign map's sides start with what the map gives them.
+  Sides keep the map's names ([players](players.md#side-names)).
+  [code, data]
+
+## Loading screen
+
+- A campaign mission's loading screen (`UI/Loading/loading_screen.tgi`)
+  shows the map's name and description (MAP_HEADER), the player's side's
+  objectives from the map, and the mission's two pictures,
+  `loading_texture_left` and `loading_texture_right`. Single-player, so
+  play waits for Continue ([multiplayer](multiplayer.md#loading)).
+  [code, data]
+- The pictures are relative to `Campaign/`. A `%s` in the path stands for
+  a folder named after the screen width; when there's no such file the
+  `%s/` part is dropped, so `allies/%s/Allies01Left.png` is
+  `Campaign/allies/Allies01Left.png`, the only copy AA ships. [code,
+  data]
+- A mission without both pictures shows the map's own loading pictures,
+  or failing that the default ones. [code]
+
+## Debriefing
+
+- Leaving a playable mission (End Mission, or Abort Mission before the
+  end; see [outcome](outcome.md#when-the-match-is-over)) goes to the
+  debriefing (`UI/Menus/debriefing.tgi`): the mission's name, its
+  `debriefing_success` text if the player's side won or
+  `debriefing_failure` if not (lost, or left still playing), the side's
+  primary and secondary objectives ([objectives](objectives.md#mission-debrief)),
+  and victory or defeat music ([music](music.md)). [code, data]
+- Its buttons: [code, data]
+  - Next Mission, shown only when this mission is complete and isn't the
+    campaign's last: plays the next one (a video plays first if the next
+    is one). So it shows after a win, and after a loss on a mission
+    already won before;
+  - Replay Mission: plays this mission again;
+  - Score: the score screen;
+  - Save Film: saves the recording of the match;
+  - Exit: back to the menus, the campaign screen. [code, guess]
+- A mission with `is_final_mission = true` (Allies 12, Okinawa; Axis 12,
+  Hawaii), once won, is marked complete and skips the debriefing:
+  the game cuts to the credits. The victory video after it is then open
+  on the campaign screen. [code, data, guess]
+
+## What carries over
+
+- Nothing but progress: each mission starts from its map alone. No
+  generals' levels, experience, units, money or technologies carry from
+  one mission to the next. [code]
+- What's kept on disk, per campaign, is each mission's lock, open or
+  complete state, whether the campaign is complete, and its difficulty:
+  a file `CampaignSave/<campaign id>.rcs` (e.g.
+  `campaign_aa_allies.rcs`) in the game's user folder, beside the user
+  preferences, screenshots and films. It isn't per player name or
+  profile: everyone using that folder shares one progress. A file that
+  is missing or unreadable means a fresh campaign. [code, data]
+- A mission can be saved part-way like any game, as a campaign save
+  (extension `RCG`). The campaign screen's Load lists them; loading one
+  for another campaign is refused ("Attempted to load a saved game that
+  was for a different campaign"), as is one for a mission not yet
+  reached ("The saved game you selected is for a mission you have not
+  yet reached."). [code, data, guess]
+
+## Losing and quitting
+
+- Losing a mission shows "Mission Lost" with End Mission
+  ([outcome](outcome.md#what-the-player-sees)); End Mission goes to the
+  debriefing with the failure text. Nothing is marked, so the mission
+  stays open and the player can replay it from the debriefing or the
+  campaign screen. [code, data]
+- Leaving part-way (Abort Mission from the game menu) is treated as a
+  loss in the debriefing and changes no progress. [code]
+- The interface's confirmation for ending a mission reads "Exit to
+  Debriefing?" (`campaign_end_confirm`). [data]
+
+## Open questions
+
+- Where exactly Exit from the debriefing, and the end of a campaign's last
+  video, land: the campaign screen or the main menu. (analysis,
+  2026-11-21)
+- What follows the credits after a final mission: the victory video, or
+  the menus. (analysis, 2026-11-21)
+- What the campaign screen's mission list shows besides names, if
+  anything (a description, the objectives). (analysis, 2026-11-21)

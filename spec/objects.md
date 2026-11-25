@@ -1,0 +1,280 @@
+# Objects
+
+The shapes things take up on the map, the tiles they block, when a thing has
+room to stand somewhere, and what happens to the things a map holds as it
+loads.
+
+Games: traced in AA. Kohan II runs the same code, but its data hasn't been
+checked against these rules.
+
+## Shapes
+
+- A thing has three shapes, each read from its template's `[Size]` node: a
+  blocking shape (`blocking_shape`), a soft shape (`soft_shape`) and a
+  target shape (`target_shape`). Each is `POINT`, `CIRCLE`, `SQUARE` or
+  `RECT`. [code]
+- Like every template field, the shape fields come down the template chain:
+  a template that doesn't set one takes its parent's. The root object
+  template sets the blocking shape to a `CIRCLE` of radius 0.2, the soft
+  and target shapes to `null`, `soft_radius` and `target_radius` 0.5,
+  `square_size` 4 and a 4 by 4 rectangle. [code]
+- A soft shape of `null` (or empty) takes the blocking shape's kind, then
+  its size from the soft fields of that kind: a `CIRCLE` gets
+  `soft_radius` (not the blocking radius), a `SQUARE` or `RECT` gets the
+  same `square_size` or rectangle as the blocking shape, a `POINT` stays a
+  point. [code]
+- A target shape of `null` is the soft shape. [code]
+- The soft shape is meant to contain the blocking shape; a template where it
+  doesn't still loads (only a logged error). [code]
+- Shapes are never scaled with the thing's scale. [code]
+
+## Blocked tiles
+
+- Only things flagged `blocking` block tiles, and only if the blocking
+  shape's bounding radius is more than a quarter of a tile (more than 0.5
+  with stock 2-unit tiles); for a `RECT` or `SQUARE` the bounding radius is
+  half its diagonal. Smaller blocking shapes, and every `POINT`, block
+  nothing. [code]
+- Things that can move never block tiles, even when flagged `blocking`.
+  Here and below these are things with a `MoverComponent` whose
+  `speed_max` is above 0, organizations (things with an
+  `OrganizationComponent`, such as regiments) and projectiles; everything
+  else is **static**. Unit templates are `blocking` unless they say
+  otherwise, so units are blocking but not static. [code]
+- A shape's bounding box: a circle's runs from its centre minus the radius
+  to its centre plus the radius; a `RECT`'s or `SQUARE`'s is the smallest
+  box, square to the map, that holds its four corners once turned with the
+  thing's facing. So a turned rectangle's box is wider than the rectangle
+  (for a 4 by 2 rectangle turned 45°, about 4.24 each way), and not a box
+  from its bounding radius. [code]
+- The tiles considered are those under the **soft** shape's bounding box;
+  of these, a tile is blocked when the **blocking** shape comes within a
+  quarter of a tile of its centre. Blocking that reaches beyond the soft
+  shape's box blocks nothing there. [code]
+- The bounding box's tiles run from the tile under its low corner to the
+  tile under a point just short of its high corner (0.0001 in), so a box
+  edge lying exactly on a tile edge doesn't take in the tile beyond it.
+  Tiles off the map are skipped. [code]
+- Within a quarter of a tile:
+  - `CIRCLE`: the centre's distance to the circle's centre is at most
+    `radius + tile / 4` (with a 0.0001 allowance, so exactly on the boundary
+    counts). [code]
+  - `RECT` and `SQUARE` (turned with the thing's facing): the centre lies
+    inside the rectangle, its edges included, or is strictly less than
+    `tile / 4` from it. A centre exactly a quarter tile outside an edge is
+    not blocked. [code]
+
+## Room to stand
+
+The same check decides whether a building can be placed or unpacked and
+whether a stored thing survives a map load.
+
+- The shape checked is the blocking shape, grown by `BuildingPaddingMeters`
+  (stock 2) on every side for templates flagged `blocking`: a `CIRCLE`'s
+  radius grows by 2, a rectangle by 2 each side, and a `POINT` becomes a
+  circle of radius 2. Unpacking always pads; things placed while a map
+  loads use the plain blocking shape. [code]
+- A thing has room when all of these hold: [code]
+  - Its shape's bounding box lies on the map: at least 0 and strictly less
+    than the map's width (and height).
+  - Every tile the shape overlaps is passable for it: land, or water for
+    `water_based` things. A tile counts when the shape and the tile's
+    square overlap at all, tested exactly: the tiles in the shape's
+    bounding box that a turned rectangle, or a circle, doesn't reach don't
+    count, however impassable. This isn't the quarter-tile test of
+    [Blocked tiles](#blocked-tiles): a tile the shape only grazes counts
+    here, and the shape isn't grown. With padding (unpacking), the tiles
+    the padded shape overlaps count.
+    - The shape and the square must share some area: a tile the shape
+      only touches, along an edge or at a corner, doesn't count. The
+      bounding box already leaves out the tiles beyond an edge lying on a
+      tile line (as in [Blocked tiles](#blocked-tiles)); within the box, a
+      circle that just reaches a tile's corner leaves that tile out too. A
+      rectangle square to the map shares area with every tile in its box
+      (a sliver under 0.0001 wide may go either way). The exception is a
+      turned rectangle that exactly touches a tile inside its box, corner
+      to corner or edge to corner: that tile counts, though with a turned
+      facing whether the contact is exact comes down to rounding.
+    - A `POINT`, or a shape reaching less than 0.0001 from its centre,
+      has the one tile it lies in. On a tile line that's the tile on the
+      higher side, so a point on a tile corner has only the tile with the
+      larger x and larger y.
+  - No other `blocking` thing's blocking shape overlaps the shape. While a
+    map loads and when a truck unpacks, only **static** blocking things
+    count: units, organizations and projectiles are no obstacle then, and
+    the unpacking truck is never an obstacle to its own building.
+- Things not flagged `blocking`, and `ethereal` ones, are checked only for
+  being on the map: any terrain will do and nothing else gets in their way.
+  So a `water_based` thing that isn't blocking (an effect, say) needn't be
+  on water. [code]
+- Nothing is let off for being in an organization: each member is checked
+  on its own, at its own stored position, like any other thing. Since units
+  are no obstacle at load, the members of a regiment standing close
+  together don't knock each other out. [code]
+- So a shape too small to block any tile still needs its own tile passable,
+  to be on the map and to be clear of other blocking things; it doesn't fit
+  anywhere. [code]
+- The placement check also has settlement and spacing conditions, which
+  the shipped data never sets off; see [buildings](buildings.md). [code,
+  data]
+
+## Scenery under a building
+
+Trees, hedges, tall grass and other scenery are never `blocking` (the
+doodad templates all say `blocking = false`), so they never stop a building
+going up. Instead a building clears them away.
+
+- When a **static** `blocking` thing (a building, bunker or any other thing
+  that blocks and can't move) arrives on the map in play, every piece of
+  scenery under it is removed from the map for good. This covers a truck
+  unpacking, and any other way a building comes into being during play.
+  [code]
+- Scenery here is any thing that isn't an actor: plain doodads and the
+  reacting scenery of [scenery](scenery.md) (trees, hedges, fences, tall
+  grass) alike. Units, buildings, roads and other actor templates are never
+  removed, nor is any scenery flagged `blocking`. [code, data]
+- The area cleared is the building's plain blocking shape, at its position
+  and facing: not padded by `BuildingPaddingMeters`, and not its soft
+  shape. A piece of scenery goes when its own blocking shape overlaps that
+  footprint. Scenery doesn't set its shapes, so that's the root default, a
+  circle of radius 0.2 about the doodad's position, unscaled however big the
+  tree is drawn. [code, data]
+  - So a tree goes only when its trunk circle reaches into the footprint;
+    trees just outside it stay, and their crowns may still overlap the
+    building's model. [code, guess]
+- Scenery that one of the map's triggers names (as a thing to test or act
+  on) is kept, whatever covers it. [code]
+- It's simply taken away: it doesn't fall, flatten or play any effect or
+  sound first. [code]
+- A truck isn't static, so the truck itself, driving and parking, clears
+  nothing this way. [code] (Vehicles can still knock scenery down as they
+  drive: see [scenery](scenery.md).)
+- Packing up or destroying the building brings nothing back: the scenery is
+  gone, and no record of it is kept. Unpacking again clears whatever is
+  under the new footprint. [code]
+- Things placed as a map loads clear nothing: scenery stored under a stored
+  building stays, overlapping it. [code] Things the game creates while a
+  map is still loading clear nothing either. [code]
+- In the editor, placing a static blocking thing clears the scenery under
+  it in the same way, and so does moving one: each new spot is cleared.
+  So maps built in the editor normally hold no scenery under their
+  buildings. [code, guess]
+
+## Gap between two shapes
+
+How far apart two things are, edge to edge, where a rule says so (weapon
+`range` and `min_range` in [combat](combat.md)). Each shape sits at its
+thing's position, turned with its facing.
+
+- Neither shape is a `RECT` or `SQUARE`: the gap is the distance between
+  the two centres, less each `CIRCLE`'s radius. A `POINT` has no radius, so
+  to a point the gap runs to the point itself. [code]
+- Otherwise one of the two is kept as a rectangle and the other is stood in
+  for by a circle about its centre. [code]
+  - The one kept is the `RECT` if only one is a `RECT`, else the `SQUARE`
+    if only one is a `SQUARE`; of two of the same kind, the one with the
+    longer diagonal, and with equal diagonals the one the distance is
+    measured from (the one firing).
+  - The stand-in circle's radius is the other's bounding radius: a
+    `CIRCLE`'s radius, 0 for a `POINT`, half the diagonal for a `RECT` or
+    `SQUARE` (so its facing no longer matters).
+  - The gap is the distance from the stand-in's centre to the nearest point
+    of the kept rectangle's real outline, as turned, less the stand-in's
+    radius.
+  - If the stand-in's centre lies inside the kept rectangle or on its
+    outline, the two count as touching for a "within" test, and also as
+    far enough apart for any "at least this far" test (so `min_range`
+    never rules it out).
+- "Within `d`" means gap ≤ `d`; "beyond `d`" means gap > `d`. A gap below 0
+  (overlapping shapes) is within everything. [code]
+- To a spot on the ground rather than a thing, the spot is a `POINT`. [code]
+
+## Zones
+
+Several rules speak of things being near a thing: a regiment's or defending
+building's `control_range` ([combat](combat.md)), a city centre's zone
+([buildings](buildings.md)). These aren't measured as distances: each is a
+zone, a set of whole tiles around its owner. [code]
+
+- The zone starts from the tile under its owner's centre. A tile belongs to
+  it when the cheapest walk to it from that tile, tile to tile, costs less
+  than the zone's radius (strictly): a step to a tile sharing an edge costs
+  one tile's width, a diagonal step 1.4142135 times that. [code]
+  - On open ground that makes an octagon: a tile `dx` and `dy` tiles away
+    (take `dx` ≥ `dy`) is in when `tile × (dx + 0.4142135 × dy)` is less
+    than the radius. With 2-unit tiles and a radius of 18, that's 8 tiles
+    straight out and 6 along a diagonal.
+  - The walk can't step between a tile land things may stand on and one
+    they may not (water, or ground closed to everything). So a zone whose
+    centre is on land holds only land tiles, reached overland: it stops at
+    a shore, and land beyond a strait is only in it if the way round is
+    short enough. A zone centred on water holds only tiles closed to land
+    things, the same way. [code]
+  - Buildings and other things on the tiles don't stop it. [code, data]
+    (Only wall things would, and no shipped thing is one.)
+  - A zone whose centre tile is off limits to everything has no tiles.
+    [code]
+- What's inside: a thing that blocks no tiles
+  ([Blocked tiles](#blocked-tiles): units, mostly) is in the zone when the
+  tile under its centre is. A thing that blocks tiles is in when any tile
+  under its footprint's bounding box is. [code]
+- A thing comes into a zone either by moving onto one of its tiles or by
+  the zone coming to cover the tile it's on, which includes the moment the
+  zone is first laid down: what's already there counts as coming in. [code]
+  - Moving from one of the zone's tiles onto another of its tiles counts
+    as coming in again, and so does a thing inside changing sides; so a
+    thing comes in many times while it walks about inside. Rules that keep
+    a list of what came in ignore repeats. [code]
+  - The zone being laid again over tiles it already covered doesn't bring
+    in what stands on those tiles; only things on tiles new to it come in.
+    [code]
+  That holds while a map loads too, though a defending building doesn't
+  act on it until later ([combat](combat.md), Defending buildings).
+- A zone moves with its owner, re-laid around the tile now under the
+  owner's centre. [code] How soon after the owner moves is open.
+
+## Loading a map
+
+- Every thing a map holds is placed again as the map loads, in the order
+  stored: units, buildings and doodads alike. [code]
+- A stored thing whose template has no definition (after renames, see
+  [data](data.md)) is left out with a warning, in the game and the editor
+  alike. [code]
+- Things flagged `tile_locked` move to the nearest multiple of half a tile
+  in x and y. [code]
+- A thing without room (above, unpadded) is dropped from the map, so where
+  two static blocking things overlap the one stored first stays. A unit
+  standing in a building is dropped if stored after it, and kept (with the
+  building) if stored before it, since a unit is no obstacle. The editor
+  keeps a thing that fails only on terrain or on another thing, with a
+  warning; off the map it's dropped there too. [code, guess]
+- A dropped thing is never moved somewhere clear: no free formation slot,
+  no nearest free spot. [code]
+- An organization's members are stored as part of the organization's own
+  entry, so they're placed as the organization is, one after another in the
+  order its entry lists them, each at the position stored for it (the
+  formation isn't consulted). "Stored before or after" a building is
+  therefore the organization's place in the order, whatever the members'
+  own ids: members of a regiment stored before a building are placed first
+  and escape it, and the building, since units are no obstacle, is kept
+  too. [code]
+- A member without room takes its whole organization with it: the
+  organization is dropped with a warning, along with every member already
+  placed, and its remaining members aren't loaded. Loading carries on with
+  the next stored thing. The editor's leniency above applies to each member
+  in the same way, so there a member that fails only on terrain or another
+  thing is kept with its organization. [code]
+- Its height is set afresh by the placement rule in
+  [terrain](terrain.md). [code]
+
+## Open questions
+
+- Do maps store units inside a building or transport as things of their
+  own, and if so are they placed (and so checked for room) at load like
+  any other thing? (implementer, 2026-11-08)
+- How soon after its owner moves is a zone re-laid: as soon as the owner's
+  centre crosses into another tile, or on a slower beat? (analysis,
+  2026-11-09)
+- A tile-blocking thing's footprint for being in a zone: is it the box of
+  its blocking shape or of its soft shape? Both turn up, depending on
+  whether the thing moved or the zone did. (analysis, 2026-11-09)

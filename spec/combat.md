@@ -1,0 +1,1929 @@
+# Combat
+
+How units deal damage, pick targets and die, and how regiments get drawn
+into fights and follow attack orders.
+
+Games: traced in AA. Kohan II runs the same code, but its data hasn't been
+checked against these rules, except Death and Leaving the map, checked in
+both.
+
+## Damage
+
+- A hit always lands: there's no hit chance and no random damage. [code]
+- Main damage = `max(CombatDamageMinimum, (efficiency * base * falloff -
+  defense) * resistance)`. `CombatDamageMinimum` is 1. [code]
+  - `base` is the ability's main damage plus any additive modifiers on it.
+    Modifiers can't take it below 0, and can lower it only as far as
+    `min(base, 1)`. [code]
+  - Those modifiers are `AV` for every attack, `AV_MELEE` for an attack
+    that fires no projectile and `AV_RANGED` for one that does. Each is
+    added once per attack, to its main damage (an ability has only one
+    `MAIN_DAMAGE` effect), and every target an area attack hits takes
+    the raised amount. `ADD_DAMAGE` isn't raised. [code, data]
+  - `efficiency` is the attacker's attack efficiency ([Attack
+    efficiency](#attack-efficiency)). Spell abilities always use 1.
+    [code]
+  - An ability is a spell when its `AbilityDefinition` has `spell =
+    true` in its `[Flags]` block, written there or taken from the
+    template it names ([data](data.md#templates)). Nothing else makes one
+    a spell: not its `ability_type`, its effects or the actor ability
+    that uses it. The flag defaults to false. [code, data]
+    - "Defined implicitly for spell templates" means just that: Kohan
+      II's `K2Spell` sets the flag, so every definition built on it
+      (`K2AreaSpell`, `K2SummonSpell` and the rest) is a spell. Actor
+      ability templates such as `K2SpellInstantLocal` don't decide it;
+      the definition their `ability_IDS` names does. [data, code]
+    - AA has no spell templates, but sets the flag on some attacks:
+      `AABunkerAttack` and the definitions built on it, a battleship's
+      defending attack (`AAAttackBattleshipDefend`), and the HQs' and
+      Corps' own weapons. So those hit at full strength even when an
+      unpacked HQ belongs to a regiment. [data]
+  - `defense` is the target's `defense` plus the `DV` amounts of every
+    `AddModifier` among the properties it holds, never below 0.
+    Abilities flagged `VORPAL` ignore defense. [code]
+  - `resistance` is the multiplier for that damage type: 1 minus the sum
+    of the `ResistDamageModifier` amounts for that `damage_type` among
+    the properties the target holds. A positive amount is resistance
+    (0.20 takes a fifth off), a negative one vulnerability (-0.20 adds a
+    fifth). With no such modifier it's 1. [code] It has a floor above 0,
+    taken to be `ModifierAttributeClampMultiply` (0.05). [guess]
+  - Properties count whatever gave them (the unit's own list, its
+    stance, the terrain, an ability). The same property held twice
+    counts once; different properties add up, so infantry (0.20 against
+    `armor_piercing`) on forest (another 0.20) takes 0.6 of it. [code,
+    data]
+  - Only the target's own properties count: a regiment's reach a member
+    only by being handed down to it ([terrain](terrain.md) for the
+    terrain ones). [code]
+  - `falloff` is 1 except for area attacks (below).
+- Additive damage (as opposed to main damage) is `amount * resistance`, with
+  no attack efficiency, defense, falloff or minimum, dealt only to targets
+  its effect's `targets` matches (below). [code]
+- A unit's `check_damage_resistance` doesn't change damage taken; it only
+  affects how attractive the unit is as a target. [code]
+- Buildings work the same way as units here. The `AV`, `AV_MELEE`,
+  `AV_RANGED`, `DV`, resistance and `HEALTH` modifiers of whatever
+  properties a building holds count as they do for a unit, however it
+  came by them (its own list, a technology, a timed property from an
+  ability). The attack modifiers raise every weapon it fires, those of
+  its `[DefenderComponent]` included, and a change to them takes effect
+  on its next shot. [code]
+
+## Attack efficiency
+
+How hard a regiment hits at the moment, as a fraction of full strength.
+It multiplies main damage (above) and shows as the regiment's efficiency
+bar and its tooltip's "Efficiency" percentage ([object
+display](object-display.md#the-thing-tooltip)).
+
+- A unit in a regiment, or a building that is one of its members, uses
+  the regiment's attack efficiency. Its own properties' efficiency
+  modifiers don't count. [code]
+- A regiment's efficiency eases towards a target set by the properties
+  the regiment itself holds: [code, data]
+  - Each `MultiplyModifier` on `ATTACK_EFFICIENCY_ACTUAL` or
+    `ATTACK_EFFICIENCY_DESIRED` gives 1 + its `amount`. These two don't
+    add up the way other multipliers do: among the regiment's modifiers
+    on one of them, the largest value is the one that counts.
+  - If the regiment holds any `ATTACK_EFFICIENCY_ACTUAL` modifier, that
+    value is the target, whatever `ATTACK_EFFICIENCY_DESIRED` says.
+    Otherwise the `ATTACK_EFFICIENCY_DESIRED` value is. With neither, the
+    target is 1.
+  - A value between 0 and `ModifierAttributeClampMultiply` (0.05) is
+    raised to 0.05, so the target is never below 0.05.
+  - The formation the regiment is in at the moment gives the desired
+    value: in AA's data the Assault formation (`regiment_aggressive`,
+    also the layouts' combat formation) has none, so 1; Aggressive
+    (`regiment_defensive`) 0.75; Column 0.5; and no formation (the
+    layout's Broken Formation property, while routing or Exhausted) 0.5.
+  - The actual value comes from what the regiment is doing: the data
+    gives an `ATTACK_EFFICIENCY_ACTUAL` modifier to the properties of
+    three states, `actor_state_reforming`, `actor_state_resting` and
+    `actor_state_chasing`, each with `amount = 0`. That's a value of 1,
+    not 0: while the regiment holds one of them its target is full
+    strength, and its formation's penalty doesn't apply. [code, data]
+    - Reforming: after a rout ([morale](morale.md#reforming)).
+    - Resting: what a regiment shows whenever it has nothing else to
+      do, standing idle with no order. Also while it keeps company with
+      a thing it was moved onto (below). [code]
+      - A unit standing alone with nothing to do holds `mind_resting`
+        too, but it changes nothing for it: its attack efficiency is
+        1 anyway, and resupply and morale apply only to regiments.
+        [code]
+      - A move order onto a thing (a right-click Move on it) that the
+        regiment can't attack (its own or an ally's regiment, unit or
+        building, or an enemy none of its units has an ability for)
+        moves it towards that thing; one it can attack becomes an
+        attack ([Attack orders](#attack-orders)). [code]
+      - Onto a thing that moves (a regiment or unit), the order never
+        ends on arrival: the regiment stops within
+        `CAITargetInRangeZOCMultiplier` (0.6) times its
+        `control_range` of it and shows Resting while both stand
+        still, and when the thing moves off it follows, re-aiming
+        whenever the thing has drifted more than about 38% of the
+        distance between them, checking about once a second, for as
+        long as the thing exists. It ends on a new order, or when the
+        thing is gone. While either is moving it shows as moving.
+        [code]
+      - Onto a thing that never moves (a building), the move ends as
+        soon as the building is within that distance: the regiment
+        stops short of the spot clicked and stands idle, Resting the
+        ordinary way. [code]
+      - A regiment in a group with Group Behavior on, timing its
+        arrival, shows as moving instead. [code]
+    - Chasing: when the target of its attack order slips out of its
+      control zone during the fight ([Chasing](#chasing)). [code, data]
+  - So in play the formation's penalty applies mainly while the
+    regiment moves under an order: one standing idle in Column is back
+    at full strength 50 seconds after it stops, and a chase holds full
+    strength even though the regiment has no formation. A fight is in
+    the combat formation (Assault), so 1 too. A routing or Exhausted
+    regiment holds no actual-value state, so its Broken Formation's 0.5
+    counts. [code, data]
+- The current value moves towards the target by
+  `AttackEfficiencyPointsPerSecondClimbing` (0.01) per second when below
+  it and `AttackEfficiencyPointsPerSecondFalling` (0.02) per second when
+  above it, stopping on reaching it. It steps on the regiment's
+  once-a-second beat, a second's worth at a time, so it changes once a
+  second. No delay: it starts moving on the next beat after the target
+  changes. [code, data]
+  - So the moves are slow: from Column (0.5) to full takes 50 seconds,
+    from full down to Aggressive (0.75) 12.5 seconds.
+  - A regiment without a leader ([movement](movement.md#arriving))
+    doesn't move its efficiency. That only happens once it has no
+    members left, so in play it always eases. [code]
+- A new regiment starts at 1 with a target of 1, then eases towards
+  whatever its first formation sets: one that starts in its layout's
+  `default_formation_ids` (Aggressive for every AA layout) falls from 1
+  to 0.75 over its first 12.5 seconds.
+  A regiment loaded from a map or saved game starts at the stored value
+  and target ([saved state](saved-state.md)). [code]
+- A thing not in a regiment (a bunker, a lone unit) has no easing: its
+  efficiency is set at once by the properties it holds itself, by the
+  same rule (largest `ATTACK_EFFICIENCY_ACTUAL` value if it has one, else
+  largest `ATTACK_EFFICIENCY_DESIRED`, else 1). No shipped property gives
+  a building one, so a defending building's is 1. [code, data]
+- A hit whose attacker has no weapons of its own uses 1: a special
+  operation's strike, whose attacker is the side. [code]
+- `ATTACK_EFFICIENCY` on its own isn't a modifier attribute. It appears
+  only in a commented-out example in `Templates/template_formation.tgi`
+  and does nothing. [data, code]
+
+## Area attacks
+
+- An area attack hits every valid target within `area` of the impact point,
+  up to `max_targets`. A valid target is a thing with `targetable` among
+  its `[Flags]` that matches the ability's `targets` (Target filters,
+  below). [code]
+- The impact point is where the attack lands on its target, unless the
+  ability's `[Flags]` set `center_on_source = true` (the banzai charge
+  `banzai2`, the Goliath's `doodlebug_charge`, the beach mine pole's
+  `mine_attack2`): then the area is centred on the user where it stands
+  as it uses the ability, whatever it was aimed at. The target it was
+  aimed at is hit only if it's within `area` of the user. The flag does
+  this only for an ability with an `area` (or a `volley_area`, or
+  `target_location`); on any other it changes nothing. [code, data]
+- The user is a candidate like any other thing in the area, its own area
+  included: nothing leaves it out except the ability's `targets`. In the
+  shipped data that always does: units' and buildings' area attacks
+  require `enemy`, and a thing is never its own enemy, apart from the
+  bombers' crash (`+ACTOR -ORGANIZATION -AIR -MINE`), which leaves out
+  the aircraft itself as `air`. [code, data]
+- Distance is measured to the target's edge: the distance from the impact
+  point to the target's centre, less the target's radius, not below 0.
+  [code]
+  - The radius is the bounding radius of the target's **soft** shape
+    ([objects](objects.md)): a `CIRCLE`'s radius, 0 for a `POINT`, and half
+    the diagonal for a `RECT` or `SQUARE`. A rectangle is not measured to
+    its real outline here, nor turned: it's a circle through its corners,
+    so a building is caught from further off beside its walls than its
+    outline suggests. The target shape plays no part. [code]
+  - A target is within `area` when that distance is at most `area` (the
+    boundary counts). [code]
+- `max_targets` is the ability definition's own field. The stock template
+  sets it to 0, which means no limit: everything within `area` is hit.
+  [code, data] Shipped values run from 4 (machine guns) through 8
+  (mortars) and 20 (aircraft bombs) up to 36 (some special operations);
+  tank guns, artillery bunkers, mines and the atomic bomb, among others,
+  leave it at 0. [data]
+- With a limit, the targets hit are the nearest by centre: the distance
+  from the impact point to each target's centre, no radius taken off. So a
+  big target's edge can be nearer than a small one's centre and still lose
+  its place. [code] How ties are ordered is open.
+- Falloff uses the edge distance above. Up to `attenuation_range_min`
+  damage is full; from there it falls linearly to `attenuation_factor_max`
+  times full at `area`. The stock template sets `attenuation_range_min` 1
+  and `attenuation_factor_max` 1, which is no falloff. [code, data]
+  - Falloff scales main damage and a `MoraleLossEffect`'s amount
+    ([morale](morale.md#losing-morale)). Additive damage takes no falloff:
+    every target it reaches takes the full amount. [code]
+  - There's no falloff unless `attenuation_range_min` is below `area`
+    and `attenuation_factor_max` below 1, so `banzai2` (area 1, minimum
+    1, factor 0.25) has none. [code, data]
+- Every effect of the ability goes only to the things the area hits:
+  `max_targets` limits the things, not the effects, and each thing hit
+  takes each of the ability's effects whose `targets` it matches (Target
+  filters, below). [code]
+
+## Projectiles
+
+- An attack with a projectile does nothing to its target when it fires.
+  Its damage, and everything else that happens on landing, comes when the
+  projectile's flight time runs out, and the projectile goes in that same
+  game tick. [code]
+- The flight time is fixed when the projectile is launched: [code]
+  - `projectile_life`, when it's above 0.
+  - Otherwise, for `projectile_type` `ANTIGRAV` (the default) or `LOB`: the
+    straight-line distance from where the projectile starts to its aim
+    point, divided by `projectile_speed`.
+  - For `BOMB`: the distance across the ground to the aim point, divided by
+    a speed that isn't `projectile_speed`, probably the dropping aircraft's.
+    [guess]
+- The aim point is on the target, `ProjectileTargetHeightRatio` (0.65) of
+  its height above where it stands for `ANTIGRAV`, or
+  `ProjectileArcingTargetHeightRatio` (0.35) for `LOB` and `BOMB` (both in
+  `SVars.tgi`). After the flight time is set, the aim point is moved on by
+  the target's current velocity times the flight time, so a shell leads a
+  moving target. [code]
+
+## Target filters
+
+An ability, and each effect in it, can carry `targets`: target types a
+thing must or mustn't have. Projectile chains' `target_flags` are written
+and matched the same way. [code]
+
+- The list is names separated by commas, spaces or both. `+name` or a bare
+  name means the target must have that type; `-name` or `!name` means it
+  mustn't. Case doesn't matter. A name that isn't a `TargetType` is a data
+  error. An empty list matches anything. [code]
+- A target matches when it has every required type and none of the
+  excluded ones. [code]
+- The ability's `targets` decides what it can be aimed at and which things
+  an area attack hits. Each effect's `targets` then decides, for each thing
+  hit, whether that effect applies to it: an effect that doesn't match is
+  skipped for that thing and the others still apply. So a sniper's rifle
+  (10 pierce damage, plus an `AddDamageEffect` of 250 `gunfire` with
+  `targets = infantry`) does the extra 250 only to infantry. [code]
+- Each effect that reaches a thing is a hit of its own, all landing at the
+  same moment, in the order the ability lists its effects. So the sniper's
+  rifle hits infantry twice, 10 pierce then 250 `gunfire`. Everything that
+  goes by a thing's last hit goes by whichever of them came last: kill
+  credit ([special operations](special-ops.md#earning-experience)) and the
+  damage type and amount its death animation is picked by (Death, below).
+  Each `MoraleLossEffect` costs its own amount ([morale](morale.md)).
+  A thing that one effect kills still takes the ones after it. [code]
+- An effect whose `targets` requires `self` doesn't go to the target: it
+  goes to the user, once each time the ability is used, as it's used: on
+  firing for an ability with a projectile, not on landing, and once, not
+  per thing hit, for an area attack. [code]
+  - Requiring `self` is all that counts: the effect's other types, required
+    or excluded, aren't checked, and it reaches the user whatever the
+    user is. [code]
+  - It never goes to the target as well. So when an ability's only main
+    damage requires `self` (the beach mine pole's `mine_attack`: a
+    `BlastDamageEffect` of 25 with `targets = SELF`), the target takes no
+    damage from it at all; that attack only wears the pole down. [code,
+    data]
+  - It takes no falloff, but is otherwise worked out as on any target,
+    with the user as the target: additive damage is the amount times the
+    user's resistance to its damage type (banzai's and the Goliath's 900
+    `explosive`: 900 times the user's `explosive` resistance); main
+    damage is the full formula, with the user's own attack efficiency (1
+    for a spell: the mine pole's `AABunkerAttack` is one), its own defense
+    and resistance, and the minimum of 1. [code, data]
+  - It lands before the ability's other effects. A user it kills still
+    completes the attack: everything else in that use lands as usual.
+    [code]
+  - It isn't an enemy's hit, so it's treated like damage from one's own
+    side: the user doesn't remember it as its last hit, so a unit that dies
+    of it is credited to the last enemy that hit it within
+    `KillCreditTimeout` (2 seconds), or to no one, and its death animation
+    is picked by that enemy hit (or as "death by bleeding" when no enemy
+    ever hit it). It doesn't put the user under siege or make its
+    regiment answer as to an attack ([Engagement](#engagement)). [code]
+  - The damage costs no morale by itself; only a `MoraleLossEffect`
+    requiring `self` would. A unit that dies of it costs its regiment the
+    usual death morale ([morale](morale.md#losing-morale)), as any death
+    does. [code]
+- An effect without `self` that excludes it (`-self`) skips the user when
+  the user is one of the things hit. [code]
+- When an ability lands with no living thing as its target (on the ground),
+  only its effects that require no type apply. [code]
+
+### A thing's target types
+
+A thing's types are worked out afresh each time a filter is tested, so
+they follow whatever it holds and is at that moment. [code]
+
+- From its properties: each `enabled_target_flags` of every property it
+  holds at the moment, from wherever it came: its template's own list, its
+  stance, its regiment, a timed property from an ability or special
+  operation, a technology, its level. E.g. `property_infantry_unit` gives
+  `infantry`, `actor_state_routing` gives `routing`, the slot property
+  `captain` gives `commanding_officer`. These lists take bare names only.
+  Apart from `constructable` (below), a template gives types only through
+  the properties it lists. [code, data]
+  - A property its regiment holds (its state's, its formation's, its
+    level) is handed down to each member, as for every other use of
+    properties ([movement](movement.md#a-units-top-speed)), so the members
+    have its types too: every unit of a routing regiment is `routing`.
+    Only properties with `pass_down_members = false` stay with the
+    regiment; in AA those are `mobile` and the supply properties `oil`,
+    `ammo` and `money`, none of which gives a type. [code, data]
+  - The same property held twice gives its types once. [code]
+- From how its side stands to the user's ([players](players.md)): [code]
+  - `own` if it's on the user's side;
+  - `friend` if it's on the user's side or an ally's: `own` things are
+    always `friend` too;
+  - `enemy` if its side is hostile to the user's; `neutral` if neither
+    friend nor enemy, which includes a thing with no side;
+  - `independent` if it has no side, or its side is one of the map's
+    independent sides (the `independent` flag of
+    [outcome](outcome.md): on the stock maps the sides holding the
+    neutral cities and farms). This doesn't depend on the user.
+  - `self` if it is the user; `same_organization` if it and the user are
+    in the same regiment, or one is that regiment itself.
+- From what it is: [code, data]
+  - `actor` always.
+  - `organization` if it's a regiment itself, not one of its members.
+    Regiments are matched like any other thing: special operations' areas
+    reach them as well as their members (hence the `-ORGANIZATION` in
+    nearly every operation's `targets`, and the Resupply operations'
+    `+ORGANIZATION`, [special operations](special-ops.md#what-an-operation-reaches)).
+    A regiment has no health, so it's never `body` or `capturable`, and
+    damage does nothing to it. A unit's weapon never ends up aimed at a
+    regiment: targets are picked among units and buildings
+    ([Picking targets](#picking-targets)).
+  - `body` if it has health.
+  - `capturable` if it has health and could be captured by damage now
+    ([buildings](buildings.md#capture-by-damage)): its `captureable` is
+    true, it isn't under construction, no property of its has made it not
+    capturable, and it isn't a city centre or a member of a city that
+    still stands. A building that is part of a settlement is capturable
+    when the settlement's own building is. Units count the same way, and
+    their `captureable` is false unless their data says otherwise.
+  - `under_construction` from when a building is placed to be built
+    until its construction finishes. Nothing else sets it: a finished
+    building being repaired isn't, and AA has no upgrading of buildings.
+  - `invulnerable` when its template's `[Flags]` have `invulnerable =
+    true`. It defaults to true for plain things (`template_thing.tgi`:
+    markers, flares, resources) and false for actors
+    (`template_actor.tgi`); the actors that set it are scenery
+    (`template_doodad_aa.tgi`), ambient animals (`AAAmbientUnit`), the
+    mine poles and minefields, some campaign buildings (airfields, oil
+    tanks, the oil refinery, the ammo bunker), the Secret Agent and the
+    Code Breaker's building. It doesn't stop damage; what else it changes
+    is in the rules that ask for it (picking targets below,
+    [fog](fog.md)).
+  - `constructable` if its template has a `[ConstructionComponent]`:
+    every building (`template_building.tgi` has one) and the big ships
+    (`AAUnitSeaMajor`). The engineers' repair abilities use it
+    (`AARepairAllAction`, `AARepairAction`, `AAConstructAction` in
+    `template_abilitydefinition_aa.tgi`).
+  - `cannot_build` if the user can't build things of its kind: the
+    thing's template isn't among the user's `[BuildActor]` entries (a user
+    with no `[BuilderComponent]` has none). So `AAConstructAction`
+    (`+constructable -cannot_build +under_construction +friend`) lets an
+    engineer help build only the kinds of bunker it can build itself,
+    while repairing (`AARepairAction`) works on any friendly finished
+    building.
+  - `upgrading` is never set, so `+upgrading` matches nothing.
+- A thing holds at most 32 types. Each `TargetType` has a number, and
+  its slot is that number counting modulo 32: [code, data]
+  - The game makes sixteen types itself before any data file loads,
+    numbered 0 to 15 in a fixed order of its own: `friend`, `enemy`,
+    `neutral`, `independent`, `own`, `self`, `same_organization`,
+    `constructable`, `cannot_build`, `organization`,
+    `under_construction`, `capturable`, `body`, `actor`, `invulnerable`,
+    `upgrading`. These are the types whose meaning the game works out
+    itself (above). `Game/target_types_predefined.tgi` lists the same
+    sixteen in the same order, but that file doesn't decide anything:
+    its blocks only fill in the types already made.
+  - Every other type is numbered from 16 up, in the order its
+    definitions load: file by file in the order the index loads them,
+    and block by block within a file. A block whose `IDS` already
+    exists (case doesn't matter), predefined or not, isn't a new type:
+    it fills in the existing one again, field by field, and the type
+    keeps its first number. So a type defined twice takes one slot, and
+    the predefined file loading after AA's own changes nothing.
+  - AA's `Game/target_types_aa.tgi` defines 17 more (`air` first, then
+    in file order), numbered 16 to 32; Kohan II's `target_types.tgi`
+    13, numbered 16 to 28, which fit.
+  - So in AA the last, `provides_corps` (32), shares `friend`'s slot: a
+    thing with `provides_corps` counts as `friend` to every filter, and
+    `+provides_corps` matches every friendly thing.
+  - A filter (or `enabled_target_flags`) naming a type no file defines
+    is a load error, as [data](data.md#ids-renames-and-duplicates)
+    describes them: the game goes on. [code] That it costs the block
+    holding it and the rest of that file, as other load errors do, is a
+    guess.
+  - That does change play in AA. No ability's or effect's `targets`
+    names `provides_corps`; its one intended use, Reorganization's
+    one-at-a-time check ([special
+    operations](special-ops.md#summoning-more-than-one)), works as meant.
+    But the things that hold it, Corps HQs, Corps HQ trucks, HQ landing
+    ships (property `corpshq`) and battleships (`tech_battleship`), are
+    `friend` to everyone, their enemies included, while still `enemy`
+    to them. So an enemy's `+FRIEND` filters take them in: an enemy's
+    Sandbagging or Double the Guard cast over a Corps HQ strengthens it,
+    an enemy's Fighting Spirit or Forced March reaches a battleship or a
+    Corps HQ truck caught in its area, and enemy engineers can repair a
+    damaged Corps HQ or battleship (`AARepairAction`: `+constructable
+    +friend`). Nothing in AA's data excludes `friend`, so no filter
+    leaves them out. [code, data]
+
+## Range and recharge
+
+- Range is edge to edge, for both `range` and `min_range`: the gap between
+  the firing thing's **target** shape and the target's **target** shape,
+  worked out as [objects](objects.md) gives it (Gap between two shapes).
+  The same holds for units and buildings, firing or fired at; the blocking
+  shape plays no part. [code]
+  - A thing whose template sets no `target_shape` uses its soft shape, so
+    for most units that's a circle of `soft_radius`, and for a building
+    with a `RECT` or `SQUARE` footprint its rectangle, turned as the
+    building is. [code]
+  - In range means the gap is at most `range`. `min_range` rules a target
+    out when the gap is at most `min_range`; a `min_range` of 0 rules
+    nothing out. [code]
+  - An ability aimed at a spot on the ground measures from the firing
+    thing's target shape to that spot. [code]
+- An ability can fire again once `recharge_time` has passed since it last
+  fired, divided by the firing thing's `RECHARGE_TIME` multiplier
+  ([special operations](special-ops.md#what-the-modifiers-do)). It's
+  ready from the start: no initial delay, and no jitter. [code]
+  - The multiplier is read when the time is checked, so a change to it
+    shortens or lengthens a recharge already under way. [code]
+  - It applies to buildings as to units, and to each of a defending
+    building's weapons: the building's own properties set it. [code]
+- A unit also can't start another use while one is still playing: a
+  use lasts as long as its animation (`animation1` of the ability), and
+  the unit decides again only when it's over. So an ability whose
+  recharge is shorter than its animation fires once per animation, and
+  its `RECHARGE_TIME` multiplier makes no difference to it. Engineers'
+  building and repairing are the stock case: no recharge, a 1-second
+  `build1`, one use a second
+  ([construction](construction.md#building-and-repairing-work)). [code,
+  game]
+
+## Picking targets
+
+While its regiment is engaged (Engagement, below), each unit picks a
+target of its own. [code]
+
+- Candidates: enemies near the regiment's position, within its
+  `operational_range` (34 for ground regiments), whatever the regiment's
+  engagement lists. The circle is around the regiment, not the unit, so
+  a unit at the edge of the formation looks no further than one at the
+  centre. A thing counts when its shape reaches into that circle. [code,
+  guess] A unit standing alone, outside any regiment, only ever looks
+  around its current target: within twice its distance to it, measured
+  from the unit; with no target it picks nothing. [code]
+- A unit only considers things it has an ability for: one whose
+  `targets` match the thing (Target filters), with the thing outside its
+  `min_range` and, for a weapon on a turret, within the turret's arc.
+  Range doesn't come into it here. [code]
+- The target its regiment hands it: when a unit joins its regiment's
+  fight (and whenever it isn't fighting while the regiment is engaged,
+  which the regiment checks about once a second), the regiment gives it
+  one of its engagement targets, the same for every unit. Which one, when
+  the engagement has several, is open. The unit treats that thing as its
+  current target when it picks. [code]
+- Candidates are ranked by tier, then score, then nearest centre: [code]
+
+  | Tier | Target |
+  |---|---|
+  | 6 | the regiment's attack target ([Attack orders](#attack-orders)), and units of that target's regiment |
+  | 5 | armed enemies that are aggressive |
+  | 4 | unarmed enemies that are the attack target |
+  | 3 | other armed enemies |
+  | 2 | unarmed enemies that can be captured or destroyed, or have no body |
+  | 1 | anything else |
+
+  - Tier 6 only exists while `KillTargetIsHighestPriority` (an SVar,
+    true in AA) is set; without it the attack target falls to tier 5 if
+    armed and tier 4 if not. So in AA tier 4 never comes up. [code, data]
+  - An enemy is aggressive when its regiment is, at the moment the unit
+    picks (the same aggressiveness that decides what starts an
+    engagement, below): [code, data]
+    - always while it's attacking, engaged, bombarding, chasing,
+      guarding, regrouping, reforming or razing;
+    - never while it's routing, joining, building or repairing;
+    - otherwise (moving, resting, and the rest) by its formation:
+      aggressive or defensive formation yes, column no.
+
+    So a regiment walking somewhere in column is tier 3, the same
+    regiment walking in an aggressive formation is tier 5, and one that
+    was standing idle and is now firing back is engaged, so tier 5.
+    An armed thing in no regiment counts as aggressive. [code]
+  - Tier 1 is never picked as a new target, only kept as the current one,
+    which includes the target its regiment handed it. So a tier 1 enemy
+    on its own (an unarmed thing with health that can be neither captured
+    nor destroyed) is still attacked by the units that have an ability
+    for it, once their regiment has engaged it; a higher-tier candidate
+    takes their attention first. [code]
+- The score favours targets the unit's ability is good against: higher for
+  targets with less resistance to it, plus `AbilityScoreAttackerBonus` (0.5)
+  if the target is attacking this unit. [code]
+- A target's score is the score of the best ability the unit has against
+  it (Choosing an ability, below). [code]
+- After its regiment starts engaging, a unit waits a random fraction of
+  `EngageReactionTimeRange` (0.3 s) before it decides. [code]
+
+### Keeping a target
+
+A unit sticks with its target; a nearer or equally good enemy doesn't
+draw it away on its own. [code]
+
+- It keeps the target while both hold: [code]
+  - the target, or the target's regiment, is still one of its regiment's
+    engagement targets (so it drops out when dead, no longer an enemy or
+    beyond `operational_range`, Engagement below);
+  - the unit is still attacking it: it hasn't given it up because none of
+    its abilities can reach it (Choosing an ability, below).
+- When either fails it picks afresh from the candidates, as above. [code]
+- Exceptions, where it can change target sooner: [code]
+  - while it is moving into range of a target below tier 5, it picks
+    afresh every time it decides, so there a nearer or better enemy does
+    take its attention;
+  - when an enemy hits it while it's attacking something else, it rates
+    its abilities against the attacker and against its target and
+    switches if the attacker comes out better: a better rating (use now,
+    then wait, then move), or the same rating and a higher score (the
+    attacker's 0.5 bonus counts). Tiers aren't compared, so this can draw
+    a unit off its regiment's attack target. A hit from an enemy beyond
+    its regiment's `operational_range` is ignored;
+  - a moving unit that runs into an enemy (Engagement, below) compares
+    it with its target by score in the same way.
+
+### Back to its place
+
+A unit that leaves its place in the formation to go after a target
+(moving into range, above) follows it as far as it takes; the regiment
+itself stays at its centre. The unit goes back to its place in the
+formation when it has nothing to pick: no candidate within the
+regiment's `operational_range` of tier 2 or more, and none in the target
+its regiment handed it (Picking targets, above). Until then, each time
+its target is gone it takes the next one from where it is. [code]
+
+- So no distance from its place calls it back: only its target leaving
+  the regiment's `operational_range` (measured from the regiment, not
+  the unit) ends the chase. [code]
+- Its place is the regiment's position plus its slot in the current
+  formation; if that moves while it walks back, it heads for the new
+  spot. [code]
+- When the regiment's engagement ends, every unit takes its place again
+  as the regiment resumes what it was doing (Engagement, below). [code]
+
+## Choosing an ability
+
+A unit fights with the abilities in its `[PerformerComponent]`: each
+`[Ability]` block there, in the order the data lists them. Against its
+target it rates every one, scores each rating, and acts on the best.
+
+- What can be used in a fight: every ability in the block that is
+  available. Nothing about the ability's kind decides it: `ability_type`
+  (`attack`, `repair` or `null`) plays no part, and neither does whether
+  it has damage effects. Only the rating does: an engineer's repair
+  abilities (`targets = +constructable +friend ...`) rate "can't" against
+  any enemy, so they never come up in a fight, while `banzai2`, the
+  Goliath's `doodlebug_charge` and the like (`ability_type = null`) are
+  used like any attack. [code, data]
+  - `ability_type` matters only to properties that add effects to every
+    ability of a type (`AbilityEffectModifier` with `ability_type =
+    attack`, [special operations](special-ops.md#what-the-modifiers-do)):
+    a `null` ability gets none of those. [code, data]
+  - An ability is available unless its `[Ability]` block sets
+    `required_properties` the unit doesn't all hold (the American
+    bomber's napalm attack needs `tech_napalm`), or
+    `required_experience_min`/`_max` that the regiment's level is outside
+    (-1, the default, is no limit). Availability is looked at again
+    whenever the unit's properties or level change. An unavailable
+    ability is passed over altogether. [code, data]
+  - When the unit is bombarding ([Attack orders](#attack-orders)), only
+    abilities flagged `bombard` count. [code]
+- Rating, for one ability against the target: [code]
+  - **Can't**: the target is dead or doesn't match the ability's
+    `targets` (Target filters); it's within `min_range`; the weapon is on
+    a turret that can't bear on it; or it's out of `range` and the unit
+    can't move.
+  - **Move into range**: out of `range` (with its modifiers) and the unit
+    can move.
+  - **Wait**: in reach but not ready: still recharging, or an
+    enchanting ability that has nothing to give (below).
+  - An enchanting ability is one whose definition's `[Flags]` set
+    `enchantment = true` (a definition with that flag must have an
+    `EnchantmentEffect`). It's the flag that counts, not `ability_type`
+    and not the effect alone. In AA only the special operations set it,
+    so no unit's ability is enchanting: the AT infantry's and tank
+    destroyers' rockets, whose `EnchantmentEffect` stuns, rate and fire
+    as any attack, whether or not the target is already stunned. Kohan
+    II's enchantment spells (`K2EnchantmentSpell`) set it. [code, data]
+  - An enchanting ability that is otherwise ready rates "wait" when the
+    target already holds the property of any one of its
+    `EnchantmentEffect`s: one held is enough, not all. "The property"
+    is the same property id, whoever gave it; a different property
+    doesn't count, even of the same `enchantment_type` (as
+    [enchantments stack](special-ops.md#giving-and-keeping-the-property)).
+    [code]
+  - It also rates "wait", where it would otherwise be "use now", while
+    another unit of the same regiment is in the middle of using that
+    same ability on the same target, so a regiment doesn't double up
+    one enchantment on one target. [code]
+  - **Use now**: in reach and ready.
+  - The checks go in that order, so an ability that's both out of range
+    and recharging rates "move".
+- Scoring. Each `[Ability]` block carries `priority` and a weight and
+  bonus for each rating; the `[PerformerComponent]` itself carries one
+  more bonus per rating, shared by all its abilities: [code, data]
+  - use now: `priority` × `use_weight` + `use_bonus` + the performer's
+    `use_bonus`;
+  - wait: `priority` × `wait_weight` + `wait_bonus` + the performer's
+    `wait_bonus`;
+  - move into range: `priority` × `move_weight` + `move_bonus` + the
+    performer's `move_bonus` while the ability is ready, but `priority` ×
+    `wait_weight` + `wait_bonus` + the performer's `move_bonus` while it's
+    still recharging;
+  - then, when the unit's `check_damage_resistance` is true and the
+    ability has main damage, the score is multiplied by the target's
+    resistance multiplier to that main damage's type (Damage, above);
+  - "can't" isn't scored: such an ability is left out.
+  - Defaults (`template_actorability.tgi`, `template_performer.tgi`):
+    `priority` 0, every weight 1, every bonus 0. AA's weapon templates
+    set their own (`template_actorability_aa.tgi`):
+
+    | Template | `priority` | move / use / wait weight | move / use / wait bonus |
+    |---|---|---|---|
+    | `AAAttackLocal` | 1 | 1 / 1 / 0 | 3 / 100 / 100 |
+    | `AAGunLocal` | 1 | 1 / 1 / 0 | 3 / 50 / 50 |
+    | `AAGrenadeLocal` | 1 | 1 / 1 / 0 | 75 / 75 / 1 |
+
+    A unit's own block can override any of them, as `banzai2` sets
+    `move_bonus` and `use_bonus` 110.
+- The unit takes the highest score. On a tie with the best so far, taken
+  in list order: [code]
+  - if the newcomer rates "move into range", the one with the longer
+    range wins, and on equal range the earlier one stays;
+  - otherwise the higher `priority` wins, then the shorter range, then a
+    fair coin from the match's shared random numbers (so with three or
+    more tied, the later ones are likelier to win, as the template's
+    comment says).
+  - Range here is `range` with its modifiers. `fuzzy_range` (meant to
+    vary the range by up to that much either way) appears to change
+    nothing: the variation it scales is never set. [code, guess]
+- What the unit then does: [code]
+  - use now: starts the ability on the target;
+  - wait: holds where it is and decides again when the ability has
+    recharged, or after 0.6 seconds if that's sooner; an ability waiting
+    only on its enchantment is already recharged, so that's every 0.6
+    seconds;
+  - move into range: follows the target until it's just within that
+    ability's `range`, then decides again;
+  - nothing rated better than "can't": it gives up that target and picks
+    another.
+- Worked example: a banzai infantryman (`jpn_infantry_banzai`, whose
+  `check_damage_resistance` is true) has its rifle `banzai1` (`AAGunLocal`:
+  range 12, recharge 3, 10 `gunfire`) and `banzai2` (`AAAttackLocal`:
+  range 0.5, recharge 50, 200 `armor_piercing`, `targets = +ENEMY,
+  +VEHICLE`, `move_bonus` and `use_bonus` 110). Its performer bonuses are
+  0. [code, data]
+  - Against an enemy medium tank 10 away (edge to edge), both ready: the
+    rifle rates "use now", 1 × 1 + 50 = 51, times the tank's `gunfire`
+    multiplier (`vehicle` 0.4 + `tank` 0.2 resistance, so 0.4) = 20.4.
+    `banzai2` rates "move", 1 × 1 + 110 = 111, times its `armor_piercing`
+    multiplier 1 = 111. It wins: the man runs at the tank, and once within
+    0.5 `banzai2` rates "use now" at 111 against the rifle's 20.4, so he
+    uses it.
+  - Against an enemy infantryman 10 away: `banzai2` can't (no `vehicle`),
+    so the rifle is the only candidate: "use now", 51 × 1 = 51, and he
+    fires it. While it recharges it rates "wait" (1 × 0 + 50 = 50) and he
+    holds; at 14 away it would rate "move" at 1 × 1 + 3 = 4 when ready.
+- A unit uses one ability at a time. Once it has started one it decides
+  nothing else until that use is over: turning its turret to the target,
+  the attack, and then `reload_time` (in the `[Ability]` block; 0 in AA's
+  weapon templates). Only then does it rate its abilities again, so two
+  weapons that are both ready never go off together: the other one waits
+  for its turn. [code] The use lasts the attack animation's length plus
+  `reload_time`, as the template's comment says. [data]
+- An `[ElementComponent]`'s `primary_minimum_health` and
+  `primary_time_to_death` can make a regiment's primary unit, while it's
+  being engaged and not yet in its place, hold off using any ability for
+  `ROEPrimaryEngageReturnTimeout` (5) seconds. Both are 0 in all AA data,
+  which turns this off. [code, data]
+
+## Firing and moving
+
+- Units without a turret don't fire while moving under a move order: they
+  turn to face the target and play the attack animation. Units with a
+  turret fire on the move, turning only the turret. [code]
+- A unit waits for its current attack to finish before choosing again
+  (Choosing an ability, above). [code]
+
+## Defending buildings
+
+Things whose template has a `[DefenderComponent]` fire on their own: Corps
+and Division HQs, bunkers, and a few map-specific things (beach mines and
+bunkers, search lights, a ship). They don't use the unit rules above for
+choosing targets. [code, data]
+
+- Each `Ability` in the `[DefenderComponent]` is a weapon of its own, with
+  its own target, recharge and turret. [code]
+  - Unlike a unit's, they don't take turns: each picks its own target and
+    fires whenever it's recharged and has one, so several can go off in
+    the same moment. `priority`, the weights and the bonuses in their
+    blocks play no part. [code]
+  - Example, the beach mine pole (`beach_mine_pole`: 1 health, no
+    resistances, `control_range` 5): both weapons take `+enemy, -air,
+    -mine` with range 5, and start ready. When an enemy (anything but an
+    aircraft or a mine) comes within 5, both fire at once. `mine_attack` (recharge 10)
+    does nothing to the enemy: its only effect, 25 `explosive` main
+    damage, requires `self`, so it goes to the pole and destroys it
+    ([Target filters](#target-filters)). `mine_attack2` (recharge 50,
+    `center_on_source`, area 10) blasts every enemy (not aircraft or
+    mines) within 10 of the pole for 100 `explosive` main damage, at full
+    strength since `AABunkerAttack` is a spell, less each target's defense
+    and times its resistance. Both go off in the same moment, the pole
+    dying after them, so the blast always happens. [code, data]
+- The block's `control_range` is how near something must come for the
+  building to notice it; it must not be negative (a data error). It doesn't
+  limit how far the building fires. [code]
+  - `control_range` is the radius of a zone around the building
+    ([objects](objects.md), Zones): tiles, not a distance to an edge or a
+    centre. An enemy in that zone is noticed if at least one of the
+    building's weapons could be aimed at it then: its `targets` filter
+    matches and, for a weapon on a turret, it's within the turret's arc. A
+    unit in a regiment gets its whole regiment noticed. [code]
+  - That is checked whenever an enemy comes into the zone ([objects](objects.md),
+    Zones): by moving in, by being there when the building appears (which
+    includes everything the map places, buildings too, as the map loads),
+    each time it moves onto another tile while inside, and when it changes
+    sides where it stands. So an enemy that was in the zone but couldn't
+    be aimed at is noticed once it can be, at its next step onto another
+    tile, crossing into a turret's arc included; one that becomes a match
+    for `targets` while standing still isn't noticed until it next moves a
+    tile, or leaves and comes back. Being noticed this way wakes an idle
+    building like any other (below). [code]
+  - Once noticed, a thing stays on the building's list for as long as the
+    building stands, wherever it goes; dead ones are skipped. [code]
+- A defending building is idle until woken: it doesn't pick targets, turn
+  its turrets or fire. It wakes the first time it notices something after
+  the map has finished loading, and from then on checks its weapons for as
+  long as it stands, firing at anything on its list, including what it
+  noticed while the map loaded. [code]
+  - So what a map places inside a building's zone is noticed but left
+    alone, and stays so until something else (a unit moving in, a thing
+    created there or changing sides) is noticed after loading. Only a thing
+    one of its weapons could be aimed at wakes it: aircraft passing a
+    bunker whose weapons can't target `air` don't, though they wake an
+    anti-aircraft bunker. [code, data]
+  - Its list isn't saved with the map or a saved game: on loading, a
+    building notices afresh whatever is in its zone then, and things it had
+    noticed that are now outside are forgotten. Whether it was awake is
+    saved and kept. [code]
+  - In the map file it's the id in the defender block's `updatable`
+    (`rmp.ksy`): -1 means idle, 0 or more means awake. The id must be below
+    the map's UPDATABLES `count` and not used by any other component, or the
+    map fails to load. [code] An awake building's checks go on from the
+    map's UPDATABLES queues, which hold entries under that id. [guess]
+  - Every defender in the shipped campaign and tutorial maps is saved
+    idle (the multiplayer maps place none); a few in the trailer and
+    developer maps were saved awake. [data]
+  - Example, the Fall of Berlin campaign mission (`allies10_berlin`): it
+    starts with two of Zhukov's (`kingdom_0`) airfields deep in German
+    (`kingdom_1`) lines, each inside the zone of German bunkers or an
+    Infantry HQ and in their machine guns' reach. They are valid targets
+    (rank 1 below; their planes can't wake those machine guns), and
+    they're left alone until a Soviet ground unit comes near one of those
+    buildings. [data]
+  - A building that changes sides (captured, or given to another player)
+    keeps its list and whether it's awake. Its zone isn't laid afresh, so
+    what stands in it isn't noticed at that moment: an enemy of its new
+    owner there is noticed, and wakes it if idle, at its next step onto
+    another tile inside the zone, or when it changes sides itself. Things
+    on the list from before are fired at only if they still match its
+    weapons' `targets` from the new owner's side: with the stock `+enemy`,
+    those that are now its own side's or allies' aren't, while a third
+    player's still enemy units stay targets. [code, data]
+  - If the building's own template were an organization, its regiment's
+    `control_range` would be used instead; no shipped defender is one.
+    [code, data]
+- A weapon fires only at noticed things, and at any of them within its own
+  reach: `range` and `min_range` edge to edge, as for units, however far
+  that is from `control_range`. So something that never came within
+  `control_range` is never fired at, even inside a weapon's range, and
+  something that did can be fired at beyond it. [code]
+  - In shipped data the two are equal, except: the Soviet bunker notices at
+    20 but its MG reaches 14; one of the Normandy MG bunkers' two weapons
+    reaches only 20 of their 25; the search light notices at 25 with a reach of 500. [data]
+- Picking a target, per weapon: only noticed things the weapon could use
+  right now (in reach, outside `min_range`, matching `targets`, in the
+  turret's arc, recharged). Ranked, best first: [code]
+
+  | Rank | Target |
+  |---|---|
+  | 3 | units of an aggressive regiment (see Engagement), and armed units in no regiment |
+  | 2 | other armed things |
+  | 1 | unarmed things that can be destroyed (have health, are destructible and not invulnerable) or captured now |
+  | — | anything else is never fired at |
+
+  Ties go to the one whose centre is nearest the building's. There's no
+  score for how well the weapon suits the target, and no ordered target.
+  [code]
+  - Enemy buildings without weapons of their own, such as airfields, are
+    rank 1: bodies are destructible and actors not invulnerable unless
+    their template says otherwise, and no airfield does. The bunkers' and
+    HQs' stock attacks take `targets = +enemy, -air, -mine, -water`, which
+    takes in enemy buildings. [data]
+- Keeping a target: a weapon keeps firing at its target while the target
+  stays valid (alive, in reach, outside `min_range`, matching, in the
+  turret's arc), as long as it ranks 2 or 3. A rank-1 target is
+  re-picked at every check, so an armed thing coming into reach takes over.
+  A target that stops being valid is dropped and a new one picked. While
+  the weapon recharges it keeps its target. [code]
+- Firing: once the weapon has recharged (`recharge_time`, as for units). A
+  weapon with `turret_ids` first turns that turret toward the target (see
+  Turrets below), and fires as soon as it points at it; one without fires
+  at once (the building itself never turns). [code]
+- The regiment being fired at counts the building as engaging it, as it
+  would an enemy regiment. [code]
+- Nothing in these rules looks at the building's state: it fires while
+  unpacking, while packing (until the truck replaces it), while disabled
+  and while recruiting. It stops only when it dies or leaves the map.
+  [code]
+
+### Turrets
+
+A turret is a `[Turret]` block in the thing's `[PerformerComponent]`; a
+weapon (`Ability`) uses the one its `turret_ids` names, and names at most
+one. [code, data]
+
+- Defaults: a field the block leaves out takes the `Turret` template's
+  value: `yaw_rotation_per_sec_degrees` 360, `yaw_rotation_range_degrees`
+  360, `yaw_start_degrees` 0, `reset_time` 10, `can_reset` true. [data]
+  Each of the three yaw fields must be between 0 and 360 (a data error
+  otherwise). [code]
+- Angles: a turret's yaw is measured from the thing's facing, positive
+  counter-clockwise seen from above (the opposite way to the recruiting
+  rings in recruiting.md). [code]
+- Start: a turret points at `yaw_start_degrees` from the facing when the
+  thing is created, whether placed on the map, built or unpacked. [code]
+- The turret's spot: `offset` turned with the thing, its first number
+  along the facing and its second 90° counter-clockwise from it (to the
+  left), added to the thing's position. Shipped offsets look as if they
+  were written the other way round (first number sideways, second ahead,
+  as for the two Iwo Jima MG turrets), but this is how the game reads them.
+  [code, data]
+- Arc: `yaw_rotation_range_degrees` is the whole sweep, centred on the
+  start direction: 70 is 35° either side of it. [code, data] Something is
+  in the arc when the direction from the turret's spot to its centre is
+  within half the sweep of the start direction (the edge counts). A sweep
+  of 360 takes everything. [code] Shipped limited arcs are 70, 90 and 120,
+  all on campaign beach bunkers. [data]
+- Turning: toward the direction from the turret's spot to the target's
+  centre, the short way round, at `yaw_rotation_per_sec_degrees`. A turn
+  is never limited to the arc: since a target must be in the arc, a sweep
+  of 180 or less always turns inside it, but a wider limited sweep (none
+  shipped) could swing through the gap behind. [code]
+- Pointing at it means exactly: the turret stops on the target's direction
+  as soon as the remaining turn is no more than one step's worth, and the
+  weapon fires in that same step. There's no wider tolerance. [code] A
+  moving target is chased step by step; the weapon fires once a step
+  closes the gap. [code]
+- A turret with a turn rate of 0 never turns, so its weapon fires only at
+  something exactly in line with it. None is shipped. [code, data]
+- A building's weapon turns its turret only while it has a target and is
+  recharged: during recharge the turret stays where it is, and turns
+  toward the target once the weapon is ready again. [code]
+- Going back: a turret with `can_reset` that hasn't been turned toward
+  anything for more than `reset_time` seconds turns back to its start
+  direction at its turn rate, and stays there. So a weapon with a
+  `recharge_time` longer than `reset_time` starts swinging home between
+  shots, then turns back to fire. With no target the turret stays put
+  until `reset_time` has passed. [code, data]
+- Several turrets turn independently, each for the weapon that names it
+  (hms_york's four, the Iwo Jima MG bunker's two). [code, data]
+- Two weapons naming one turret both turn it toward their own targets,
+  each in turn in their order in the `[DefenderComponent]`, every check:
+  with one target it turns up to twice as fast, with two it is pulled
+  between them. No shipped defender does this; the Normandy artillery
+  bunkers share their turret only between the defending weapon and the
+  bombardment weapon of their `[PerformerComponent]`, which fires only
+  when told to ([Told to use an ability](#told-to-use-an-ability)).
+  [code, data]
+- Units' turrets (tanks and the like) follow the same rule: the turret
+  turns toward the target and the attack starts once it points at it.
+  [code]
+
+## Told to use an ability
+
+A thing can be told to use one named weapon of its `[PerformerComponent]`
+on another thing, once. It's how the Normandy artillery bunkers'
+(`normandy_beach_bunker_artillery01`–`03`) second weapon,
+`AABunkerAttackArtilleryBombard` (range 50, recharge 16, area 3,
+`bombard = true`), could be fired: a building never chooses to use its
+`[PerformerComponent]` weapons itself (only its `[DefenderComponent]`
+weapons fire on their own), so nothing else ever fires it. [code, data]
+
+- Who tells it: only the `Ability` script command, `Ability <name>
+  <ability> <target>`: the thing with that name (the name maps give
+  things, as triggers use them) is to use the ability definition with that
+  id on the thing named `<target>`. The target is always a thing, never a
+  place. [code]
+  - No trigger effect gives it (`ability_used_by_kingdom_...` uses a side's
+    special operation, `actor_performs_command_...` a command; a building
+    refuses `bombard`, [triggers](triggers.md#orders)). [code]
+  - It's a developer's command: it does nothing unless the `DevMode` user
+    setting is on (off by default; the shipped hotkeys toggle it with
+    Ctrl+M), and in a multiplayer match only for a player whose name
+    starts with `%`. [code, data; guess: that `DevMode` starts off]
+  - No shipped AA or Kohan II map, script or interface file gives it, so in
+    shipped play the Normandy bunkers fire only their `[DefenderComponent]`
+    weapon (range 25, recharge 15, not flagged `bombard`). Kohan II has
+    the same command. [code, data]
+- It goes out as an order, like a person's, so every machine in a match
+  carries it out at the same step. It does nothing if either name or the
+  ability id names nothing, or the thing has no `[PerformerComponent]`.
+  [code]
+- The thing is first told to stop, as a trigger's Stop does
+  ([triggers](triggers.md#computer-control)), whatever happens next.
+  [code]
+- Then the use is refused, silently, unless all of these hold right now:
+  [code]
+  - the thing's `[PerformerComponent]` has that ability and may use it
+    (any `required_properties` and experience limits met, as in
+    [Choosing an ability](#choosing-an-ability));
+  - the target matches the ability's `targets` as seen from the thing's
+    side (the bunker's are `+enemy, -air, -mine`, so only an enemy that
+    isn't an aircraft or a mine) and isn't immune to it;
+  - it's within the ability's `range` and outside its `min_range`, edge
+    to edge ([Range and recharge](#range-and-recharge)), and, for a weapon
+    on a turret, within the turret's arc ([Turrets](#turrets); the
+    bunker's arc is 70°);
+  - the side can pay any cost, and the ability is recharged (the bunker's
+    takes 16 seconds after each shot).
+  Nothing moves the thing closer or waits: out of range, out of the arc
+  or still recharging, the command is simply lost.
+- Otherwise it's a single use, exactly as one a unit chooses ([Firing and
+  moving](#firing-and-moving)): a weapon on a turret turns it toward the
+  target first and fires once it points there; one without a turret
+  turns the thing to face the target, if it can move. Then it fires once
+  and recharges. Nothing repeats it: one command, one shot. [code]
+- If the target is gone (destroyed or removed) while the turret is still
+  turning, the turret stops turning and the shot goes off at once. [code]
+- The shot is started as a bombardment when the ability has `bombard =
+  true` in its `[Flags]` (the bunker's has), which decides whether its
+  damage counts as bombardment for supply
+  ([supply](supply.toml#bombardment)); otherwise it's an ordinary shot.
+  [code]
+- Any thing with a `[PerformerComponent]` can be told this way, units
+  included, with any of its weapons. [code; guess: that a unit then goes
+  on choosing its own shots as usual]
+
+## Things in the air
+
+What can hit aircraft in flight, the delivery transport among them, and
+men coming down under parachutes, and what they do about it. How they
+die once killed is under [Dying in the air](#dying-in-the-air).
+
+### What counts as air
+
+- A thing is `air` while it holds the property `aircraft`. Every AA
+  airplane template gives it (fighters, bombers, and the nations'
+  `<nation>_transport_air` delivery planes), and nothing else does.
+  [data]
+- A man under his parachute isn't `air`. His `airborne` stance gives
+  no type at all, since its `air` was taken out of the data. To a
+  filter he is what he is on the ground: an enemy infantryman.
+  [code, data]
+- Height plays no part anywhere in targeting. Range is measured edge
+  to edge on the map's plane as for any target ([Range and
+  recharge](#range-and-recharge)), so a plane at its
+  `operational_height` is in reach as though it stood on the ground
+  under it. Being `flying`, `ethereal` or falling isn't tested by
+  picking targets, engaging, a building's noticing or an operation's
+  area. All of them need only the thing to be targetable, which every
+  unit is. [code, data]
+
+### What can hit a plane
+
+- Any weapon whose `targets` takes `air`. In AA's data those are the
+  anti-aircraft weapons, `targets = +enemy, +air`: [data]
+  - the AA halftrack (`<nation>_halftrack_aa`, `AAAttackAntiAirMG`,
+    range 20), the one anti-aircraft unit. It's the AA member of every
+    `regiment_<nation>_*_aa` regiment;
+  - the AA bunkers (`<nation>_bunker_aa`), the battleships' anti-air
+    guns, and the campaign's Iwo Jima beach AA bunker and HMS York.
+  - Every other stock weapon, the bombers' own bombs included, has
+    `-air`. Nothing on the ground but these can shoot a plane down.
+- A regiment with such a unit notices and engages a plane by the
+  ordinary rules of [Engagement](#engagement). If it's aggressive, the
+  plane coming into its `control_range` zone starts the engagement,
+  provided the plane is within `operational_range` (centre to centre,
+  on the map) and some unit could aim at it. The plane is also
+  engaged when it's the regiment's attack target. Being hit never
+  starts one, since a plane never attacks. [code]
+- So a regiment can engage a plane as its target in its own right, and
+  its AA units pick it as they would a ground target. An unarmed plane
+  is tier 2 ([Picking targets](#picking-targets)), a fresh target for
+  them, below any armed enemy that is also near. Units without an
+  `air` weapon in that regiment have nothing to do with it. The plane
+  drops out of the engagement once it's beyond the regiment's
+  `operational_range`, which a delivery plane flying straight on
+  soon is. [code]
+- A defending building with an `air` weapon notices a plane as it
+  notices anything ([Defending buildings](#defending-buildings)): when
+  the plane comes into its `control_range` zone, and again at each
+  tile it moves onto inside it. The plane is rank 1 there, an unarmed
+  thing that can be destroyed, so any armed enemy in reach comes first.
+  [code]
+- Operations reach a plane in flight like any other thing in their
+  area, if their `targets` take it ([special
+  operations](special-ops.md#what-an-operation-reaches)): [code, data]
+  - of the strikes, only the Atomic Bomb (Carpet Bomb, Kamikaze and
+    V-Weapons have `-AIR`);
+  - enchantments on enemies with no type required (Demoralization,
+    Propaganda War, Smoke Barrage: `+ENEMY -ORGANIZATION -BUILDING`)
+    catch enemy planes. Those on friends with none required catch the
+    user's own: Fighting Spirit, Banzai Charge, Forced March, and
+    Communist Purge, whose `-VEHICLE` doesn't keep a plane out. Each
+    plane caught takes one of the operation's `max_targets` places.
+    Whether it then gets anything is up to each effect's own
+    requirements, as for any thing caught.
+- Nothing else catches a plane. No weapon of a ground unit without
+  `+air` can, and a plane's on-death blast (`-AIR`) spares other
+  planes. [data]
+
+### What can hit a falling man
+
+- Every weapon that would hit him on the ground: any of an enemy
+  unit's or building's weapons whose `targets` take him. That is the
+  stock `+enemy, -air` weapons, in reach as measured on the map. The
+  anti-aircraft weapons (`+enemy, +air`) can't, since he isn't `air`.
+  Operations and their areas catch him as well. [code, data]
+- He belongs to his regiment from the moment he leaves the plane: he's
+  put in his place in its layout as he's made. So an enemy regiment
+  near him engages his regiment through him as through any member, and
+  a hit on him makes his regiment answer fire as for any member
+  ([Engagement](#engagement)). [code]
+- He can't shoot while he falls. Until he touches down a falling unit
+  takes no target its regiment hands it, starts no attack of its own
+  (not even against something hitting him), and sets off on no move.
+  The falling state being of type `busy` has nothing to do with it:
+  that type only changes which commands a building offers, and falling
+  isn't a building's state
+  ([commands](commands.md#a-buildings-state-and-its-commands)).
+  [code, data]
+- An arriving regiment engages and is engaged like any other; nothing
+  in fighting looks at whether it's still coming down. The men down
+  fight. Each man still in the air joins the fight once he lands: the
+  next time his regiment hands targets to members that aren't
+  fighting, about once a second. [code]
+
+### Damage in the air
+
+- A plane or a falling man takes damage as any unit does: its own
+  health, `defense` and resistances
+  ([Damage](#damage)). The stock delivery plane has 500 health and
+  `defense` 0 (the bomber airframe it's built on has 300). A paratrooper
+  has his ground health. [code, data]
+- Neither fights back. A unit turns on what hit it only when it has an
+  ability for that attacker. The delivery plane has no weapon, so it
+  carries on its run, releasing and flying home as if nothing had
+  happened. A falling man can't start an attack (above). [code, data]
+- What dying does to each: [Dying in the air](#dying-in-the-air), and
+  for a transport's cargo, [deliveries](deliveries.md#the-air-transport)
+  (Losing it). [code]
+
+## Death
+
+- A destructible unit or building dies at health 0 or below; one that isn't
+  destructible is disabled instead. [code]
+- On death it fires its on-death ability and its remains stay on the map
+  for a while, rotting for `rot_time` and then sinking for `sink_time`
+  (seconds, from its `[BodyComponent]`), before they are taken off.
+  [code]
+- When that time starts: [code]
+  - a unit with a death animation plays it first (Death animations,
+    below), and the time starts when it ends;
+  - an aircraft, or a thing without a death animation that was falling
+    (a crate still under its parachute), starts it when it reaches the
+    ground; a paratrooper killed in the air, below
+    ([Dying in the air](#dying-in-the-air)) [code];
+  - anything else starts at once.
+- So remains last `rot_time` + `sink_time` after that start, with no
+  cap. Stock values: [data]
+
+  | Thing | `rot_time` | `sink_time` |
+  |---|---|---|
+  | Default (`template_body.tgi`) | 0 | 2 |
+  | AA vehicles (`AAUnitVehicle`) | 10 | 5 |
+  | AA infantry (`AAUnitBiped`) | 5 | 3 |
+  | AA aircraft (`AAUnitAirplane`) | 0 | 1 |
+  | AA ships (`AAUnitSea`) | 5 | 3 |
+  | AA landing craft (`*_transport_water*`) | 13 | 5 |
+  | AA buildings (`AABuilding`) | 10 | 5 |
+  | AA villages and farms | 5 | 3 |
+  | AA minefields | 0 | 1 |
+  | AA `ger_goliath`, `beach_mine_pole` | 0 | 0 |
+  | Kohan II units (`K2BodyComponent`) | 5 | 3 |
+  | Kohan II buildings (`K2Building`) | 1 | 4 (2 for some) |
+  | Kohan II racial bases | 3 | 3 |
+
+- A ship takes `sink_time` like anything else: water depth doesn't
+  change it. (The game appears to mean to stretch a `water_based`
+  thing's sink time by the depth of water under it, but compares the
+  ground's height with itself, so the stretch never happens.) [code]
+- Death animations: [code, data]
+  - Only things with a `[CharacterComponent]` have them: in the shipped
+    data that's units, never buildings, so a building's time always
+    starts at once. An aircraft never plays one.
+  - The candidates are the `[Animation]`s of `type = die` in the
+    animation set for the unit's look (its variation) in the stance it
+    is drawn in when it dies. An AA infantryman's kneel or prone
+    stance ends as he dies, at once if he's idling or moving (so the
+    standing set), otherwise only as the death animation starts, which
+    is then chosen from the kneel or prone set but played as its
+    standing namesake: [stances](stances.md#moving-firing-and-changing-stance).
+    The stance drawn is the one shown: a man told to kneel who is still
+    finishing an animation standing dies from the standing set. A
+    stance with no set of its own uses the look's last listed set.
+    [code, data]
+  - AA's kneel and prone sets have `die` animations only for gunfire
+    (`damage_filter = 0`: kneeling two, at threshold 0; prone four at 0
+    and one at 80), and the paratroopers' falling set has two for any
+    damage (−1). The standing set covers gunfire, flame, explosive and
+    bleeding. [data] Each names a
+    `damage_filter` (−1 for any) and a `damage_threshold` (0 by default).
+  - What they're matched against is the last hit the unit took from an
+    enemy, whenever that was, not necessarily the killing one: its damage
+    type's `damage_filter` (`Game/damage_types.tgi`: `gunfire` 0, `flame`
+    1, `explosive` and `armor_piercing` 2) and its damage after the
+    unit's resistance. A unit no enemy ever hit counts as filter 666 with
+    damage 0 (the data's "death by bleeding"). Hits from its own side or
+    friends aren't remembered.
+  - With one `die` animation, it plays if its filter fits (−1 or the
+    same); its threshold isn't looked at.
+  - With several: of those whose filter fits and whose threshold is at
+    most the damage, the ones with the highest threshold are kept, and
+    one of them is picked at random in proportion to its `weight` (1 by
+    default), using the match's shared random numbers so every machine
+    picks the same.
+  - With none that fits in that set, there's no death animation (no
+    other set is tried, the standing one included) and the time starts
+    at once. So in AA a kneeling or prone man killed mid-shot by flame,
+    explosive or armour-piercing fire, or one no enemy ever hit, has no
+    death animation and stays kneeling or prone; one killed so while
+    idling or moving has already stood and dies from the standing set.
+    His body stays in the pose it was in. [code, data; guess for the
+    pose]
+  - Its length is the `[Animation]`'s `length` in seconds (1 when the
+    data leaves it out), not the animation file's own length.
+- A thing with no `[BodyComponent]` (a regiment, an area) leaves the map
+  the moment it dies. [code]
+- What remains look like: [code, data]
+  - Rotting: it stays where it died, as its death animation left it (a
+    unit) or as it stood (a building). A thing whose template lists
+    `StanceDeath` (AA's vehicles, ships, bunkers and packable buildings)
+    is drawn with its death model (`…Death.nif`) from the moment it dies
+    ([stances](stances.md#look)); anything else keeps its model.
+    No fade or tint goes with dying. [code, guess]
+  - Sinking: the model moves straight down at an even rate, from 0 at
+    the start of `sink_time` to its full depth at the end, and is taken
+    off then, so it's just under when it goes. It never fades. The
+    sinking follows the drawn clock, so it's smooth between ticks.
+  - The depth is the thing's own size: for a thing whose blocking shape
+    is a square or a rectangle (buildings), the height of the top of its
+    model; for anything else (units, with a circle), the diagonal of its
+    aspect's `ground_size` when that's set, otherwise a size taken from
+    its model [code, guess]. AA's stock units leave `ground_size` unset
+    except for three, at 0.2 × 0.2.
+  - The model sinks from where it's drawn standing: the ground, or the
+    water's surface for one drawn on it, so a ship goes down below the
+    surface by its own depth, not to the bed. [code, guess]
+  - Buildings: the same rot then sink, from the moment they're
+    destroyed. Those with a death stance swap to their death model
+    (above); the collapse is the `WhenDestroyed` effect of
+    [effects](effects.md), played over it.
+  - Aircraft fall to the ground first ([Dying in the air](#dying-in-the-air)),
+    then sink over their 1 second.
+  - A building some side remembers under the fog (Leaving the map,
+    below) keeps its picture as that side last saw it, still drawn
+    there after the building itself is gone, until that side sees the
+    spot again. [code]
+- How fast: a thing dies in the part of the tick its health reached 0,
+  and one that is to leave the map goes at the end of that part. The
+  simulation's step is one part and the trigger pass another, so a thing
+  killed in the simulation has died, and a bodiless one has gone, before
+  the triggers of that tick are tested. [code]
+
+### Dying in the air
+
+An aircraft shot down: [code, data]
+
+- It drops out of its flight at once: it stops following its flight
+  path and its mind no longer steers it. It carries on from where it
+  was, along the way it was heading, at the speed it was flying at
+  that moment (its current speed, which may be below `speed_max`, as on
+  a delivery run's slow last stretch, [deliveries](deliveries.md)).
+- Its speed along the ground never changes: no drag, no turning. Its
+  sinking speed grows every simulation tick of length t by
+  `PlaneFallGravityTweak` × s × |`Gravity`| × t, where s is its whole
+  speed (along the ground and down together) at that tick and
+  `PlaneFallGravityTweak` is a game variable, 0.005 when the data
+  doesn't set it (AA's stock data doesn't). With `Gravity` at
+  −49.05 that's a downward pull of about 0.245 × s a second, so a
+  faster plane goes down faster and the dive steepens as it goes. It
+  starts from its flight's own slope, level for a plane cruising at
+  its height [guess], so there's no sudden drop.
+- It turns its nose along its path as it goes: it faces the way it's
+  moving, pitching further down as the dive steepens. It doesn't roll,
+  spin or tumble, and plays no death animation: aircraft never do.
+- It comes down when its height reaches the ground's height under it
+  plus its `taxi_height` (1 for AA's stock fighters and bombers), and
+  stops dead there. The ground is the terrain itself, not the water's
+  surface: one coming down over water goes on below the surface to the
+  bed and comes to rest there. Nothing in its fall treats water
+  differently. [code; guess for how it looks]
+- With the stock values (level at `operational_height` above flat
+  ground, 15 for fighters and 17 for bombers): a fighter at its
+  `speed_max` of 11 is down in about 3 seconds, having gone on about 33
+  along the ground and diving at about 40° at the end; a bomber at 7 in
+  about 4 seconds, about 29 on, at about 50°. [code, data; worked from
+  the rules]
+- On impact: its remains' time starts (`rot_time` 0, `sink_time` 1 for
+  AA's aircraft), and its on-death ability fires there, not where it
+  was hit: AA's fighters and bombers set off a blast of 80 and 150
+  within 5 (`targets = +ACTOR -ORGANIZATION -AIR -MINE`, so it hurts
+  ground things, never other aircraft) at the crash site. Its effects
+  follow the same timing: AA's `plane_disable` effect is for health
+  reaching 0, so it starts as it's hit, and its `plane_death` effect is
+  for leaving the `falling` state, so it plays on impact
+  ([effects](effects.md)). [code, data]
+- While it falls it's dead: it can't be picked as a target or attacked
+  ([Choosing an ability](#choosing-an-ability)), doesn't keep its side
+  alive ([outcome](outcome.md)), and doesn't block (aircraft never do:
+  `blocking = false`). It's still on the map, dying, until its remains
+  are taken off ([Leaving the map](#leaving-the-map)), and is drawn
+  the whole way down. [code, data]
+
+A paratrooper (or any unit with a character) killed while still
+falling under its parachute: [code, data]
+
+- It goes on falling just as before: same line, same rate, same facing
+  ([deliveries](deliveries.md)). Dying doesn't stop or speed up the
+  fall.
+- Its death animation starts at once, in the air, chosen from the
+  falling stance's set (Death animations, above): AA's paratroopers'
+  falling set has two `die` animations for any damage, both leaving
+  `length` unset, so 1 second. Its remains' time starts when the
+  animation ends, usually still in the air, and starts over from the
+  beginning when it lands. So it's at least `rot_time` + `sink_time`
+  from touchdown before it's taken off; it could only go in the air if
+  those were shorter than the rest of its fall, which AA's infantry
+  (5 + 3) never are. Its on-death ability, if it had one, fires at each
+  of those two starts; AA's infantry have none.
+- Landing dead, it doesn't play its `SUMMON` (landing) animation or
+  take up its place in the regiment. [code] It still leaves the
+  `falling` state, so effects for that, such as the closing parachute,
+  play as for a living man [guess].
+
+## Leaving the map
+
+What it means for a thing to be gone, for those rules that ask (a
+trigger naming a thing by its id, say: [triggers](triggers.md#parameter-values)).
+A dead or dying thing is still on the map, and still the same thing,
+until it's taken off. [code]
+
+- A unit that dies: on the map, dying, until its remains are taken off
+  (Death, above), whether it was in a regiment or alone, and whatever it
+  was. [code]
+- A regiment whose last unit has died: it dies straight after that unit
+  and, having no body, leaves the map at once (in the same part of the
+  tick), while its last unit's remains are still lying there. [code]
+- A destroyed building: its remains go after `rot_time` + `sink_time`
+  like a unit's; nothing is left behind in its place. A building that
+  isn't destructible (a city) is disabled instead and stays, the same
+  thing, for the rest of the match. [code, data]
+- A building that some side still remembers under the fog (a picture of
+  it as last seen, [fog](fog.md#what-shows-under-each-state)) is off the map once taken off but
+  still counts as existing, so it can still be named by id, until no
+  side remembers it any more: until each side that remembered it has
+  seen the spot again. Units are never remembered. [code]
+- Things that leave without dying, all at once (at the end of the part
+  of the tick they were told to leave in): [code]
+  - a disbanded regiment, and all its units with it; a disbanded lone
+    unit ([buildings](buildings.md#disbanding-and-selling));
+  - a building sold;
+  - a captain a hero replaces, and a hero detached from its company
+    (Kohan II, [companies](companies.md));
+  - a transport that has delivered, on reaching the place it leaves from
+    ([deliveries](deliveries.md));
+  - a thing that has gone into another (a unit entering the building
+    it's returning to, say).
+- Packing, unpacking and a building's upgrade don't end the thing as far
+  as ids and names go: the new thing (the building, the truck, the
+  upgraded building) takes over the old one's id, and the name it was
+  known by, the moment it's made; the old thing leaves at once. So an id
+  that named a truck names the building it unpacked into. [code]
+- Regiments never board a transport in play: transports only deliver.
+  [code, guess]
+
+## Engagement
+
+A regiment engages when an enemy shows up near it, and fights until it runs
+out of targets. An engagement interrupts whatever the regiment was doing,
+which resumes once the fight is over. [code]
+
+- What starts one: [code]
+  - being hit by an enemy within its `operational_range` (34 for all ground
+    regiments), unless it's retreating or routing; it answers fire whether
+    or not it's aggressive, but not a hit from a bombardment or a
+    commander's ability;
+  - an enemy coming within its `control_range` (18), if the regiment is
+    aggressive or that enemy is its attack target;
+  - a moving unit running into an enemy it can attack, if aggressive.
+- What can be engaged: an enemy that is alive and that at least one of
+  the regiment's units has an ability for, in the sense Picking targets
+  (above) gives: `targets` matching, not inside `min_range`, within a
+  turret's arc. What kind of thing it is plays no part: unarmed things,
+  and things no unit would pick as a fresh target (tier 1), are engaged
+  like any other. An enemy that none of its units can attack starts
+  nothing, even when it comes within `control_range` of an aggressive
+  regiment. [code]
+  - So a regiment never stands engaged with something none of its units
+    can attack: the regiment hands it to its units (Picking targets), and
+    those with an ability for it attack it. [code]
+- How those distances are measured: [code]
+  - `operational_range` is centre to centre: from the regiment's position
+    to the other thing's position, and strictly less than the range. No
+    shape or radius comes into it. For an enemy regiment, it's enough that
+    the regiment itself or any one of its units with it is that close.
+  - `control_range` is the radius of a zone around the regiment's position
+    ([objects](objects.md), Zones): the enemy has come within it when it
+    comes into that zone, and it must be within `operational_range` as
+    well.
+  - Running into an enemy is the unit's own next step being blocked by
+    that enemy, as it would be by any obstacle: blocking shape against
+    blocking shape, as real shapes. [guess]
+- Joining in: an enemy attacking a regiment that's already engaged is added
+  to the fight. [code]
+- While engaged a regiment stops at its centre, takes up its combat
+  formation and faces the enemy; units close in on their own targets.
+  [code]
+- Targets drop out when dead, no longer enemies or beyond
+  `operational_range` (centre to centre, as above). Going into fog doesn't
+  drop one: engaging and attacking don't depend on sight
+  ([fog](fog.md)). [code] What else drops one is open.
+- Run (retreat) ends every engagement and starts none until the regiment
+  arrives. Running while engaged costs `MoraleRetreatPenalty` morale, 0
+  in AA ([morale](morale.md)). [code, data]
+- Aggressiveness comes from the formation: aggressive and defensive
+  formations are aggressive, column isn't. An attack order makes the
+  regiment aggressive and puts it in its combat formation for the whole
+  move; a plain move keeps the player's formation and its aggressiveness.
+  [code]
+
+## Engaged and under siege
+
+Two states show that a regiment or unit is in a fight. Either makes the
+minimap blink it red for its owner ([supply](supply.toml), the minimap). A
+third, targeted, shows that a regiment is being fought without fighting
+back; the minimap doesn't show it.
+
+- Engaged (state "Engaged"), on the regiment as a whole: from when it
+  engages (Engagement, above) until the engagement ends, that is for
+  exactly as long as the engagement is what the regiment is doing. An
+  attack order's approach isn't engaged; the regiment becomes engaged
+  once it reaches the target and engages it. Chasing, bombarding,
+  moving and standing aren't engaged. [code]
+- Engaged, on a unit: while the unit itself is attacking a target of its
+  own, in an engagement or carrying out an attack, and not while it moves
+  to its place, stands or bombards. [code] So a regiment's units can be
+  engaged at different moments from the regiment, and a unit standing
+  alone can be engaged too.
+- Under siege, on a unit: while an enemy has damaged it within the last
+  `UnderSiegeRecentlyDamagedSeconds` (7 in AA), by the same damage rule
+  as for buildings ([buildings](buildings.md), Under siege). A unit
+  checks once a second, so the state ends 7 to 8 seconds after its last
+  enemy hit, or at once when it dies. A regiment as a whole is never
+  under siege; only its units are. [code]
+- Neither state comes from seeing an enemy: a regiment that has merely
+  spotted enemies, or once fought them, isn't in either. [code]
+- Targeted (state `targeted`), on the regiment as a whole: while another
+  regiment is engaging it and it isn't engaged itself. It's checked once
+  a second and whenever the regiment's activity changes, and ends at the
+  next check after the last enemy stops. In AA it slows the regiment
+  ([movement](movement.md#a-units-top-speed)). [code, data] Kohan II
+  keeps a company's targeted state for `TargetedStateTimer` seconds (1
+  in `SVars_k2.tgi`) after the last enemy stops; AA has no such setting
+  or delay. What the state changes for a Kohan II company isn't traced.
+  [code, data]
+- Infantry kneel or go prone while they are both engaged and under
+  siege (either alone isn't enough), which slows them: when and how,
+  [stances](stances.md). [code, data]
+
+## Attack orders
+
+- Attacking a unit or building: the regiment moves toward the target in its
+  current formation, re-pathing whenever the target has drifted more than
+  about 38% (sin 22.5°) of the remaining distance. Once its centre is within
+  `CAITargetInRangeZOCMultiplier` (0.6) times `control_range` of the
+  target's centre (10.8 for ground regiments; the boundary counts) and the
+  target is inside the regiment's control zone ([objects](objects.md),
+  Zones), it engages that target. Buildings are measured the same way, to
+  their centre. [code]
+- A move order onto an enemy it can attack becomes an attack order.
+  (A regiment that bombards instead of attacking makes it a bombard
+  order, [Bombard orders](#bombard-orders); AA has none.) [code, data]
+- The target stays the top-tier target for every unit in the regiment, even
+  while other engagements interrupt the attack. When those end the regiment
+  heads for the target again. [code]
+- If the target slips out of the fight but stays within
+  `operational_range`, the regiment chases it (Chasing, below). [code]
+- No distance makes it give up, and neither does losing sight of the
+  target. It stops when the target dies or stops being
+  an enemy, or when it can't reach it (path failure, or it arrives and still
+  isn't in range); then it stands where it is. [code]
+- Attacking a target inside an enemy city turns into a siege. [code] How a
+  siege plays is open.
+- Attacking the ground: every selected regiment goes to the same clicked
+  point (a move spreads them out around it), in combat formation and
+  aggressive. It engages enemies that come within `control_range`, fire on
+  it or bump into its units, resumes the move after each fight, and stands
+  when it arrives. [code]
+
+### Chasing
+
+A chase is the part of an attack order in which the regiment runs after
+its target, out of formation, when the target pulls back out of reach.
+[code, data]
+
+- Only the regiment's attack target is chased: the unit, building or
+  regiment it was ordered to attack ([Picking targets](#picking-targets),
+  tier 6). Other enemies it was fighting are never chased, so a regiment
+  fighting only what came at it (standing, on a plain move, guarding or
+  on an attack-ground) never chases; when those enemies get away its
+  engagement simply ends. [code]
+- When it starts: while the regiment is engaged, it checks about once a
+  second whether its attack target, or the regiment that target belongs
+  to, is still within `operational_range` (centre to centre, as for
+  [Engagement](#engagement)) but no longer inside the regiment's control
+  zone (`control_range`). If so, it breaks off the whole engagement and
+  chases, even if other enemies were still in the fight. It also chases
+  when the engagement runs out of targets with the attack target in
+  that position. [code]
+- How it moves: [code, data]
+  - It heads for where the target is at the moment, not along the
+    target's track, and goes on driving towards it like the approach of
+    the attack order: about once a second it checks again, and re-aims
+    at the target's new position whenever the target has drifted more
+    than about 38% (sin 22.5°) of the distance still to go.
+  - It has no formation. Each unit keeps the place it held relative to
+    the leader at the moment the chase began, an offset on the map that
+    doesn't turn with the leader's heading, and follows that place as
+    the leader drives (the same as a routing regiment,
+    [morale](morale.md#routing)). Since the chase starts out of a fight,
+    those places are wherever the men stood fighting, not their slots.
+  - Speed: no formation means the layout's Broken Formation property
+    (`speed_max` +0.25, [movement](movement.md#a-units-top-speed))
+    instead of the Assault formation's −0.25 the approach had, and the
+    regiment is no longer engaged, so it loses `actor_state_engaged`'s
+    +0.25. It goes at its slowest member's top speed as usual, so a
+    chase runs two thirds faster than the approach of the same order
+    (1.25 against 0.75 of `speed_max`), stances and other modifiers
+    aside.
+- Its units don't fire while it chases: [code]
+  - On breaking off, every unit drops the target it was fighting and
+    takes its place in the moving regiment; none is handed a target, and
+    none picks one, the chased target included.
+  - The regiment is aggressive, so a unit whose next step runs into an
+    enemy it can attack starts a fight, and an enemy coming into its
+    control zone, or one hitting it from within `operational_range`,
+    draws the regiment into a new engagement (Engagement, above). Any
+    of these ends the chase: the engagement takes its place, and the
+    attack order goes on underneath it as usual.
+- What the regiment shows: state line "Chasing" (`mind_chasing`,
+  property `actor_state_chasing`). Its attack efficiency eases towards
+  full strength, 1, since `actor_state_chasing` sets the actual value
+  and the Broken Formation property's 0.5 doesn't count ([Attack
+  efficiency](#attack-efficiency)). The state's property gives no
+  target types and no other modifier. It neither resupplies nor regains
+  morale while chasing ([supply](supply.toml)). It isn't engaged, so it
+  isn't shown as engaged and doesn't blink on the minimap; for enemies
+  picking targets it counts as aggressive. [code, data]
+- When it ends: at its once-a-second check, when the target is dead, no
+  longer an enemy, or no longer within `operational_range`, or has come
+  back inside the regiment's control zone. Then: [code]
+  - the attack order simply carries on: the regiment takes up the
+    formation its attack order moves in, aggressive, and keeps heading for the target, engaging it when it's within the
+    order's reach (0.6 × `control_range`, above). So an enemy that
+    outruns `operational_range` is still followed: the attack order
+    has no give-up distance, only the chase does;
+  - if the target died or stopped being an enemy, the attack order ends
+    and the regiment stands where it is, like any finished attack (or
+    takes its next queued order);
+  - it never goes back to where the fight began.
+
+## Bombard orders
+
+Bombard (command `bombard`) has a regiment shell a thing or a place with
+its long-range weapons, from where its units stand or as close as they
+need to get. [code]
+
+### Who can bombard
+
+- A unit can when one of its abilities that it can use now (its
+  `required_properties` and experience range allow it) is flagged
+  `bombard`: mortars, self-propelled and halftrack artillery, rocket
+  trucks and battleships in AA. A unit whose only abilities are
+  bombarding ones has no Attack. [code, data]
+- A regiment has Bombard when any of its units can bombard. [code]
+- A regiment with a bombarding unit in one of its layout's `locked`
+  slots instead turns Attack orders, and Move orders onto an enemy it
+  can attack, into bombard orders, and has no Bombard button of its own
+  while it has Attack. No shipped AA regiment has one: artillery sits in
+  the open `support` slots, so in AA Attack stays Attack and an
+  artillery regiment has both buttons. [code, data; guess: which unit
+  fills which slot]
+
+### Taking the order
+
+- On a thing, it's taken when at least one of the regiment's units has a
+  bombarding ability whose `targets` match the thing, which turns far
+  enough to bear on it (turret arc), and the thing is alive. Distance
+  doesn't count, except for a regiment that can't move (unpacked) or a
+  unit that can't: then the thing must already be in range. A thing in
+  fog is taken. [code]
+- On a place, it's taken when some unit's bombarding ability can be
+  aimed at the ground (it has an `area`, a `volley_area`, or targets a
+  location), under the same arc and distance rules. [code]
+- A regiment that refuses it carries on as it was; nothing is posted,
+  apart from a person's click on a place none of the selection can
+  bombard ([commands](commands.md#targeted-commands)). [code]
+- Giving the same thing or place again changes nothing. [code]
+- A bombard order on a thing remembers where the thing was when it was
+  given; that spot isn't updated afterwards. [code]
+
+### Carrying it out
+
+- The regiment itself doesn't move. About once a second it orders each
+  of its units that can bombard to bombard the target; each unit that
+  can't is sent once, at the start, to its place in the formation, and
+  then stands. [code]
+- Each bombarding unit, when the target is beyond its reach, drives
+  towards it, to the spot the order remembered, or the place, and fires
+  once it's in reach. A unit that can't move and is out of reach gives
+  the order up. [code]
+- Reach, for this driving, is a test of its own, not the edge-to-edge
+  range of [Range and recharge](#range-and-recharge): [code]
+  - it's centre to centre, from the unit's position to the thing's
+    position or to the place, and the unit is in reach when that
+    distance is strictly less than the range;
+  - the range is each usable bombarding ability's `range` plus the
+    unit's `PROJECTILE_ABILITY_RANGE` modifiers when the ability fires a
+    projectile, and its `BOMBARD_ABILITY_RANGE` ones (every bombarding
+    ability is a `BOMBARD` one), as for [Combat value](#combat-value).
+    The unit is in reach if any one of them reaches;
+  - nothing is added for a thing. The game has a term for it, an
+    ability slot's `fuzzy_range` (3 in four of the stock ability
+    templates) times a factor, but nothing ever sets that factor above
+    its starting 0, so it adds nothing, here or in the shot's own test.
+    [code, data; guess: that no other code sets the factor]
+- Once in reach the unit stops and fires as any ability is fired, so the
+  shot itself goes through the edge-to-edge test of Range and recharge.
+  The gap between two shapes is never more than the distance between
+  their centres, so a unit the centre-to-centre test has let fire is
+  always within the shot's range, and the shot is never held back for
+  range. [code]
+- A unit that arrives at the remembered spot with the target still out
+  of reach stops there; the regiment's next order a second later sends
+  it on again. [code, guess]
+- In reach it stops and fires only its bombarding abilities
+  ([choosing an ability](#choosing-an-ability)). At a regiment it fires at
+  whichever of the regiment's things is nearest to it; at a place, at
+  the point. Each hit is a bombardment hit
+  ([supply](supply.toml#bombardment)). [code]
+- While bombarding, the regiment reads "Bombarding" (`mind_bombard`;
+  "moving" while its units drive). It takes up its combat formation and
+  is aggressive, so it engages enemies that come within `control_range`
+  and answers fire as under [Engagement](#engagement); when the fight
+  ends it goes back to bombarding. [code, data; guess: that the state's
+  formation and aggressiveness apply as for an attack order]
+- Several regiments ordered together all get the same point (no spread,
+  as for an attack on the ground). [data]
+
+### When it stops
+
+- On a thing, it ends when: [code]
+  - the thing dies or can no longer be bombarded by any of the units;
+  - the thing is one that moves and the regiment's side can't see it any
+    more: the regiment posts "%s lost bombard target in fog"
+    (`bombard_target_lost_in_fog`, %s the regiment's name) to its side
+    and stops. A unit bombarding on its own, outside any regiment, posts
+    the same; a regiment's units don't;
+  - the thing is gone from the world and the remembered spot is in
+    sight (or fog is off).
+- A thing that doesn't move (a building) and is out of sight, or a thing
+  gone from the world whose remembered spot is out of sight, isn't
+  given up: the regiment shells the remembered spot as a place until
+  the spot is seen again. [code]
+- On a place, it never ends by itself: it goes on until another order.
+  [code]
+- It also ends when the units can't find a way (without a message).
+  [code]
+- Afterwards the regiment takes its next queued order, if any, or stands
+  where it is. Its units aren't told to stop: one already firing at a
+  place goes on until something gives it a new order. [code; guess: the
+  units]
+
+## Guard orders
+
+Guard (command `guard`) posts a regiment at a place or beside a thing. At
+a place it's a move that the regiment comes back to after every fight;
+beside a thing it also goes after whoever is fighting that thing.
+
+- The order takes either a point on the ground or a thing. Carrying it
+  out replaces whatever the regiment was doing (unless queued, like any
+  order). The regiment's side of the order turns down only one target:
+  the regiment itself. It doesn't look at who owns the thing, whether it's
+  an enemy, or what kind of thing it is. [code] What the player's click
+  lets through is open.
+- Giving the same guard order again (same thing, or same point while
+  already guarding a point) changes nothing. [code]
+
+### Who can guard
+
+- A regiment is offered Guard exactly when it's offered Move: at least one
+  of its members can move (isn't a fixed thing), and the regiment isn't
+  unpacked, unpacking or packing. A regiment that's routing or Exhausted
+  is offered neither ([morale](morale.md#the-players-orders)). [code]
+- Nothing else narrows it: infantry, armour, artillery, HQ trucks, ships
+  and anything else that is a regiment and can move all guard the same
+  way, and nothing in the order treats an HQ, or a regiment attached to
+  one, differently, either as the guard or as the thing guarded. [code]
+- A unit that isn't in a regiment has no Guard. With several things
+  selected the button shows only if every one of them has it. [code]
+
+### Guarding a place
+
+- The regiment moves to the point as a plain move would: in the player's
+  formation, with that formation's aggressiveness, at full speed, and
+  showing as moving. Several regiments ordered together keep their
+  places relative to one another around the point, as for a move (not all
+  onto the one point, as for an attack on the ground). [code, data]
+- If the order carries a facing the regiment turns to it on arrival.
+  [code] Whether the player can give one is open.
+- Once there it rests in the Guarding state (below) and stays. It does
+  nothing of its own to look for enemies: fights start only by the
+  ordinary engagement rules (Engagement), which the Guarding state makes
+  more eager. [code]
+- After each engagement ends the regiment walks back to its post (as a
+  plain move again) and rests there. However far the fight took it, it
+  comes back; nothing measures a distance from the post, so there is no
+  leash that breaks a fight off. [code]
+- If it can't find a way to the post it rests where it stands, still
+  guarding; it tries for the post again after its next fight. [code]
+
+### Guarding a thing
+
+- The post is a point beside the thing: from the thing's centre, the
+  thing's radius plus half the regiment's own `control_range` (9 for a
+  ground regiment's 18), out along the order's facing if it has one,
+  otherwise along the line from the thing toward the regiment (so each
+  guard stops on the side it came from, and several ring the thing).
+  Resting there, the regiment faces along that line, away from the thing.
+  [code]
+- The post is worked out again each time the regiment thinks while it has
+  nobody to fight. When it has moved (the thing moved), the regiment
+  sets off for the new post: it follows the thing, staying that distance
+  from it. [code] How often it thinks is open.
+- Whom it fights, looked at each time it thinks: [code]
+  - the regiments that are engaging the guarded thing right now;
+  - if there are none, whatever the guarded thing is itself engaged with
+    (its first target);
+  - for a guarded building that sends out its own defenders (the
+    airfields), the intruders that building has noticed instead.
+- Of those it takes the nearest to itself, centre to centre. The one it's
+  already fighting counts as `GuardOldTargetBias` (3) nearer than it is,
+  so it doesn't flit between two at much the same distance. [code, data]
+- A regiment that can shell the intruder bombards it; any other attacks
+  it as under an attack order (Attack orders): it closes in, and once in
+  range it engages. While closing in it shows as attacking, so it's in
+  combat formation and aggressive. [code]
+- It breaks off as soon as the one it's after is no longer on the list
+  (it stopped engaging the guarded thing, and isn't what the guarded
+  thing is fighting), or is dead or can't be attacked: within 0.6 seconds
+  it picks again, or heads back to its post. Once it has engaged, though,
+  the engagement runs by its own rules until it ends, and only then does
+  the regiment pick again or return. [code]
+- Merely coming near the guarded thing isn't enough: an enemy that hasn't
+  engaged it, and that it hasn't engaged, is left alone unless it sets
+  off the guard's own engagement rules. No range is measured from the
+  guarded thing or from the post. [code]
+- The data's `guard_range` and `guard_operational_range` play no part in
+  this order. They belong to buildings that send out defenders, and only
+  the airfields set them (30 and 48). [code, data]
+- The guard goes on while the thing exists and is alive, whoever owns it:
+  a change of owner doesn't end it. [code] What becomes of it when the
+  thing is packed, unpacked or loaded into a transport is open.
+
+### The Guarding state
+
+A guard shows as Guarding (state `mind_guarding`, "Guarding") only while
+it rests at its post. On the way there or back it shows as moving, and
+while going for an intruder as attacking or bombarding. Resting at the
+post differs from an idle regiment's resting (`mind_resting`) so:
+[code, data]
+
+- it stands in its combat formation, not the formation the player chose;
+- it's aggressive whatever its formation, so enemies coming within its
+  `control_range` start an engagement even if the player's formation is
+  column;
+- its `control_range` is a quarter larger (property
+  `actor_state_guarding`: 22.5 for 18), so it notices them from further
+  off; the property's icon ("Guarding") shows among the regiment's
+  properties;
+- it doesn't have resting's `actor_state_resting` property;
+- like resting it's `entrenchable` (a regiment resting or guarding long
+  enough entrenches, [stances](stances.md#regiments-and-entrenchment)),
+  resupplies and regains morale ([supply](supply.toml)).
+
+Compared with the other orders:
+
+- A plain move ends on arrival and the regiment then just rests; a fight
+  on the way interrupts it and it resumes. A guard never ends by
+  arriving, and is back at its post after every fight.
+- An attack order ends when its target is gone. A guard's attacks on
+  intruders are part of the guard and end without ending it.
+- An idle regiment stays wherever its last fight left it.
+
+### What ends it
+
+- Any new order that isn't queued behind it, Stop and Run included.
+  [code] A rout is assumed to end it too. [guess]
+- For a guard on a thing: the thing dying or ceasing to exist. The
+  regiment then takes its next queued order, or else rests where it is.
+  [code]
+- Nothing else: a place is guarded until the regiment is told otherwise,
+  and no fight, failed path or lost intruder ends the guard. It doesn't
+  come back by itself once ended. [code]
+
+## Combat value
+
+A single number for how strong a thing is in a fight, worked out from its
+weapons, health, defense and speed. Experience ([special
+operations](special-ops.md#earning-experience)), morale won by a kill
+([morale](morale.md)) and a city occupant's weight
+([buildings](buildings.md)) compare it; the computer players use it to
+weigh forces. Nothing in damage or targeting reads it. [code]
+
+- Values are measured against the average unit. When the data loads, the
+  game takes every template that has health, can move and has at least
+  one ability (heroes aside): aircraft, ships and units only an operation
+  summons count; regiments and projectiles have no health of their own
+  and don't. It works out trimmed means: the mean base damage of their
+  attacks (mean attack: every ability with base damage is its own entry
+  in the list, so a template with two such attacks gives two;
+  `ignore_for_cv` ones included), and over the templates themselves,
+  whether or not any ability does damage, their mean defense, mean top
+  speed and mean maximum health. An ability's base damage is the
+  `amount` of its `MAIN_DAMAGE` effect; an ability can have only one, and
+  `ADD_DAMAGE` effects don't count. Each list is sorted and the lowest
+  and highest
+  `CombatValueMeanValuesDiscardPercent` (0.2, rounded down to whole
+  templates) dropped before averaging. From these, mean offense = mean
+  attack − mean defense, and mean lifetime = mean health ÷ mean offense.
+  [code, data] The means aren't stored anywhere: they come from whatever
+  templates are loaded.
+- Each of a thing's abilities has a value, using the thing's current
+  damage, range, attack timing, defense, health and speed (so modifiers
+  count): [code, data]
+  - offense = max(damage − mean defense, `CombatDamageMinimum`) ÷ cycle ×
+    range ^ `CombatValueRangePower` (0.15) × (1 + `area` ÷ 2) ^
+    `CombatValueAreaPower` (1); 0 for an ability with no base damage.
+    The cycle is the longer of the attack's animation length plus
+    `reload_time`, and its `recharge_time`.
+  - range is the ability's `range` plus the `PROJECTILE_ABILITY_RANGE`
+    modifiers on the thing when the ability fires a projectile, and the
+    `BOMBARD_ABILITY_RANGE` ones when it's a `BOMBARD` ability; nothing
+    else lengthens it here. An ability with range 0 has offense 0, as
+    one with no base damage does.
+  - The animation length is the `length` of the `[Animation]` that the
+    ability's `animation1` names among the unit's character animations
+    (its `CharacterComponent`; the stance sets of
+    `template_aspect_animation_set_aa.tgi` must give it the same
+    length): the length the data asks for, not the `.kf` file's own.
+    Unset, it's 1 for an `AttackAnimation` and 1.5 for a
+    `ProjectileAttackAnimation`;
+    the stock overrides are 1.5 for machine-gunners and 3 for mortars and
+    rocket launchers. A thing with no character animations (vehicles,
+    aircraft, ships, buildings) has a length of 0. [code, data]
+  - In AA's data `recharge_time` is the longer for every attack: every
+    attack's `reload_time` is 0, and each unit's recharge outlasts its
+    attack animation (rifles 3, submachine guns and machine guns 2,
+    mortars 9, rocket launchers 6). [data]
+  - offense factor = mean offense + (offense − mean offense) ×
+    `CombatValueOffenseWeight` (0.5).
+  - lifetime ratio = (maximum health ÷ (mean attack − the thing's
+    defense)) ÷ mean lifetime; 0 with no health. Defense factor = 1 +
+    (lifetime ratio − 1) × weight. The weight is
+    `CombatValueDefenseWeightRanged` (0.25) when the ability's range is
+    at least `CombatValueRangedMinimum` (12) and the ratio is below 1,
+    and `CombatValueDefenseWeight` (0.5) otherwise.
+  - movement factor = 1 + (top speed ÷ mean speed − 1) ×
+    `CombatValueMovementWeight` (0.2), or `CombatValueMovementDefault`
+    (1) if that comes out at or below 0. A thing that can't move gets
+    0.8.
+  - value = defense factor × offense factor × movement factor, plus the
+    `performer_cv_bias` of its properties and its own `cv_bias` (0
+    throughout AA's data).
+  The constants are in `Game/SVars.tgi`. [data]
+- A thing's combat value is the largest of its abilities' values,
+  counting the weapons of its `[DefenderComponent]` as well as its own,
+  and never below 0. Abilities marked `ignore_for_cv`, and ones it can't
+  use at the moment (their `required_properties` unmet), don't count. A
+  thing with no abilities is worth 0. [code]
+- It's worked out when the thing appears and again whenever it gains or
+  loses a property: an experience level, a technology or an enchantment
+  that changes its damage, range, defense or health changes it. Taking
+  damage doesn't. [code]
+- A template's value, for a slot with nobody in it, is the same formula
+  on the template's own figures with no modifiers. [code]
+- A regiment has two values: [code]
+  - its current value, the sum over its present members of each one's
+    value times its health fraction (a city occupant's weight);
+  - its full value, the sum of its present members' values at full
+    health plus, for each empty slot, the value of the template that slot
+    holds (what experience compares).
+
+## Open questions
+
+- What else ends an engagement, besides the target dying, changing side or
+  leaving `operational_range`? (analysis, 2026-11-08)
+- An engaged target that can't be destroyed is disabled at 0 health
+  (Death): do units go on attacking it, and does the regiment stay
+  engaged with it while it's within `operational_range`? (analysis,
+  2026-11-18)
+- When a regiment is engaged with several targets, which one does it hand
+  to its units? (analysis, 2026-11-18)
+- How does a siege play out? (analysis, 2026-11-08)
+- How often does a defending building check its targets: every frame, or
+  on a slower beat? Each check turns a turret by one simulation step's
+  worth, so a slower beat would turn it slower than its rate.
+  (analysis, 2026-11-08)
+- Do the turrets' shots visibly come from the spot the offsets give
+  (first number along the facing), or do the shipped offsets read the
+  other way in the game? Check on the Iwo Jima MG bunker. (analysis,
+  2026-11-08)
+- Does a defending building really keep firing while unpacking, packing or
+  disabled? Check in the game. (implementer, 2026-11-08)
+- When an area attack has more targets than `max_targets` and two are
+  equally near, which is hit? (analysis, 2026-11-09)
+- A moving unit bumping into an enemy: is it exactly the obstacle test its
+  movement uses (blocking shapes), and from how far ahead? (analysis,
+  2026-11-09)
+- Does anything lengthen a weapon's reach beyond its `range` and the
+  modifiers on it? Something extra is added for a unit's own weapons, not
+  yet identified. (analysis, 2026-11-09)
+- Does a land regiment's or bunker's `control_range` really stop at the
+  shore, so that ships offshore aren't noticed (and a ship's stops at the
+  beach)? Check in the game. (analysis, 2026-11-09)
+- Guard: which things can the player click as the target (own, allied,
+  enemy and neutral things; regiments, single units, buildings, cities),
+  what feedback an unacceptable click gives, and does a click on one of a
+  regiment's units guard the unit or its regiment? (implementer,
+  2026-11-11)
+- Guard: can the player give the order a facing (dragging, as for a
+  move)? (analysis, 2026-11-11)
+- Guard: how often does a guarding regiment think (re-pick its intruder,
+  notice the guarded thing has moved)? (analysis, 2026-11-11)
+- Guard: what happens to a guard on a thing that is packed, unpacked or
+  loaded into a transport: does the guarded thing count as gone?
+  (implementer, 2026-11-11)
+- Guard: does a rout end the guard for good, as assumed? (implementer,
+  2026-11-11)
+- Guard: a guarded building that sends out its own defenders has a case
+  in which the guard ignores its intruders altogether; when?
+  (analysis, 2026-11-11)
+- Guard: is a packed regiment standing alone really not offered Guard in
+  the game? By the rules here it is, whenever it's offered Move.
+  (implementer, 2026-11-11)
+- Guard: exactly when does a guard shell an intruder rather than attack
+  it: any regiment with artillery, or only when the intruder can be
+  shelled from where it stands? (analysis, 2026-11-11)
+- What Kohan II's targeted state changes for a company while it lasts.
+  (analysis, 2026-11-15)
+- How abilities flagged `heal` are scored against wounded targets
+  (`AbilityScoreHealBonus`); AA's data has none. (analysis, 2026-11-18)
+- Told to use an ability: when the target is gone before the turret has
+  turned to it, where does the shot land (the target's last spot, or
+  nowhere)? (implementer, 2026-11-24)
+- Exactly when in its attack animation a unit's ability goes off.
+  (analysis, 2026-11-18)
+- A paratrooper killed in the air: at touchdown, is he drawn on in the
+  falling look (figure under the parachute) or swapped to his ground
+  model, and does the closing-parachute effect play for him? Not seen
+  in the game. (implementer, 2026-11-18)
+- What a plane that crashes into water looks like: does any splash
+  show, and is the wreck visible under the surface for its last second?
+  (implementer, 2026-11-18)
