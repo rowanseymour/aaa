@@ -81,10 +81,7 @@ pub struct CombatAbility {
 fn ability(a: &defs::Ability, animations: &[defs::Animation]) -> Option<CombatAbility> {
     let d = a.ability_definition.as_ref()?;
     let main = d.effect.iter().filter(|e| is(&e.kind, "MAIN_DAMAGE"));
-    let played = (a.animation1.as_deref())
-        .and_then(|ids| animations.iter().find(|n| is(&n.ids, ids)))
-        .and_then(|n| n.length)
-        .unwrap_or(0.0);
+    let played = crate::combat::played(a, animations);
     let reload = a.reload_time.unwrap_or(0.0);
     Some(CombatAbility {
         damage: main.filter_map(|e| e.amount).sum(),
@@ -101,18 +98,11 @@ fn ability(a: &defs::Ability, animations: &[defs::Animation]) -> Option<CombatAb
 fn profile(t: &defs::Thing) -> Option<CombatProfile> {
     let body = t.body_component.as_ref()?;
     let health = body.health.filter(|&h| h > 0.0)?;
-    let performs = t.performer_component.iter().flat_map(|p| &p.ability);
-    let defends = t.defender_component.iter().flat_map(|d| &d.ability);
     let speed = (t.mover_component.as_ref())
         .and_then(|m| m.speed_max)
         .filter(|&s| s > 0.0);
-    let animations = t
-        .character_component
-        .as_ref()
-        .map_or(&[][..], |c| &c.animation);
-    let abilities = performs
-        .chain(defends)
-        .filter_map(|a| ability(a, animations));
+    let animations = t.animations();
+    let abilities = t.abilities().filter_map(|a| ability(a, animations));
     Some(CombatProfile {
         health,
         defense: body.defense.unwrap_or(0.0),

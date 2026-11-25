@@ -485,16 +485,12 @@ impl GameData {
         let versions = self.versions("Game/SVars.tgi");
         let files = self.parse_tgis(|n| versions.iter().any(|v| v == n));
         let files = scoped(&files);
-        let mut out: Vec<(Option<usize>, defs::SVars)> = files
-            .iter()
-            .flat_map(|f| {
-                let lower = f.file.to_ascii_lowercase();
-                let at = versions.iter().position(|v| *v == lower);
-                f.read::<defs::SVars>("SVars").map(move |s| (at, s))
-            })
-            .collect();
-        out.sort_by_key(|(at, _)| *at);
-        out.into_iter().map(|(_, s)| s).collect()
+        let at = |f: &crate::Scoped| (versions.iter()).position(|v| v.eq_ignore_ascii_case(f.file));
+        let mut files: Vec<_> = files.iter().collect();
+        files.sort_by_key(|f| at(f));
+        (files.into_iter())
+            .flat_map(|f| f.read::<defs::SVars>("SVars"))
+            .collect()
     }
 }
 

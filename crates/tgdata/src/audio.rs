@@ -295,19 +295,8 @@ impl GameData {
 }
 
 fn object_audio(thing: &defs::Thing) -> ObjectAudio {
-    let view = thing.view.as_ref();
-    let mover = thing.mover_component.as_ref();
-    let of_view =
-        |f: fn(&defs::View) -> &Vec<defs::Fxc>| view.map(|v| cues(f(v))).unwrap_or_default();
-    let of_mover = |f: fn(&defs::MoverComponent) -> &Vec<defs::Fxc>| {
-        mover.map(|m| cues(f(m))).unwrap_or_default()
-    };
-    let by_state = |fxcs: &[defs::Fxc]| -> Vec<(Id, Cue)> {
-        fxcs.iter()
-            .filter_map(|f| Some((Id::from(crate::named(f.actor_state.as_deref()?)?), cue(f)?)))
-            .collect()
-    };
-    let aspects = view
+    let commands = crate::effects::Commands { thing, cue };
+    let aspects = (thing.view.as_ref())
         .into_iter()
         .flat_map(|v| v.aspect.iter().chain(&v.aspect_normal));
     let animations = aspects
@@ -330,20 +319,16 @@ fn object_audio(thing: &defs::Thing) -> ObjectAudio {
         })
         .collect();
     ObjectAudio {
-        selected: of_view(|v| &v.when_selected),
-        commanded: of_view(|v| &v.when_commanded),
-        commanded_aggressive: of_view(|v| &v.when_commanded_aggressive),
-        created: of_view(|v| &v.when_created),
-        destroyed: of_view(|v| &v.when_destroyed),
-        start_moving: of_mover(|m| &m.when_start_moving),
-        stop_moving: of_mover(|m| &m.when_stop_moving),
-        entered: by_state(&thing.when_enter),
-        left: by_state(&thing.when_leave),
-        disturbed: thing
-            .component
-            .iter()
-            .flat_map(|c| cues(&c.action))
-            .collect(),
+        selected: commands.view(|v| &v.when_selected),
+        commanded: commands.view(|v| &v.when_commanded),
+        commanded_aggressive: commands.view(|v| &v.when_commanded_aggressive),
+        created: commands.view(|v| &v.when_created),
+        destroyed: commands.view(|v| &v.when_destroyed),
+        start_moving: commands.mover(|m| &m.when_start_moving),
+        stop_moving: commands.mover(|m| &m.when_stop_moving),
+        entered: commands.by_state(&thing.when_enter),
+        left: commands.by_state(&thing.when_leave),
+        disturbed: commands.disturbed(),
         animations,
     }
 }

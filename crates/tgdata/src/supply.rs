@@ -235,9 +235,7 @@ fn resupplying(states: impl Iterator<Item = defs::ActorState>) -> HashMap<Id, bo
 
 /// The properties a template's abilities give what they land on.
 pub(crate) fn enchantments(t: &defs::Thing) -> impl Iterator<Item = &defs::Property> {
-    let performs = t.performer_component.iter().flat_map(|p| &p.ability);
-    let defends = t.defender_component.iter().flat_map(|d| &d.ability);
-    (performs.chain(defends))
+    (t.abilities())
         .filter_map(|a| a.ability_definition.as_ref())
         .flat_map(|d| &d.effect)
         .filter_map(|e| e.enchantment_property.as_ref())

@@ -203,6 +203,24 @@ impl Words<'_> {
 
 /// The game's word for a figure of `category`, such as an area's radius,
 /// from its descriptions: the first range to hold it, its upper end left out.
+/// The game's word for how far an effect reaches: its volley's spread where
+/// that's wider than its area, else its area; none for one that reaches
+/// nothing beyond its target.
+pub(crate) fn area_word(
+    strings: &crate::Strings,
+    descriptions: &[defs::Description],
+    area: f32,
+    volley_area: f32,
+) -> Option<String> {
+    let (category, radius) = match volley_area > area {
+        true => ("AREA_VOLLEY", volley_area),
+        false => ("AREA", area),
+    };
+    (radius > 0.0)
+        .then(|| word_for(strings, descriptions, category, radius))
+        .flatten()
+}
+
 pub(crate) fn word_for(
     strings: &crate::Strings,
     descriptions: &[defs::Description],
@@ -269,7 +287,7 @@ impl GameData {
     }
 
     /// The effects each property shows on what gains it, by id: those of
-    /// the shared ones and of those abilities give.
+    /// the shared ones and of those special operations give.
     pub fn property_cues(&self) -> HashMap<Id, Vec<VfxCue>> {
         let definitions = self.definitions();
         let given = (definitions.abilities.iter())
@@ -306,13 +324,7 @@ fn operation(
         .and_then(|i| i.split_whitespace().next())
         .and_then(crate::named)
         .map(|i| i.trim_start_matches('/').to_string());
-    let (category, radius) = match a.volley_area > a.area {
-        true => ("AREA_VOLLEY", a.volley_area),
-        false => ("AREA", a.area),
-    };
-    let area = (radius > 0.0)
-        .then(|| word_for(words.strings, descriptions, category, radius))
-        .flatten();
+    let area = area_word(words.strings, descriptions, a.area, a.volley_area);
     SpecialOperation {
         name,
         description: localized(words.strings, a.description.as_deref()),

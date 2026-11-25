@@ -489,11 +489,12 @@ impl GameData {
             let shown = &mut w.shown;
             shown.name = localized(&strings, shown.name_key.as_deref());
             shown.rate = words("RECHARGE_RATE", w.recharge);
-            let (category, radius) = match shown.volley_area > w.area {
-                true => ("AREA_VOLLEY", shown.volley_area),
-                false => ("AREA", w.area),
-            };
-            shown.area = (radius > 0.0).then(|| words(category, radius)).flatten();
+            shown.area = crate::special_ops::area_word(
+                &strings,
+                &definitions.descriptions,
+                w.area,
+                shown.volley_area,
+            );
         }
         out
     }
@@ -684,7 +685,7 @@ pub(crate) fn fighter(
             wait: p.wait_bonus.unwrap_or(0.0),
         };
     }
-    let animations = (thing.character_component.as_ref()).map_or(&[][..], |c| &c.animation);
+    let animations = thing.animations();
     let performs = thing.performer_component.iter().flat_map(|p| &p.ability);
     let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
     let abilities = (performs.map(|a| (a, true))).chain(defends.map(|a| (a, false)));
@@ -693,6 +694,7 @@ pub(crate) fn fighter(
         let hits = weapon_hits(&d.effect);
         let damages = hits.iter().any(|h| !matches!(h.does, Does::Morale(_)));
         let range = range.filter(|_| damages)?;
+        let turret_point = not_null(a.turret_ids.as_deref().map(Id::from));
         Some(Weapon {
             definition: not_null(d.template.clone().or_else(|| d.ids.clone())),
             performed: false,
@@ -708,15 +710,15 @@ pub(crate) fn fighter(
             hits,
             centred_on_user: d.flags.iter().any(|f| f.center_on_source),
             animation: a.animation1.clone().filter(|ids| named(ids).is_some()),
-            turret: a.turret_ids.as_deref().and_then(named).is_some(),
-            turret_point: not_null(a.turret_ids.as_deref().map(Id::from)),
-            aimed_by: not_null(a.turret_ids.as_deref().map(Id::from)).and_then(|ids| {
-                let found = turrets.iter().position(|(t, _)| *t == Some(&ids));
+            turret: turret_point.is_some(),
+            aimed_by: turret_point.as_ref().and_then(|ids| {
+                let found = turrets.iter().position(|(t, _)| *t == Some(ids));
                 if found.is_none() {
                     log::warn!("{name}: no turret {ids} to aim its ability");
                 }
                 found
             }),
+            turret_point,
             spawn_position: a.spawn_position.unwrap_or_default(),
             sounds: cues(&d.when_do),
             effects: WeaponEffects {
@@ -772,12 +774,17 @@ pub(crate) fn fighter(
 
 /// How a unit weighs ability `a` against its others, used by something
 /// animated by `animations`.
+/// How long `a`'s animation lasts, found among `animations`, its user's.
+pub(crate) fn played(a: &defs::Ability, animations: &[defs::Animation]) -> f32 {
+    (a.animation1.as_deref())
+        .and_then(|ids| animations.iter().find(|n| is(&n.ids, ids)))
+        .and_then(|n| n.length)
+        .unwrap_or(0.0)
+}
+
 fn choice(a: &defs::Ability, animations: &[defs::Animation]) -> Choice {
     let base = Choice::default();
-    let played = (a.animation1.as_deref())
-        .and_then(|ids| animations.iter().find(|n| crate::supply::is(&n.ids, ids)))
-        .and_then(|n| n.length)
-        .unwrap_or(0.0);
+    let played = played(a, animations);
     let level = |l: Option<i32>| l.and_then(|l| usize::try_from(l).ok());
     Choice {
         priority: a.priority.unwrap_or(base.priority),
