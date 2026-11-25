@@ -1643,9 +1643,10 @@ mod tests {
         // goes, and its zone with it.
         run(&mut w, 7.0);
         assert_eq!(w.buildings[b].health, 10.0);
-        w.tick();
-        assert!(matches!(w.buildings[b].state, State::Destroyed(_)));
-        run(&mut w, 1.0);
+        while !matches!(w.buildings[b].state, State::Destroyed(_)) {
+            assert!(w.supplied(1, [44.0, 64.0]));
+            w.tick();
+        }
         assert!(!w.supplied(1, [44.0, 64.0]));
     }
 
