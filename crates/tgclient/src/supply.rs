@@ -1,5 +1,6 @@
 //! Supply as the map shows it: a border along the edge of the ground the
-//! player's side is supplied over, and a tint on buildings going without.
+//! player's side is supplied over, and a tint on buildings going without,
+//! which a siege's tint takes over from.
 //! Its key shows and hides the border, as the options do.
 
 use bevy::image::CompressedImageFormatSupport;
@@ -160,7 +161,11 @@ pub fn tint_buildings(
             }
             continue;
         }
-        let mut since = tinted.map_or_else(Vec::new, |t| std::mem::take(&mut t.into_inner().0));
+        let mut fresh = Vec::new();
+        let since = match tinted {
+            Some(t) => &mut t.into_inner().0,
+            None => &mut fresh,
+        };
         since.retain(|(id, _)| active.iter().any(|(a, _)| a == id));
         for (id, _) in &active {
             if !since.iter().any(|(s, _)| s == id) {
@@ -176,7 +181,9 @@ pub fn tint_buildings(
         };
         let level = (pulse.level((now - at) as f32) * TINT_STEPS).round() / TINT_STEPS;
         let colour = Tint(pulse.colour(level));
-        commands.entity(entity).insert(Tinted(since));
+        if !fresh.is_empty() {
+            commands.entity(entity).insert(Tinted(fresh));
+        }
         if tint != Some(&colour) {
             commands.entity(entity).insert(colour);
         }

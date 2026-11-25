@@ -846,7 +846,16 @@ impl World {
                 }
             }
             let target = hit.target;
-            if let Some((property, seconds)) = &hit.gives {
+            // Only on what the hit itself lands on: a living unit, or a
+            // standing building not of the shooter's own side.
+            let takes = match target {
+                Target::Unit(u) => self.units[u].alive(),
+                Target::Building(b) => {
+                    let building = &self.buildings[b];
+                    building.standing() && !(building.owner == hit.by && hit.from.is_some())
+                }
+            };
+            if let Some((property, seconds)) = hit.gives.as_ref().filter(|_| takes) {
                 let kind = self.rules.enchantment_types.get(property).cloned();
                 let t = match target {
                     Target::Unit(u) => crate::targets::Thing::Unit(u),

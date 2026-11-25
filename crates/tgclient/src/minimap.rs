@@ -555,10 +555,8 @@ fn take_marks(
         let organization = &sim.organizations[unit.organization];
         let own = mine(organization.owner);
         // Its regiment's engagement, or its own: engaged or under siege.
-        let states = sim.unit_states(u);
-        let fighting = !organization.engaged.is_empty()
-            || states.contains(&"mind_engaged")
-            || unit.besieged.is_some();
+        let fighting =
+            !organization.engaged.is_empty() || sim.unit_engaged(u) || unit.besieged.is_some();
         let picked = own && selected.0.contains(&unit.organization);
         let rgb = match picked {
             true => colours.selected,
