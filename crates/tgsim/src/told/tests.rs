@@ -250,3 +250,33 @@ fn a_turret_told_to_turn_leaves_its_other_weapons_without_a_target() {
     w.tick();
     assert_eq!(w.buildings[0].target, None);
 }
+
+#[test]
+fn a_plane_pays_for_what_its_told_to_use_from_its_sortie() {
+    let mut w = crate::airfields::tests::field();
+    // Sent off somewhere else, so it bombs nothing by itself.
+    let attack = Command::AirAttack {
+        building: crate::airfields::tests::FIELD,
+        at: [100.0, 100.0],
+        on: None,
+    };
+    w.apply(1, attack).unwrap();
+    w.tick();
+    let u = w.sorties[0].plane.expect("off");
+    let bomb = &mut w.units[u].fighter.as_mut().unwrap().weapons[0];
+    (bomb.definition, bomb.performed) = (Some(Id::from("Bomb")), true);
+    let (plane, house) = (w.units[u].id, w.buildings[2].id);
+    let whole = w.buildings[2].health;
+    let told = |w: &mut World, mana: f32| {
+        w.units[u].position = [80.0, 40.0];
+        w.sorties[0].mana = mana;
+        tell(w, plane, "Bomb", house);
+        w.tick();
+        w.sorties[0].mana
+    };
+    // Its bombs cost 5.
+    assert_eq!(told(&mut w, 3.0), 3.0);
+    assert_eq!(w.buildings[2].health, whole);
+    assert_eq!(told(&mut w, 8.0), 3.0);
+    assert!(w.buildings[2].health < whole);
+}

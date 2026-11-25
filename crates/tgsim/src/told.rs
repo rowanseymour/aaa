@@ -98,6 +98,7 @@ impl World {
                 "the target's out of its turret's arc",
             ),
             (self.told_ready(s, w), "it's recharging"),
+            (self.can_pay(s, weapon), "it can't pay for it"),
         ];
         match checks.into_iter().find(|(ok, _)| !ok) {
             Some((_, why)) => Err(why),
@@ -110,6 +111,21 @@ impl World {
     fn unit_may_fire(&self, u: usize) -> bool {
         let unit = &self.units[u];
         !self.organizations[unit.organization].routing() && unit.descent.is_none()
+    }
+
+    /// The sortie the plane `s` is flying, whose mana pays its weapons.
+    fn sortie_of(&self, s: Target) -> Option<usize> {
+        let Target::Unit(u) = s else {
+            return None;
+        };
+        (self.sorties.iter()).position(|x| x.plane == Some(u) && !x.stage.over())
+    }
+
+    /// Whether `s` can pay for a use of `weapon`: only a plane on a sortie
+    /// pays, from the sortie's mana.
+    fn can_pay(&self, s: Target, weapon: &tgmap::Weapon) -> bool {
+        self.sortie_of(s)
+            .is_none_or(|x| self.sorties[x].mana >= weapon.mana_cost)
     }
 
     /// Whether `s`'s weapon `w` has recharged.
@@ -166,7 +182,13 @@ impl World {
                 true => Aimed::Thing(t),
                 false => Aimed::Ground(told.at),
             };
-            let bombard = self.weapon_of(s, w).bombard;
+            let weapon = self.weapon_of(s, w);
+            let (bombard, cost) = (weapon.bombard, weapon.mana_cost);
+            match self.sortie_of(s) {
+                Some(x) if self.sorties[x].mana < cost => continue,
+                Some(x) => self.sorties[x].mana -= cost,
+                None => {}
+            }
             match s {
                 Target::Unit(u) => self.fire_as(u, w, aimed, bombard, hits, launched),
                 Target::Building(b) => self.building_fire(b, w, aimed, bombard, hits, launched),
