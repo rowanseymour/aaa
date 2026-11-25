@@ -114,6 +114,14 @@ pub struct FormationLook {
     pub modifiers: Vec<String>,
 }
 
+/// Seconds between redraws of each of the minimap's layers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MinimapPeriods {
+    pub fog: f32,
+    pub supply: f32,
+    pub objects: f32,
+}
+
 /// How the supply border is drawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SupplyBorder {
@@ -162,6 +170,18 @@ impl GameData {
             block: (vars.iter())
                 .find_map(|v| v.terrain_block_size)
                 .unwrap_or(8.0),
+        }
+    }
+
+    /// Seconds between the minimap's redraws of its fog, supply border
+    /// and marks, a second each where the settings don't say.
+    pub fn minimap_periods(&self) -> MinimapPeriods {
+        let vars = self.avars();
+        let period = |of: fn(&defs::AVars) -> Option<f32>| vars.iter().find_map(of).unwrap_or(1.0);
+        MinimapPeriods {
+            fog: period(|v| v.minimap_period_update_fog),
+            supply: period(|v| v.minimap_period_update_supply),
+            objects: period(|v| v.minimap_period_update_objects),
         }
     }
 
