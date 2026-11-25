@@ -1524,6 +1524,8 @@ pub struct SVars {
     pub sell_factor: Option<f32>,
     /// Whether a building under siege can be sold.
     pub allow_sell_under_siege: Option<bool>,
+    /// Whether a provider under siege goes on giving supply.
+    pub supply_provide_under_siege: Option<bool>,
     /// What stockpiles start at on new and random maps.
     pub resource_stockpile_default: Option<f32>,
     /// Seconds a connected relay's stockpile gains each second.

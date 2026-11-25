@@ -288,6 +288,7 @@ impl World {
         let gives = sided
             && !busy
             && building.state == State::Standing
+            && (self.rules.supply_rules.under_siege || building.besieged.is_none())
             && range >= 0.0
             && (connected || stockpile > 0.0)
             && building.zone.is_none_or(|city| self.held_firmly(b, city));
@@ -843,6 +844,18 @@ mod tests {
         assert!(w.buildings[0].supply.zone.is_some());
         run(&mut w, 2.0);
         assert!(w.out_of_supply(0) && w.buildings[0].supply.zone.is_none());
+    }
+
+    #[test]
+    fn providers_under_siege_supply_only_if_the_game_says_so() {
+        let mut w = chain();
+        run(&mut w, 1.0);
+        w.buildings[2].besieged = Some(w.ticks + 100);
+        run(&mut w, 1.0);
+        assert!(w.buildings[2].supply.zone.is_some());
+        w.rules.supply_rules.under_siege = false;
+        run(&mut w, 1.0);
+        assert!(w.buildings[2].supply.zone.is_none());
     }
 
     #[test]
