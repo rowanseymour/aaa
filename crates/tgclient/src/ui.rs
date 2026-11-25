@@ -615,9 +615,55 @@ pub fn tinted(words: &str, colour: Color) -> String {
     format!("{TINT}{r:02x}{g:02x}{b:02x}{words}{TINT_END}")
 }
 
+/// Stands for a resource's glyph in a [`Hint`], the resource's id
+/// following it up to [`GLYPH_END`].
+const GLYPH: char = '\u{E002}';
+const GLYPH_END: char = '\u{E003}';
+
+/// The glyph of the resource `id`, for a [`Hint`], drawn by a box that
+/// draws glyphs and left out by one that doesn't.
+pub fn glyph(id: &str) -> String {
+    format!("{GLYPH}{id}{GLYPH_END}")
+}
+
+/// A piece of a [`Hint`]: words in their own colour where [`tinted`] gave
+/// them one, or a resource's [`glyph`].
+#[derive(Clone, PartialEq, Debug)]
+pub enum Piece {
+    Words(String, Option<Color>),
+    Glyph(tgdata::Id),
+}
+
+/// A [`Hint`]'s pieces, in order.
+pub fn pieces(hint: &str) -> Vec<Piece> {
+    let mut out = Vec::new();
+    let mut rest = hint;
+    loop {
+        let (words, glyph) = match rest.split_once(GLYPH) {
+            Some((words, after)) => (words, Some(after)),
+            None => (rest, None),
+        };
+        let words = stretches(words).into_iter();
+        out.extend(words.map(|(words, colour)| Piece::Words(words, colour)));
+        let Some(after) = glyph else {
+            return out;
+        };
+        let (id, after) = after.split_once(GLYPH_END).unwrap_or((after, ""));
+        out.push(Piece::Glyph(tgdata::Id::from(id)));
+        rest = after;
+    }
+}
+
 /// A [`Hint`]'s stretches of words, each with its own colour where
-/// [`tinted`] gave it one.
+/// [`tinted`] gave it one, its glyphs left out.
 pub fn stretches(hint: &str) -> Vec<(String, Option<Color>)> {
+    if hint.contains(GLYPH) {
+        let words = pieces(hint).into_iter().filter_map(|p| match p {
+            Piece::Words(words, colour) => Some((words, colour)),
+            Piece::Glyph(_) => None,
+        });
+        return words.collect();
+    }
     let mut out: Vec<(String, Option<Color>)> = Vec::new();
     let mut rest = hint;
     while !rest.is_empty() {
@@ -1533,6 +1579,31 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
+
+    #[test]
+    fn a_hint_splits_into_its_glyphs_and_words() {
+        let red = Color::srgb(1.0, 0.0, 0.0);
+        let hint = format!(
+            "{}+25  {}{}",
+            glyph("money"),
+            glyph("ammo"),
+            tinted("-20", red)
+        );
+        assert_eq!(
+            pieces(&hint),
+            [
+                Piece::Glyph("money".into()),
+                Piece::Words("+25  ".into(), None),
+                Piece::Glyph("ammo".into()),
+                Piece::Words("-20".into(), Some(red)),
+            ]
+        );
+        // Where glyphs aren't drawn, only the words are said.
+        assert_eq!(
+            stretches(&hint),
+            [("+25  ".to_string(), None), ("-20".to_string(), Some(red))]
+        );
+    }
 
     #[test]
     fn a_hint_splits_into_its_tinted_stretches() {
