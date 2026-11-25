@@ -58,28 +58,22 @@ pub(crate) fn strike(
     flights: &HashMap<Id, Flight>,
     lookouts: &HashMap<Id, Lookout>,
 ) -> Option<Strike> {
-    let damage = |e: &defs::Effect| {
-        Some(Damage {
-            kind: e.damage_type_ids.clone()?,
-            amount: e.amount?,
-        })
-    };
     let mains: Vec<&defs::Effect> = (a.effect.iter())
         .filter(|e| is(&e.kind, "MAIN_DAMAGE"))
         .collect();
     let own = |e: &&defs::Effect| {
-        let targets = Targets::parse(e.targets.as_deref().unwrap_or(""));
+        let targets = Targets::of(e.targets.as_deref());
         targets != Targets::default()
     };
     if a.area <= 0.0 || mains.is_empty() || mains.iter().any(own) {
         return None;
     }
-    let main = mains.into_iter().filter_map(damage).collect();
+    let main = mains.into_iter().filter_map(Damage::of).collect();
     let extra = (a.effect.iter())
         .filter(|e| is(&e.kind, "ADD_DAMAGE"))
         .filter_map(|e| {
-            let targets = Targets::parse(e.targets.as_deref().unwrap_or(""));
-            Some((targets, damage(e)?))
+            let targets = Targets::of(e.targets.as_deref());
+            Some((targets, Damage::of(e)?))
         })
         .collect();
     let projectile = a.projectile_ids.as_ref().and_then(|p| flights.get(p));
@@ -96,7 +90,7 @@ pub(crate) fn strike(
         })
     });
     Some(Strike {
-        targets: Targets::parse(a.targets.as_deref().unwrap_or("")),
+        targets: Targets::of(a.targets.as_deref()),
         area: a.area,
         full_within: a.attenuation_range_min.unwrap_or(1.0),
         edge_damage: a.attenuation_factor_max.unwrap_or(1.0),

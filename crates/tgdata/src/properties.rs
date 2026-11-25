@@ -184,6 +184,7 @@ impl GameData {
         &self,
         strings: &crate::Strings,
         paces: &[Pace],
+        definitions: &crate::Definitions,
         file: &str,
         p: &defs::Property,
     ) -> Option<PropertyLook> {
@@ -191,7 +192,7 @@ impl GameData {
         Some(PropertyLook {
             name: localized(strings, p.name.as_deref()).unwrap_or_default(),
             icon,
-            lines: self.tells(strings, paces, &self.definitions(), p),
+            lines: self.tells(strings, paces, definitions, p),
         })
     }
 
@@ -202,50 +203,31 @@ impl GameData {
 
     fn read_property_looks(&self) -> HashMap<Id, PropertyLook> {
         let strings = self.strings();
-        let mut lines = self.property_lines(&strings);
+        let paces = self.paces(&strings);
         let definitions = self.definitions();
         let mut out = HashMap::new();
         for (id, p) in &definitions.properties {
-            let file = definitions
-                .property_files
-                .get(id)
-                .map_or("", String::as_str);
-            let Some(path) = icon_beside(file, p.icon.as_deref()) else {
-                continue;
-            };
-            let icon = self.property_icon(&path);
-            out.insert(
-                id.clone(),
-                PropertyLook {
-                    name: localized(&strings, p.name.as_deref()).unwrap_or_default(),
-                    icon,
-                    lines: lines.remove(id).unwrap_or_default(),
-                },
-            );
+            let file = (definitions.property_files.get(id)).map_or("", String::as_str);
+            if let Some(look) = self.property_look(&strings, &paces, &definitions, file, p) {
+                out.insert(id.clone(), look);
+            }
         }
         // Their icons are named from the archive's root.
-        let paces = self.paces(&strings);
         for (id, p) in self.level_properties() {
-            if let Some(look) = self.property_look(&strings, &paces, "", &p) {
+            if let Some(look) = self.property_look(&strings, &paces, &definitions, "", &p) {
                 out.insert(id, look);
             }
         }
         // Those abilities and special operations give what they land on,
         // the first of any given more than once.
-        let given = (definitions.things.iter())
-            .flat_map(|t| crate::supply::enchantments(&t.thing).map(|p| (t.file.as_str(), p)));
-        let operations = (definitions.abilities.iter())
-            .flat_map(|(_, a)| &a.effect)
-            .filter_map(|e| e.enchantment_property.as_ref())
-            .map(|p| ("", p));
-        for (file, p) in given.chain(operations) {
+        for (file, p) in definitions.given_properties() {
             let Some(id) = p.ids.clone() else {
                 continue;
             };
             if out.contains_key(&id) {
                 continue;
             }
-            if let Some(look) = self.property_look(&strings, &paces, file, p) {
+            if let Some(look) = self.property_look(&strings, &paces, &definitions, file, p) {
                 out.insert(id, look);
             }
         }
@@ -260,6 +242,7 @@ impl GameData {
     pub fn broken_looks(&self) -> HashMap<Id, PropertyLook> {
         let strings = self.strings();
         let paces = self.paces(&strings);
+        let definitions = self.definitions();
         let files =
             self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("templates/"));
         let files = crate::scoped(&files);
@@ -269,7 +252,9 @@ impl GameData {
                 let (Some(id), Some(p)) = (l.ids, l.broken_property) else {
                     continue;
                 };
-                if let Some(look) = self.property_look(&strings, &paces, scope.file, &p) {
+                if let Some(look) =
+                    self.property_look(&strings, &paces, &definitions, scope.file, &p)
+                {
                     layouts.entry(id).or_insert(look);
                 }
             }

@@ -35,8 +35,6 @@ pub struct Research {
 }
 
 impl GameData {
-    /// What each template that researches lists, in its menu's order, by
-    /// template id.
     /// The technologies each building template gives its side while the
     /// side holds one, for those that give any, by template id.
     pub fn granted_technologies(&self) -> HashMap<Id, Vec<Id>> {
@@ -64,6 +62,8 @@ impl GameData {
         })
     }
 
+    /// What each template that researches lists, in its menu's order, by
+    /// template id.
     pub fn research_lists(&self) -> HashMap<Id, Vec<Research>> {
         let aliases = self.structure_aliases();
         let upgrades = self.upgrades();

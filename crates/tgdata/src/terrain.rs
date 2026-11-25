@@ -84,19 +84,13 @@ impl GameData {
             .filter_map(|p| p.ids.clone())
             .collect();
         unlimited.sort();
-        let free = self.by_template(|t| {
-            let c = t.properties_component.as_ref()?;
-            let refs = c.property.iter().filter_map(|r| r.property_ids.as_ref());
-            let shared = refs.filter_map(|p| definitions.properties.get(p));
-            (shared.chain(&c.intrinsic_property))
-                .any(trailblazing)
-                .then_some(())
-        });
+        let free = self
+            .templates_where(|t| crate::supply::held(t, &definitions.properties).any(trailblazing));
         TerrainRules {
             slowest: slowest.unwrap_or(TerrainRules::default().slowest),
             effects,
             unlimited,
-            free: free.into_keys().collect(),
+            free,
             areas: areas.unwrap_or(true),
         }
     }

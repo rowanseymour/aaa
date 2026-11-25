@@ -241,19 +241,10 @@ impl GameData {
     /// the first for an image winning.
     pub fn icon_stand_ins(&self) -> Arc<HashMap<String, String>> {
         self.kept("icon_stand_ins", || {
-            let files = self.modern_files();
-            let mut stand_ins = HashMap::new();
-            for file in scoped(&files) {
-                for block in file.read::<defs::IconStandIn>("IconStandIn") {
-                    let (Some(image), Some(texture)) = (block.image, block.texture) else {
-                        continue;
-                    };
-                    let image = image.trim().trim_start_matches('/').to_ascii_lowercase();
-                    let texture = beside(file.file, texture.trim());
-                    stand_ins.entry(image).or_insert(texture);
-                }
-            }
-            stand_ins
+            self.modern_textures("IconStandIn", |b: defs::IconStandIn| {
+                let image = b.image?.trim().trim_start_matches('/').to_ascii_lowercase();
+                Some((image, b.texture?))
+            })
         })
     }
 
@@ -450,24 +441,24 @@ impl GameData {
 
     /// The orders the player can give, in the order the files list them.
     pub fn commands(&self) -> Vec<Command> {
-        let strings = self.strings();
         let filter =
             |n: &str| n.starts_with("game/actor_commands") || n.starts_with("game/actorcommands/");
-        (self.read_all::<defs::ActorCommand>(filter, "ActorCommand"))
-            .into_iter()
-            .filter_map(|c| command(&strings, c))
-            .collect()
+        self.read_commands(filter, "ActorCommand")
     }
 
     /// The requests the player can make of allies, such as `team_attack`,
     /// in the order the files list them.
     pub fn team_commands(&self) -> Vec<Command> {
+        self.read_commands(|n| n.starts_with("game/team_commands"), "TeamCommand")
+    }
+
+    fn read_commands(&self, filter: impl Fn(&str) -> bool, kind: &str) -> Vec<Command> {
         let strings = self.strings();
-        let filter = |n: &str| n.starts_with("game/team_commands");
-        (self.read_all::<defs::ActorCommand>(filter, "TeamCommand"))
-            .into_iter()
-            .filter_map(|c| command(&strings, c))
-            .collect()
+        (self
+            .read_all::<defs::ActorCommand>(filter, kind)
+            .into_iter())
+        .filter_map(|c| command(&strings, c))
+        .collect()
     }
 
     /// The action button the in-match layouts describe by `name`, such as
@@ -529,11 +520,11 @@ impl GameData {
     fn read_formation_looks(&self) -> HashMap<Id, FormationLook> {
         let strings = self.strings();
         let paces = self.paces(&strings);
+        let definitions = self.definitions();
         let files = self.parse_tgis(|n| n.starts_with("organizations/"));
         let files = scoped(&files);
         let mut out = HashMap::new();
         for scope in &files {
-            let dir = scope.file.rsplit_once('/').map_or("", |(d, _)| d);
             for block in scope.root.blocks_of("Formation") {
                 let Some(f) = scope.deserialize::<defs::Formation>(block) else {
                     continue;
@@ -541,15 +532,12 @@ impl GameData {
                 let Some(ids) = f.ids else {
                     continue;
                 };
-                let icon = f.icon.as_deref().map(|i| match i.strip_prefix('/') {
-                    Some(abs) => abs.to_string(),
-                    None => format!("{dir}/{i}"),
-                });
+                let icon = f.icon.as_deref().map(|i| beside(scope.file, i));
                 let icon = icon.filter(|i| self.exists(i));
                 let name = localized(&strings, f.name.as_deref()).unwrap_or(ids.to_string());
                 let held = scope.deserialize::<defs::FormationProperties>(block);
                 let held = held.map_or_else(Vec::new, |h| h.property);
-                let look = |p| self.property_look(&strings, &paces, scope.file, p);
+                let look = |p| self.property_look(&strings, &paces, &definitions, scope.file, p);
                 let modifiers = (held.iter())
                     .flat_map(|p| &p.modifier)
                     .filter_map(|m| crate::properties::line(&strings, &paces, m));

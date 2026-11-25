@@ -7,7 +7,7 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::Arc;
 
 use crate::strings::{glyph_image, localized};
-use crate::{GameData, Id, Strings, beside, defs, not_null, scoped};
+use crate::{GameData, Id, Strings, defs, not_null, scoped};
 
 /// The interface layout that places the resource bar's cells.
 const BAR_LAYOUT: &str = "UI/Game/template_game.tgi";
@@ -87,17 +87,23 @@ impl Amounts {
     }
 
     pub fn set(&mut self, kind: &str, amount: f32) {
-        match (self.0.iter_mut()).find(|(id, _)| id.as_str().eq_ignore_ascii_case(kind)) {
-            Some((_, a)) => *a = amount,
-            None => self.0.push((kind.into(), amount)),
-        }
+        *self.slot(&Id::from(kind)) = amount;
     }
 
     fn credit(&mut self, kind: &Id, amount: f32) {
-        match self.0.iter_mut().find(|(id, _)| id == kind) {
-            Some((_, a)) => *a += amount,
-            None => self.0.push((kind.clone(), amount)),
-        }
+        *self.slot(kind) += amount;
+    }
+
+    /// The amount of `kind`, added at nothing if it isn't there yet.
+    fn slot(&mut self, kind: &Id) -> &mut f32 {
+        let i = match self.0.iter().position(|(id, _)| id == kind) {
+            Some(i) => i,
+            None => {
+                self.0.push((kind.clone(), 0.0));
+                self.0.len() - 1
+            }
+        };
+        &mut self.0[i].1
     }
 
     /// Each resource named, in the order first named.
@@ -321,13 +327,14 @@ impl GameData {
     /// data, logged once and left out.
     pub fn economies(&self) -> HashMap<Id, Economy> {
         let resources = self.resources();
-        let undefined = std::sync::Mutex::new(HashSet::new());
+        let known: HashSet<&Id> = resources.iter().map(|k| &k.id).collect();
+        let undefined = std::cell::RefCell::new(HashSet::new());
         let of = |r: Option<&defs::Resources>| {
             let mut out = Amounts::default();
             for (id, amount) in r.into_iter().flat_map(defs::Resources::amounts) {
-                if resources.iter().any(|k| &k.id == id) {
+                if known.contains(id) {
                     out.credit(id, amount);
-                } else if crate::locked(&undefined).insert(id.clone()) {
+                } else if undefined.borrow_mut().insert(id.clone()) {
                     log::warn!("{id} is named as a resource, which no [Resource] defines");
                 }
             }
@@ -352,20 +359,14 @@ impl GameData {
 
     /// The templates whose things their owner can sell.
     pub fn sellable(&self) -> HashSet<Id> {
-        let sellable = self.by_template(|t| {
-            let c = t.construction_component.as_ref()?;
-            c.can_sell.unwrap_or(true).then_some(())
-        });
-        sellable.into_keys().collect()
+        self.templates_where(|t| {
+            (t.construction_component.as_ref()).is_some_and(|c| c.can_sell.unwrap_or(true))
+        })
     }
 
     /// The templates whose buildings can't be turned as they're placed.
     pub fn axis_locked(&self) -> HashSet<Id> {
-        let locked = self.by_template(|t| {
-            let locked = t.flags.iter().rev().find_map(|f| f.axis_locked);
-            (locked == Some(true)).then_some(())
-        });
-        locked.into_keys().collect()
+        self.templates_where(|t| t.flag(|f| f.axis_locked) == Some(true))
     }
 
     /// Each template's [`Supply`], for those that give it, by template id.
@@ -422,19 +423,9 @@ impl GameData {
     /// interface draws it: from the `[ResourceIcon]` blocks of the `.tgi`
     /// files under `Modern/`, the first for a resource winning.
     pub fn resource_icons(&self) -> HashMap<Id, String> {
-        let files = self.modern_files();
-        let mut icons = HashMap::new();
-        for file in scoped(&files) {
-            for icon in file.read::<defs::ResourceIcon>("ResourceIcon") {
-                let (Some(resource), Some(texture)) = (not_null(icon.resource_ids), icon.texture)
-                else {
-                    continue;
-                };
-                let texture = beside(file.file, texture.trim());
-                icons.entry(resource).or_insert(texture);
-            }
-        }
-        icons
+        self.modern_textures("ResourceIcon", |i: defs::ResourceIcon| {
+            Some((not_null(i.resource_ids)?, i.texture?))
+        })
     }
 
     /// The resources the resource bar has a cell for, left to right: all
@@ -472,8 +463,7 @@ impl GameData {
             rules.sell_under_siege = v;
         }
         // The match's setting stands in for the tuning one.
-        let rule =
-            (self.world_rule("ResourceStockpileDefault")).and_then(|r| r.default?.parse().ok());
+        let rule = (self.world_rule(crate::STOCKPILE)).and_then(|r| r.default?.parse().ok());
         if let Some(v) = rule.or_else(|| first(|s| s.resource_stockpile_default)) {
             rules.stockpile_default = v;
         }

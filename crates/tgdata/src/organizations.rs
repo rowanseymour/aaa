@@ -106,18 +106,17 @@ impl GameData {
         let files =
             self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("templates/"));
         let files = scoped(&files);
-        let aggressive: HashSet<Id> = files
-            .iter()
-            .flat_map(|f| f.read::<defs::Formation>("Formation"))
-            .filter(|f| f.aggressive)
-            .filter_map(|f| f.ids)
-            .collect();
+        let mut aggressive = HashSet::new();
         let mut effects = HashMap::new();
         for scope in &files {
             for block in scope.root.blocks_of("Formation") {
-                let ids = scope
-                    .deserialize::<defs::Formation>(block)
-                    .and_then(|f| f.ids);
+                let formation = scope.deserialize::<defs::Formation>(block);
+                let ids = formation.as_ref().and_then(|f| f.ids.clone());
+                if let Some(ids) = &ids
+                    && formation.is_some_and(|f| f.aggressive)
+                {
+                    aggressive.insert(ids.clone());
+                }
                 let held = scope.deserialize::<defs::FormationProperties>(block);
                 let held = held.map_or_else(Vec::new, |h| h.property);
                 let effect = (held.iter().filter_map(crate::experience::combat_effect))
@@ -144,32 +143,37 @@ impl GameData {
     /// What each organization template's broken formation's property
     /// gives it, by template id, for those whose layout has one.
     pub fn broken_effects(&self) -> HashMap<Id, CombatEffect> {
-        let layouts = self.layouts();
-        (self.organization_components().into_iter())
-            .filter_map(|(t, o)| Some((t, layouts.get(&o.layout)?.broken.clone())))
-            .filter(|(_, e)| *e != CombatEffect::default())
-            .collect()
+        self.by_layout(|l| Some(l.broken.clone()).filter(|e| *e != CombatEffect::default()))
     }
 
     /// The target types each organization template's broken formation's
     /// property gives it while it has no formation, by template id, for
     /// those that give any.
     pub fn broken_types(&self) -> HashMap<Id, Vec<Id>> {
+        self.by_layout(|l| Some(l.broken_types.clone()).filter(|t| !t.is_empty()))
+    }
+
+    /// What `of` finds in each organization template's layout, by template
+    /// id.
+    fn by_layout<T>(&self, of: impl Fn(&Layout) -> Option<T>) -> HashMap<Id, T> {
         let layouts = self.layouts();
         (self.organization_components().into_iter())
-            .filter_map(|(t, o)| Some((t, layouts.get(&o.layout)?.broken_types.clone())))
-            .filter(|(_, types)| !types.is_empty())
+            .filter_map(|(t, o)| Some((t, of(layouts.get(&o.layout)?)?)))
+            .collect()
+    }
+
+    /// What `of` finds in each formation the layouts list, by formation id.
+    fn by_formation<T>(&self, of: impl Fn(&Formation) -> Option<T>) -> HashMap<Id, T> {
+        let layouts = self.layouts();
+        (layouts.values().flat_map(|l| &l.formations))
+            .filter_map(|f| Some((f.id.clone(), of(f)?)))
             .collect()
     }
 
     /// The target types each formation's properties give the regiment in
     /// it, by formation id, for those that give any.
     pub fn formation_types(&self) -> HashMap<Id, Vec<Id>> {
-        let layouts = self.layouts();
-        (layouts.values().flat_map(|l| &l.formations))
-            .filter(|f| !f.types.is_empty())
-            .map(|f| (f.id.clone(), f.types.clone()))
-            .collect()
+        self.by_formation(|f| Some(f.types.clone()).filter(|t| !t.is_empty()))
     }
 
     /// Where the regiments of a group all in one formation stand, from
@@ -191,11 +195,7 @@ impl GameData {
     /// What each formation's properties give the regiment in it, by
     /// formation id, for those that give anything.
     pub fn formation_effects(&self) -> HashMap<Id, CombatEffect> {
-        let layouts = self.layouts();
-        (layouts.values().flat_map(|l| &l.formations))
-            .filter(|f| f.effect != CombatEffect::default())
-            .map(|f| (f.id.clone(), f.effect.clone()))
-            .collect()
+        self.by_formation(|f| Some(f.effect.clone()).filter(|e| *e != CombatEffect::default()))
     }
 }
 

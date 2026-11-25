@@ -237,13 +237,7 @@ impl GameData {
     /// it, by its id: the shared ones, technologies among them, those
     /// abilities give, and those experience levels give.
     pub fn morale_effects(&self) -> HashMap<Id, MoraleEffect> {
-        let mut out = self.property_effects(effect);
-        for (id, p) in self.level_properties() {
-            if let Some(effect) = effect(&p) {
-                out.insert(id, effect);
-            }
-        }
-        out
+        self.effects_with_levels(effect)
     }
 }
 

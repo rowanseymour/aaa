@@ -332,15 +332,9 @@ impl GameData {
             (Some(a), None) | (None, Some(a)) => a,
             _ => 1.0,
         };
-        // A `.kf` path's second `%s` is the animation's ids.
         let animation = |a: &defs::Animation| {
             let ids = a.ids.clone()?;
-            let kf = path(
-                &a.kf
-                    .as_deref()?
-                    .replacen("%s", prefix, 1)
-                    .replacen("%s", &ids, 1),
-            );
+            let kf = kf_path(file, prefix, a.kf.as_deref()?, ids.as_str());
             Some(Animation {
                 kind: AnimationKind::parse(a.kind.as_deref().unwrap_or_default()),
                 ids,
@@ -354,6 +348,7 @@ impl GameData {
                 .filter(|a| self.exists(&a.kf))
                 .collect()
         };
+        let ground_size = view.aspect_normal.iter().find_map(|a| a.ground_size);
         let character = thing.character_component.as_ref();
         let animations = character.map_or_else(Vec::new, |c| read(&c.animation));
         let looks = (character.into_iter())
@@ -375,15 +370,19 @@ impl GameData {
             icon,
             portrait: not_null(view.portrait_ids.clone()),
             faction_portrait: thing.show_faction_portrait == Some(true),
-            ground_reach: (view.aspect_normal.iter())
-                .find_map(|a| a.ground_size)
-                .map(|[across, along]| across.max(along))
+            ground_reach: (ground_size.map(|[across, along]| across.max(along)))
                 .filter(|reach| *reach > 0.0),
-            ground_size: (view.aspect_normal.iter())
-                .find_map(|a| a.ground_size)
-                .filter(|s| s.iter().any(|&d| d > 0.0)),
+            ground_size: ground_size.filter(|s| s.iter().any(|&d| d > 0.0)),
         })
     }
+}
+
+/// The archive path of an animation's `.kf` file for a view defined in
+/// `file`: the path's first `%s` is the view's prefix, its second the
+/// animation's ids.
+fn kf_path(file: &str, prefix: &str, kf: &str, ids: &str) -> String {
+    let kf = kf.replacen("%s", prefix, 1).replacen("%s", ids, 1);
+    beside(file, &kf.replace('\\', "/"))
 }
 
 /// The animations a view's normal aspect lists, as a portrait's does, with
@@ -394,11 +393,11 @@ fn object_animations(file: &str, view: &defs::View) -> Vec<Animation> {
         .flat_map(|a| &a.animation)
         .filter_map(|a| {
             let ids = a.ids.clone()?;
-            let kf = (a.kf.as_deref()?.replacen("%s", prefix, 1)).replacen("%s", &ids, 1);
+            let kf = kf_path(file, prefix, a.kf.as_deref()?, &ids);
             Some(Animation {
                 kind: AnimationKind::parse(a.kind.as_deref().unwrap_or_default()),
                 ids,
-                kf: beside(file, &kf.replace('\\', "/")),
+                kf,
                 length: a.length.unwrap_or(1.0),
                 walk_distance: None,
             })
@@ -407,8 +406,7 @@ fn object_animations(file: &str, view: &defs::View) -> Vec<Animation> {
 }
 
 fn footing(thing: &defs::Thing) -> Footing {
-    let flag =
-        |f: fn(&defs::Flags) -> Option<bool>| thing.flags.iter().rev().find_map(f) == Some(true);
+    let flag = |f: fn(&defs::Flags) -> Option<bool>| thing.flag(f) == Some(true);
     if flag(|f| f.water_based) {
         Footing::Water
     } else if flag(|f| f.flying) {

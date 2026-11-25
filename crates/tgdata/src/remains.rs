@@ -66,10 +66,9 @@ pub struct AnimationSet {
 /// order it lists them; none for one without a character. Aircraft
 /// never play a death.
 fn animation_sets(t: &defs::Thing) -> Option<Vec<AnimationSet>> {
-    let flying = t.flags.iter().rev().find_map(|f| f.flying) == Some(true);
+    let flying = t.flag(|f| f.flying) == Some(true);
     let character = t.character_component.as_ref()?;
-    let kind =
-        |a: &defs::Animation, k: &str| a.kind.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(k));
+    let kind = |a: &defs::Animation, k: &str| crate::supply::is(&a.kind, k);
     let least = t
         .view
         .as_ref()

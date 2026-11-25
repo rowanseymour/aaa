@@ -61,9 +61,7 @@ pub struct Widget {
 impl Widget {
     /// One of its [`fields`](Widget::fields), by key, case-insensitive.
     pub fn value(&self, key: &str) -> Option<&str> {
-        (self.fields.iter().rev())
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.as_str())
+        field(&self.fields, key)
     }
 
     /// One of its fields naming an image, as an archive path.
@@ -144,9 +142,7 @@ pub struct ViewElement {
 impl ViewElement {
     /// One of its [`fields`](ViewElement::fields), by key, case-insensitive.
     pub fn value(&self, key: &str) -> Option<&str> {
-        (self.fields.iter().rev())
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.as_str())
+        field(&self.fields, key)
     }
 
     /// One of its fields naming an image, as an archive path.
@@ -332,14 +328,20 @@ impl GameData {
         }
     }
 
+    /// The files the in-match interface's lists name, in their order.
+    fn game_lists(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for list in GAME_LISTS {
+            self.take_ui_list(list, &mut Vec::new(), &mut names);
+        }
+        names
+    }
+
     /// The widgets the in-match interface's layouts define at their top
     /// level, in the order their files and blocks come.
     pub fn game_widgets(&self) -> Arc<Vec<Widget>> {
         self.kept("game_widgets", || {
-            let mut names = Vec::new();
-            for list in GAME_LISTS {
-                self.take_ui_list(list, &mut Vec::new(), &mut names);
-            }
+            let mut names = self.game_lists();
             let mut screens = self.entry_names(|n| {
                 n.starts_with(GAME_FOLDER)
                     && n.ends_with(".tgi")
@@ -355,7 +357,10 @@ impl GameData {
             }
             let files = self.parse_named(names.iter().map(String::as_str));
             let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-            let screens: HashSet<String> = screens.iter().map(|s| s.to_ascii_lowercase()).collect();
+            let screens: HashSet<String> = screens
+                .into_iter()
+                .map(|s| s.to_ascii_lowercase())
+                .collect();
             (files.iter())
                 .filter(|(name, _)| screens.contains(&name.to_ascii_lowercase()))
                 .flat_map(|(_, parsed)| parsed.root.blocks())
@@ -369,10 +374,7 @@ impl GameData {
     /// placed against the whole screen as [`game_widgets`](Self::game_widgets)
     /// are, with the in-match interface's templates.
     pub fn screen_widget(&self, file: &str, name: &str) -> Option<Widget> {
-        let mut names = Vec::new();
-        for list in GAME_LISTS {
-            self.take_ui_list(list, &mut Vec::new(), &mut names);
-        }
+        let mut names = self.game_lists();
         names.push(file.to_string());
         let files = self.parse_named(names.iter().map(String::as_str));
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
@@ -398,16 +400,12 @@ impl GameData {
             return;
         };
         open.push(lower);
-        let folder = list.rsplit_once('/').map_or("", |(dir, _)| dir);
-        for line in String::from_utf8_lossy(&text).lines() {
+        for line in tgi::decode(&text).lines() {
             let path = line.split(';').next().unwrap_or("").trim();
-            let path = path.replace('\\', "/");
-            let path = match path.strip_prefix('/') {
-                Some(rooted) => rooted.to_string(),
-                None if path.is_empty() => continue,
-                None if folder.is_empty() => path,
-                None => format!("{folder}/{path}"),
-            };
+            if path.is_empty() {
+                continue;
+            }
+            let path = crate::beside(list, &path.replace('\\', "/"));
             if path.to_ascii_lowercase().ends_with(".lst") {
                 self.take_ui_list(&path, open, out);
             } else {
@@ -444,9 +442,7 @@ fn widget(block: &tgi::Block, templates: &tgi::Templates) -> Option<Widget> {
         view,
         parts,
         children,
-        fields: (block.fields())
-            .filter_map(|f| Some((f.key.clone(), f.value.as_deref()?.trim().to_string())))
-            .collect(),
+        fields: fields(block),
     })
 }
 
@@ -489,9 +485,7 @@ fn view_element(block: &tgi::Block, templates: &tgi::Templates) -> Option<ViewEl
         justify: value(block, "justify"),
         tiles: tiles(block),
         children,
-        fields: (block.fields())
-            .filter_map(|f| Some((f.key.clone(), f.value.as_deref()?.trim().to_string())))
-            .collect(),
+        fields: fields(block),
     })
 }
 
@@ -512,6 +506,20 @@ fn tiles(block: &tgi::Block) -> Option<Tiles> {
 /// many children they'll have.
 fn is_widget(block: &tgi::Block) -> bool {
     block.field("max_child_count").is_some()
+}
+
+/// A block's fields that have values, in order, the values trimmed.
+fn fields(block: &tgi::Block) -> Vec<(String, String)> {
+    (block.fields())
+        .filter_map(|f| Some((f.key.clone(), f.value.as_deref()?.trim().to_string())))
+        .collect()
+}
+
+/// The value of the last of `fields` keyed `key`, ignoring case.
+fn field<'a>(fields: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    (fields.iter().rev())
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.as_str())
 }
 
 /// A field's value, the last given where a block repeats a key.

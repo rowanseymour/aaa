@@ -326,6 +326,11 @@ pub struct Targets {
 }
 
 impl Targets {
+    /// What a list the data may leave out names, as [`Targets::parse`].
+    pub(crate) fn of(text: Option<&str>) -> Targets {
+        Targets::parse(text.unwrap_or(""))
+    }
+
     pub(crate) fn parse(text: &str) -> Targets {
         let mut out = Targets::default();
         for word in text.split(|c: char| c == ',' || c.is_whitespace()) {
@@ -393,6 +398,16 @@ pub struct Damage {
     pub amount: f32,
 }
 
+impl Damage {
+    /// What an effect that names a damage type and amount does.
+    pub(crate) fn of(e: &defs::Effect) -> Option<Damage> {
+        Some(Damage {
+            kind: e.damage_type_ids.clone()?,
+            amount: e.amount?,
+        })
+    }
+}
+
 /// An outline centred on an object, in world units: an object's own scale
 /// doesn't change it.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -441,13 +456,7 @@ impl GameData {
     /// The target types each property that gives any gives, by property
     /// id, experience levels' included.
     pub fn property_types(&self) -> HashMap<Id, PropertyTypes> {
-        let mut out = self.property_effects(property_types);
-        for (id, p) in self.level_properties() {
-            if let Some(types) = property_types(&p) {
-                out.insert(id, types);
-            }
-        }
-        out
+        self.effects_with_levels(property_types)
     }
 
     /// How the objects of every template that can be hurt fight, by
@@ -504,8 +513,7 @@ impl GameData {
 }
 
 fn body(thing: &defs::Thing) -> Body {
-    let flag =
-        |f: fn(&defs::Flags) -> Option<bool>| thing.flags.iter().rev().find_map(f) == Some(true);
+    let flag = |f: fn(&defs::Flags) -> Option<bool>| thing.flag(f) == Some(true);
     let shape = blocking_shape(thing);
     let mover = thing.mover_component.as_ref();
     let speed = mover.and_then(|m| m.speed_max).filter(|&s| s > 0.0);
@@ -527,7 +535,7 @@ fn body(thing: &defs::Thing) -> Body {
         water_based: flag(|f| f.water_based),
         tile_locked: flag(|f| f.tile_locked),
         ethereal: flag(|f| f.ethereal),
-        ownable: thing.flags.iter().rev().find_map(|f| f.ownable) != Some(false),
+        ownable: thing.flag(|f| f.ownable) != Some(false),
         fixed: speed.is_none()
             && thing.organization_component.is_none()
             && thing.projectile_component.is_none(),
@@ -540,42 +548,27 @@ fn body(thing: &defs::Thing) -> Body {
 }
 
 pub(crate) fn conform(thing: &defs::Thing) -> Option<Shape> {
-    let conforms = thing.flags.iter().rev().find_map(|f| f.conform_to_terrain) == Some(true);
+    let conforms = thing.flag(|f| f.conform_to_terrain) == Some(true);
     conforms.then(|| soft_shape(thing))
 }
 
 fn blocking_shape(thing: &defs::Thing) -> Shape {
-    let kind = thing
-        .size
-        .iter()
-        .rev()
-        .find_map(|s| s.blocking_shape.as_deref());
+    let kind = thing.sized(|s| s.blocking_shape.as_deref());
     shape(thing, kind, |s| s.blocking_radius, 0.2)
 }
 
 /// The soft shape, which where the template leaves it `null` takes the
 /// blocking shape's kind, but still its own radius as a circle.
 pub(crate) fn soft_shape(thing: &defs::Thing) -> Shape {
-    let kind = thing
-        .size
-        .iter()
-        .rev()
-        .find_map(|s| s.soft_shape.as_deref())
-        .and_then(named);
-    let kind = kind.or_else(|| {
-        thing
-            .size
-            .iter()
-            .rev()
-            .find_map(|s| s.blocking_shape.as_deref())
-    });
+    let kind = (thing.sized(|s| s.soft_shape.as_deref()).and_then(named))
+        .or_else(|| thing.sized(|s| s.blocking_shape.as_deref()));
     shape(thing, kind, |s| s.soft_radius, 0.5)
 }
 
 /// The target shape, which where the template leaves it `null` is the
 /// soft shape.
 fn target_shape(thing: &defs::Thing) -> Shape {
-    let size = |f: fn(&defs::Size) -> Option<&str>| thing.size.iter().rev().find_map(f);
+    let size = |f: fn(&defs::Size) -> Option<&str>| thing.sized(f);
     match size(|s| s.target_shape.as_deref()).and_then(named) {
         Some(kind) => shape(thing, Some(kind), |s| s.target_radius, 0.5),
         None => soft_shape(thing),
@@ -584,7 +577,7 @@ fn target_shape(thing: &defs::Thing) -> Shape {
 
 /// The kind of shape the target shape ends up as.
 fn target_kind(thing: &defs::Thing) -> Option<&str> {
-    let size = |f: fn(&defs::Size) -> Option<&str>| thing.size.iter().rev().find_map(f);
+    let size = |f: fn(&defs::Size) -> Option<&str>| thing.sized(f);
     (size(|s| s.target_shape.as_deref()).and_then(named))
         .or_else(|| size(|s| s.soft_shape.as_deref()).and_then(named))
         .or_else(|| size(|s| s.blocking_shape.as_deref()))
@@ -599,7 +592,7 @@ fn shape(
     radius: fn(&defs::Size) -> Option<f32>,
     default: f32,
 ) -> Shape {
-    let size = |f: fn(&defs::Size) -> Option<f32>| thing.size.iter().rev().find_map(f);
+    let size = |f: fn(&defs::Size) -> Option<f32>| thing.sized(f);
     match kind.unwrap_or("CIRCLE").to_ascii_uppercase().as_str() {
         "POINT" => Shape::Point,
         "SQUARE" => {
@@ -637,14 +630,7 @@ pub(crate) fn fighter(
         target_square: target_kind(thing).is_some_and(|k| k.eq_ignore_ascii_case("SQUARE")),
         ..Fighter::default()
     };
-    let properties = thing.properties_component.iter().flat_map(|c| {
-        let refs = c
-            .property
-            .iter()
-            .filter_map(|r| shared.get(r.property_ids.as_ref()?));
-        refs.chain(&c.intrinsic_property)
-    });
-    for p in properties {
+    for p in crate::supply::held(thing, shared) {
         for flag in listed(p.enabled_target_flags.as_deref()) {
             if !fighter.flags.contains(&flag) {
                 fighter.flags.push(flag);
@@ -661,7 +647,7 @@ pub(crate) fn fighter(
         }
     }
     // What it is, whatever it holds.
-    let invulnerable = thing.flags.iter().rev().find_map(|f| f.invulnerable) == Some(true);
+    let invulnerable = thing.flag(|f| f.invulnerable) == Some(true);
     for (is, flag) in [
         (invulnerable, "invulnerable"),
         (thing.construction_component.is_some(), "constructable"),
@@ -710,7 +696,7 @@ pub(crate) fn fighter(
             max_targets: d.max_targets.unwrap_or(0),
             full_within: d.attenuation_range_min.unwrap_or(1.0),
             edge_damage: d.attenuation_factor_max.unwrap_or(1.0),
-            targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
+            targets: Targets::of(d.targets.as_deref()),
             hits,
             centred_on_user: d.flags.iter().any(|f| f.center_on_source),
             animation: a.animation1.clone().filter(|ids| named(ids).is_some()),
@@ -753,7 +739,7 @@ pub(crate) fn fighter(
                 range,
                 recharge: d.recharge_time,
                 amount,
-                targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
+                targets: Targets::of(d.targets.as_deref()),
                 animation: (a.animation1.clone()).filter(|ids| named(ids).is_some()),
                 sounds: cues(&d.when_do),
                 lasts: choice(a, animations).lasts,
@@ -805,20 +791,14 @@ fn choice(a: &defs::Ability, animations: &[defs::Animation]) -> Choice {
 /// What an ability's effects do as a weapon fires it, those that damage or
 /// take morale, in the order it lists them.
 fn weapon_hits(effects: &[defs::Effect]) -> Vec<WeaponHit> {
-    let damage = |e: &defs::Effect| {
-        Some(Damage {
-            kind: e.damage_type_ids.clone()?,
-            amount: e.amount?,
-        })
-    };
     let hit = |e: &defs::Effect| {
         let does = match () {
-            _ if is(&e.kind, "MAIN_DAMAGE") => Does::Main(damage(e)?),
-            _ if is(&e.kind, "ADD_DAMAGE") => Does::Add(damage(e)?),
+            _ if is(&e.kind, "MAIN_DAMAGE") => Does::Main(Damage::of(e)?),
+            _ if is(&e.kind, "ADD_DAMAGE") => Does::Add(Damage::of(e)?),
             _ if is(&e.kind, "MORALE_LOSS") => Does::Morale(e.amount?),
             _ => return None,
         };
-        let targets = Targets::parse(e.targets.as_deref().unwrap_or(""));
+        let targets = Targets::of(e.targets.as_deref());
         let on_user = targets.required.contains(&Id::from("self"));
         Some(WeaponHit {
             targets,

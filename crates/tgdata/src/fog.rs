@@ -88,17 +88,14 @@ impl GameData {
     /// The templates whose things every side has explored from the start
     /// when the whole map starts explored.
     pub fn revealed(&self) -> HashSet<Id> {
-        let revealed = |t: &defs::Thing| t.flags.iter().rev().find_map(|f| f.revealed);
-        (self.by_template(|t| revealed(t).filter(|&r| r)))
-            .into_keys()
-            .collect()
+        self.templates_where(|t| t.flag(|f| f.revealed) == Some(true))
     }
 
     /// The match's fog setting: the world rule's default, the game's own
     /// before the engine's, else the tuning value.
     pub fn fog_setting(&self) -> FogSetting {
-        let rule =
-            (self.world_rule("FogOfWar")).and_then(|r| FogSetting::named(r.default.as_deref()?));
+        let rule = (self.world_rule(crate::FOG_OF_WAR))
+            .and_then(|r| FogSetting::named(r.default.as_deref()?));
         let tuned = || {
             let value = self.svar(|s| s.fog_of_war)?;
             FogSetting::named(&value.to_string())

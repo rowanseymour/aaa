@@ -99,7 +99,7 @@ impl GameData {
                 .collect()
         };
         let mut out = Vec::new();
-        for rule in self.world_rules() {
+        for rule in self.world_rules().iter() {
             let Some(id) = rule.ids.clone() else {
                 continue;
             };
@@ -139,7 +139,12 @@ impl GameData {
             }
             out.push(LobbyRule {
                 name: named(&id, rule.name.as_deref()),
-                default: rule.default.unwrap_or_default().trim().to_string(),
+                default: rule
+                    .default
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
                 id,
                 kind,
             });

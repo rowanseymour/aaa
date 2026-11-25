@@ -1,10 +1,10 @@
 //! What the message log is told and how it shows it: the kinds of message,
 //! the game events that post them, and the interface settings it keeps to.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::strings::localized;
-use crate::{GameData, Id, beside, defs, not_null, scoped};
+use crate::{GameData, Id, defs, not_null};
 
 const MESSAGE_TYPES: &str = "game/message_types";
 const GAME_EVENTS: &str = "game/game_events";
@@ -72,10 +72,7 @@ impl InterfaceVars {
     /// A colour the files write as three numbers from 0 to 1, such as
     /// `1,1,0`.
     pub fn rgb(&self, name: &str) -> Option<[f32; 3]> {
-        let value = self.0.get(&name.to_ascii_lowercase())?;
-        let mut parts = value.split(',').map(|p| p.trim().parse::<f32>().ok());
-        let rgb = [parts.next()??, parts.next()??, parts.next()??];
-        parts.next().is_none().then_some(rgb)
+        colour(self.0.get(&name.to_ascii_lowercase())?)
     }
 
     /// Whether a flag is on; `default` for one the files don't set.
@@ -103,11 +100,12 @@ impl GameData {
             .iter()
             .flat_map(|(_, p)| p.root.blocks_of("MessageType"));
         let mut out: Vec<MessageKind> = Vec::new();
+        let mut seen = HashSet::new();
         for block in blocks {
             let Some(id) = block.value("IDS").map(|v| Id::from(v.trim())) else {
                 continue;
             };
-            if out.iter().any(|k| k.id == id) {
+            if !seen.insert(id.clone()) {
                 continue;
             }
             let icon = named(block.value("icon")).map(|i| format!("{ICON_DIR}/{i}"));
@@ -126,20 +124,9 @@ impl GameData {
     /// by the kind's id: from the `[MessageTypeIcon]` blocks of the `.tgi`
     /// files under `Modern/`, the first for a kind winning.
     pub fn message_kind_icons(&self) -> HashMap<Id, String> {
-        let files = self.modern_files();
-        let mut icons = HashMap::new();
-        for file in scoped(&files) {
-            for icon in file.read::<defs::MessageTypeIcon>("MessageTypeIcon") {
-                let (Some(kind), Some(texture)) = (not_null(icon.message_type_ids), icon.texture)
-                else {
-                    continue;
-                };
-                icons
-                    .entry(kind)
-                    .or_insert_with(|| beside(file.file, texture.trim()));
-            }
-        }
-        icons
+        self.modern_textures("MessageTypeIcon", |i: defs::MessageTypeIcon| {
+            Some((not_null(i.message_type_ids)?, i.texture?))
+        })
     }
 
     /// The game events, by id, with their lines in the game's language.

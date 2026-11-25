@@ -287,11 +287,13 @@ impl GameData {
     }
 
     /// How each template that's flown to where it's recruited gets
-    /// there, by template id.
+    /// there, by template id, its transport found by an id the game has
+    /// since renamed too.
     pub fn airlifts(&self) -> HashMap<Id, Airlift> {
-        let things = &self.definitions().things;
+        let definitions = self.definitions();
+        let things = definitions.by_id(&self.translations());
         let plane = |id: &Id| {
-            let t = &things.iter().find(|t| t.id == *id)?.thing;
+            let t = things.get(id)?;
             let mover = t.mover_component.as_ref()?;
             Some(Airlift {
                 transport: id.clone(),
@@ -393,22 +395,8 @@ impl GameData {
         let resources = self.resources();
         let layouts = self.layouts();
         let definitions = self.definitions();
-        let mut things: HashMap<&Id, &defs::Thing> = definitions
-            .things
-            .iter()
-            .map(|t| (&t.id, &t.thing))
-            .collect();
         // Templates may name their members by ids since renamed.
-        let renames = self.thing_renames();
-        let renamed: Vec<_> = (renames.iter())
-            .map(|(old, new)| (old, things.get(new).copied()))
-            .collect();
-        for (old, thing) in renamed {
-            match thing {
-                Some(t) => things.insert(old, t),
-                None => things.remove(old),
-            };
-        }
+        let things = definitions.by_id(&self.translations());
         self.by_template(|t| {
             let view = t.view.as_ref();
             let captain = t
@@ -468,7 +456,7 @@ fn amounts<'a>(
 /// once where the layout isn't known.
 fn members<'a>(
     t: &defs::Thing,
-    things: &HashMap<&Id, &'a defs::Thing>,
+    things: &HashMap<Id, &'a defs::Thing>,
     layouts: &HashMap<Id, Layout>,
 ) -> Vec<&'a defs::Thing> {
     let Some(o) = &t.organization_component else {
@@ -573,7 +561,7 @@ mod tests {
             .zip(["truck", "regiment"])
             .map(|(b, id)| (Id::from(id), tgi::from_block(b).unwrap()))
             .collect();
-        let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
+        let by_id: HashMap<Id, &defs::Thing> = things.iter().map(|(i, t)| (i.clone(), t)).collect();
         let earned = |id: &str| -> Vec<(String, f32)> {
             let t = by_id[&Id::from(id)];
             let members = members(t, &by_id, &HashMap::new());
@@ -610,7 +598,7 @@ mod tests {
             .zip(["man", "regiment"])
             .map(|(b, id)| (Id::from(id), tgi::from_block(b).unwrap()))
             .collect();
-        let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
+        let by_id: HashMap<Id, &defs::Thing> = things.iter().map(|(i, t)| (i.clone(), t)).collect();
         let regiment = by_id[&Id::from("regiment")];
         let kept = |layouts: &HashMap<Id, Layout>| -> Vec<(String, f32)> {
             let members = members(regiment, &by_id, layouts);
