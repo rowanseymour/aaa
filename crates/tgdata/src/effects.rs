@@ -252,11 +252,8 @@ impl GameData {
     /// The node names of the model points effects name by id, such as
     /// `gun_ae_01`.
     pub fn bones(&self) -> HashMap<Id, String> {
-        let files = self.parse_tgis(|n| n.starts_with("game/bones"));
-        let files = scoped(&files);
-        files
-            .iter()
-            .flat_map(|f| f.read::<defs::Bone>("Bone"))
+        (self.read_all::<defs::Bone>(|n| n.starts_with("game/bones"), "Bone"))
+            .into_iter()
             .filter_map(|b| Some((b.ids?, b.bone_name?.trim().to_string())))
             .collect()
     }
@@ -391,10 +388,7 @@ fn vfx_cue(f: &defs::Fxc) -> Option<VfxCue> {
         vfx: not_null(f.vfx_ids.clone())?,
         stop,
         at: f.at.as_deref().unwrap_or("SELF").to_ascii_uppercase(),
-        location: f
-            .location
-            .clone()
-            .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("null")),
+        location: f.location.clone().filter(|l| crate::named(l).is_some()),
         attached: f.attached.unwrap_or(true),
         translation: f.translation.unwrap_or_default(),
         orientation: f.orientation.unwrap_or([0.0, -1.0, 0.0]),
@@ -405,7 +399,7 @@ fn vfx_cue(f: &defs::Fxc) -> Option<VfxCue> {
         targets: f
             .target_flags
             .as_deref()
-            .filter(|t| !t.eq_ignore_ascii_case("null"))
+            .and_then(crate::named)
             .map(Targets::parse)
             .unwrap_or_default(),
         stop_on_destructed: f.stop_on_destructed.unwrap_or(true),

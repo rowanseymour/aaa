@@ -90,10 +90,9 @@ impl InterfaceVars {
     }
 }
 
-/// `NULL` is how the files say there's none.
+/// [`crate::named`], owned.
 fn named(value: Option<&str>) -> Option<String> {
-    let value = value?.trim();
-    (!value.is_empty() && !value.eq_ignore_ascii_case("null")).then(|| value.to_string())
+    crate::named(value?).map(str::to_string)
 }
 
 impl GameData {

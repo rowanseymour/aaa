@@ -343,11 +343,8 @@ impl GameData {
     pub fn nations(&self) -> Vec<Nation> {
         let strings = self.strings();
         let factions = self.factions(&strings);
-        let files = self.parse_tgis(|n| n.starts_with("nations/"));
-        let files = scoped(&files);
-        let mut nations: Vec<Nation> = files
-            .iter()
-            .flat_map(|f| f.read::<defs::Nation>("Nation"))
+        let read: Vec<defs::Nation> = self.read_all(|n| n.starts_with("nations/"), "Nation");
+        let mut nations: Vec<Nation> = (read.into_iter())
             .filter_map(|n| {
                 let id = n.ids?;
                 let placeholders = n.placeholder.into_iter();
@@ -361,12 +358,9 @@ impl GameData {
                         .filter_map(|id| factions.get(&Id::from(id.trim())).cloned())
                         .collect(),
                     flag: n.flag_icon.as_deref().and_then(ui_path),
-                    music: n
-                        .game_music
-                        .filter(|m| !m.as_str().eq_ignore_ascii_case("null")),
+                    music: crate::not_null(n.game_music),
                     skin: (n.depot_name.as_deref().unwrap_or("").split(','))
-                        .map(str::trim)
-                        .filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case("null"))
+                        .filter_map(crate::named)
                         .map(str::to_string)
                         .collect(),
                 })
@@ -380,11 +374,11 @@ impl GameData {
     pub fn handicaps(&self) -> Vec<Handicap> {
         let strings = self.strings();
         let glyphs: HashMap<char, String> = (self.glyphs().iter())
-            .filter_map(|g| Some((char::from_u32(g.index?)?, g.display_name.clone()?)))
+            .filter_map(|g| Some((char::from_u32(g.index?)?, crate::strings::image_name(g)?)))
             .collect();
-        let files = self.parse_tgis(|n| n.starts_with("game/handicaps"));
-        let handicaps: Vec<Handicap> = (scoped(&files).iter())
-            .flat_map(|f| f.read::<defs::Handicap>("Handicap"))
+        let read: Vec<defs::Handicap> =
+            self.read_all(|n| n.starts_with("game/handicaps"), "Handicap");
+        let handicaps: Vec<Handicap> = (read.into_iter())
             .filter_map(|h| {
                 let id = h.ids?;
                 let name = localized(&strings, h.name.as_deref()).unwrap_or_default();
@@ -394,8 +388,8 @@ impl GameData {
                     name: Some(name).filter(|n| glyph.is_none() && !n.trim().is_empty()),
                     glyph,
                     description,
-                    property: (h.property_ids.as_deref().map(str::trim))
-                        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("null"))
+                    property: (h.property_ids.as_deref())
+                        .and_then(crate::named)
                         .map(Id::from),
                     extra: h
                         .extra_resources
@@ -454,11 +448,10 @@ impl GameData {
     /// The computer player profiles, by name.
     pub fn sais(&self) -> Vec<Sai> {
         let strings = self.strings();
-        let files = self.parse_tgis(|n| n.starts_with("sai/"));
+        let read: Vec<defs::Sai> = self.read_all(|n| n.starts_with("sai/"), "SAI");
         let ids =
             |choices: Vec<defs::SaiChoice>| choices.into_iter().filter_map(|c| c.ids).collect();
-        let mut sais: Vec<Sai> = (scoped(&files).iter())
-            .flat_map(|f| f.read::<defs::Sai>("SAI"))
+        let mut sais: Vec<Sai> = (read.into_iter())
             .filter_map(|s| {
                 let id = s.ids?;
                 Some(Sai {
@@ -502,11 +495,8 @@ impl GameData {
 
     /// The colours players can take, by id, e.g. `blue`.
     pub fn kingdom_colors(&self) -> HashMap<Id, [f32; 3]> {
-        let files = self.parse_tgis(|n| n == "game/kingdom_colors.tgi");
-        let files = scoped(&files);
-        files
-            .iter()
-            .flat_map(|f| f.read::<defs::KingdomColor>("KingdomColor"))
+        (self.read_all::<defs::KingdomColor>(|n| n == "game/kingdom_colors.tgi", "KingdomColor"))
+            .into_iter()
             .filter_map(|c| Some((c.ids?, c.color)))
             .collect()
     }

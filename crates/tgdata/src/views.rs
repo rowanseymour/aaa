@@ -220,11 +220,10 @@ impl GameData {
             file, id, thing, ..
         } in &self.definitions().things
         {
-            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             let invisible = thing.flags.iter().any(|f| f.invisible);
             let view = match &thing.view {
                 _ if invisible => None,
-                Some(view) => self.view(dir, thing, view),
+                Some(view) => self.view(file, thing, view),
                 None => continue,
             };
             out.insert(id.clone(), view);
@@ -248,14 +247,13 @@ impl GameData {
             file, id, thing, ..
         } in &definitions.things
         {
-            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             let Some(view) = thing.view.as_ref().filter(|_| named.contains(id)) else {
                 continue;
             };
-            let Some(mut drawn) = self.view(dir, thing, view) else {
+            let Some(mut drawn) = self.view(file, thing, view) else {
                 continue;
             };
-            drawn.animations = object_animations(dir, view);
+            drawn.animations = object_animations(file, view);
             drawn.animations.retain(|a| self.exists(&a.kf));
             let least = view.idle_loops_min.unwrap_or(1);
             let idle_loops = [least, view.idle_loops_max.unwrap_or(least + 1)];
@@ -273,15 +271,9 @@ impl GameData {
     /// A template's models: its aspects when they are variations, else its
     /// normal model, else whatever aspects it lists. Models and animations
     /// missing from the archive are left out, so a view may have none.
-    fn view(&self, dir: &str, thing: &defs::Thing, view: &defs::View) -> Option<View> {
+    fn view(&self, file: &str, thing: &defs::Thing, view: &defs::View) -> Option<View> {
         let prefix = view.resource_prefix.as_deref().unwrap_or("");
-        let path = |m: &str| {
-            let m = m.replace("%s", prefix).replace('\\', "/");
-            match m.strip_prefix('/') {
-                Some(abs) => abs.to_string(),
-                None => format!("{dir}/{m}"),
-            }
-        };
+        let path = |m: &str| beside(file, &m.replace("%s", prefix).replace('\\', "/"));
         // Aspects take their model, if they don't name one, from templates
         // such as the schema's `%s.nif`.
         let aspects: Vec<String> = view
@@ -395,8 +387,8 @@ impl GameData {
 }
 
 /// The animations a view's normal aspect lists, as a portrait's does, with
-/// the archive paths of their `.kf` files for a view defined in `dir`.
-fn object_animations(dir: &str, view: &defs::View) -> Vec<Animation> {
+/// the archive paths of their `.kf` files for a view defined in `file`.
+fn object_animations(file: &str, view: &defs::View) -> Vec<Animation> {
     let prefix = view.resource_prefix.as_deref().unwrap_or("");
     (view.aspect_normal.iter())
         .flat_map(|a| &a.animation)
@@ -406,7 +398,7 @@ fn object_animations(dir: &str, view: &defs::View) -> Vec<Animation> {
             Some(Animation {
                 kind: AnimationKind::parse(a.kind.as_deref().unwrap_or_default()),
                 ids,
-                kf: beside(&format!("{dir}/"), &kf.replace('\\', "/")),
+                kf: beside(file, &kf.replace('\\', "/")),
                 length: a.length.unwrap_or(1.0),
                 walk_distance: None,
             })
@@ -679,10 +671,13 @@ mod tests {
         };
         // A portrait plays its template's animations and then its own.
         let view = portrait.view.as_ref().unwrap();
-        let animations: Vec<_> = object_animations("Generals/GER", view)
+        let animations: Vec<_> = object_animations("Generals/GER/rommel.tgi", view)
             .into_iter()
             .map(|a| (a.kind, a.ids, a.kf, a.length))
             .collect();
+        // One defined at the top of the archives names its files from there.
+        let at_top = object_animations("rommel.tgi", view);
+        assert_eq!(at_top[0].kf, "Rommel/RommelPortraitidle.kf");
         let animation =
             |kind, ids: &str, kf: &str, length| (kind, ids.to_string(), kf.to_string(), length);
         let prefix = "Generals/GER/Rommel/RommelPortrait";

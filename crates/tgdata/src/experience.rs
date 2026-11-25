@@ -237,11 +237,8 @@ pub(crate) fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
 
 impl GameData {
     pub fn experience_gains(&self) -> ExperienceGains {
-        let svars = self.svars();
         let d = ExperienceGains::default();
-        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| {
-            svars.iter().find_map(get).unwrap_or(or)
-        };
+        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| self.svar(get).unwrap_or(or);
         ExperienceGains {
             gain_minimum: of(|v| v.experience_gain_minimum, d.gain_minimum),
             gain_maximum: of(|v| v.experience_gain_maximum, d.gain_maximum),

@@ -74,9 +74,8 @@ fn effect(p: &defs::Property) -> TerrainEffect {
 
 impl GameData {
     pub fn terrain_rules(&self) -> TerrainRules {
-        let svars = self.svars();
-        let slowest = svars.iter().find_map(|v| v.terrain_minimum_move_speed);
-        let areas = svars.iter().find_map(|v| v.use_region_path_planner);
+        let slowest = self.svar(|v| v.terrain_minimum_move_speed);
+        let areas = self.svar(|v| v.use_region_path_planner);
         let definitions = self.definitions();
         let shared = definitions.properties.iter();
         let effects = shared.map(|(id, p)| (id.clone(), effect(p))).collect();
@@ -281,8 +280,8 @@ fn biome_subfolders(files: &[Scoped]) -> HashMap<Id, String> {
         .flat_map(|f| f.read::<defs::Biome>("Biome"))
         .filter_map(|b| {
             let subfolder = b.texture_subfolder_name?;
-            let named = !subfolder.is_empty() && !subfolder.eq_ignore_ascii_case("null");
-            named.then_some((b.ids?, subfolder))
+            crate::named(&subfolder)?;
+            Some((b.ids?, subfolder))
         })
         .collect()
 }

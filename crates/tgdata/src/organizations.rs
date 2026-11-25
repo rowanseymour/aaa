@@ -90,7 +90,7 @@ impl GameData {
                 slots: o
                     .slot
                     .iter()
-                    .map(|s| s.element_ids.clone().filter(|e| *e != Id::from("null")))
+                    .map(|s| crate::not_null(s.element_ids.clone()))
                     .collect(),
             })
             .filter(|o| !o.slots.is_empty())

@@ -458,8 +458,7 @@ impl GameData {
             resources: self.resources().to_vec(),
             ..EconomyRules::default()
         };
-        let svars = self.svars();
-        let first = |of: fn(&defs::SVars) -> Option<f32>| svars.iter().find_map(of);
+        let first = |of: fn(&defs::SVars) -> Option<f32>| self.svar(of);
         if let Some(v) = first(|s| s.economy_limited_resource_max) {
             rules.limited_max = v;
         }
@@ -469,7 +468,7 @@ impl GameData {
         if let Some(v) = first(|s| s.sell_factor) {
             rules.sell_factor = v;
         }
-        if let Some(v) = svars.iter().find_map(|s| s.allow_sell_under_siege) {
+        if let Some(v) = self.svar(|s| s.allow_sell_under_siege) {
             rules.sell_under_siege = v;
         }
         // The match's setting stands in for the tuning one.
@@ -485,6 +484,11 @@ impl GameData {
     /// precedence, before the engine's.
     pub(crate) fn svars(&self) -> Arc<Vec<defs::SVars>> {
         self.kept("svars", || self.read_svars())
+    }
+
+    /// The first of the tuning settings that `of` finds.
+    pub(crate) fn svar<T>(&self, of: impl Fn(&defs::SVars) -> Option<T>) -> Option<T> {
+        self.svars().iter().find_map(of)
     }
 
     fn read_svars(&self) -> Vec<defs::SVars> {

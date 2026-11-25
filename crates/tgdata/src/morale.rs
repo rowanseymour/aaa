@@ -157,14 +157,9 @@ fn effect(p: &defs::Property) -> Option<MoraleEffect> {
 
 impl GameData {
     pub fn morale_rules(&self) -> MoraleRules {
-        let svars = self.svars();
         let d = MoraleRules::default();
-        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| {
-            svars.iter().find_map(get).unwrap_or(or)
-        };
-        let count = |get: fn(&defs::SVars) -> Option<u32>, or: u32| {
-            svars.iter().find_map(get).unwrap_or(or)
-        };
+        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| self.svar(get).unwrap_or(or);
+        let count = |get: fn(&defs::SVars) -> Option<u32>, or: u32| self.svar(get).unwrap_or(or);
         let r = d.rout;
         MoraleRules {
             engagement_loss: of(|v| v.morale_engagement_loss, d.engagement_loss),

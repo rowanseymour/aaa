@@ -321,9 +321,7 @@ impl GameData {
     /// Which of the in-match interface's optional parts the game has, from
     /// its settings for how it looks; without where they don't say.
     pub fn interface_flags(&self) -> InterfaceFlags {
-        let vars = self.avars();
-        let flag =
-            |of: fn(&crate::defs::AVars) -> Option<bool>| vars.iter().find_map(of).unwrap_or(false);
+        let flag = |of: fn(&crate::defs::AVars) -> Option<bool>| self.avar(of).unwrap_or(false);
         InterfaceFlags {
             side_panel: flag(|v| v.ui_use_side_panel),
             economic_impact: flag(|v| v.ui_use_economic_impact),
@@ -463,7 +461,7 @@ fn view_element(block: &tgi::Block, templates: &tgi::Templates) -> Option<ViewEl
             .unwrap_or(or)
     };
     let fallback = Bounds::default();
-    let when = value(block, "when").filter(|w| !w.eq_ignore_ascii_case("null"));
+    let when = value(block, "when").filter(|w| crate::named(w).is_some());
     let children = (block.blocks())
         .filter(|b| !is_slot(b))
         .filter_map(|b| view_element(&templates.resolve(b), templates))
@@ -487,7 +485,7 @@ fn view_element(block: &tgi::Block, templates: &tgi::Templates) -> Option<ViewEl
             .and_then(|c| colour(&c))
             .unwrap_or([1.0; 3]),
         text: value(block, "text").filter(|t| !t.is_empty()),
-        font: value(block, "font").filter(|f| !f.eq_ignore_ascii_case("null")),
+        font: value(block, "font").filter(|f| crate::named(f).is_some()),
         justify: value(block, "justify"),
         tiles: tiles(block),
         children,

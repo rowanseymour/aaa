@@ -124,7 +124,6 @@ pub struct Thing {
     pub mobile_deployment_component: Option<MobileDeploymentComponent>,
     pub economy_component: Option<EconomyComponent>,
     pub supply_component: Option<SupplyComponent>,
-    #[serde(rename = "HQComponent")]
     pub hq_component: Option<HqComponent>,
     pub denizen_component: Option<DenizenComponent>,
     pub settlement_component: Option<SettlementComponent>,
@@ -233,7 +232,6 @@ pub struct BodyComponent {
     /// Seconds its remains lie after it dies, then sink for `sink_time`.
     pub rot_time: Option<f32>,
     pub sink_time: Option<f32>,
-    #[serde(rename = "OnDeathAbility")]
     pub on_death_ability: Option<Ability>,
 }
 
@@ -1473,119 +1471,79 @@ pub struct SVars {
     #[serde(rename = "TAIUseRegionPathPlanner")]
     pub use_region_path_planner: Option<bool>,
     /// The experience a side with a faction gains each second.
-    #[serde(rename = "ExperienceFactionGainPeriodic")]
     pub experience_faction_gain_periodic: Option<f32>,
-    #[serde(rename = "BuildingPaddingMeters")]
     pub building_padding_meters: Option<f32>,
     /// Seconds a site or upgrade's health changing keeps it at work.
-    #[serde(rename = "ActiveConstructionTimeout")]
     pub active_construction_timeout: Option<f32>,
     /// Whether a side's objectives are kept in order of their text.
-    #[serde(rename = "SortObjectives")]
     pub sort_objectives: Option<bool>,
     /// The share of a region a side has to see for computer players to
     /// count it as just explored.
     #[serde(rename = "ResetWhiteFogTimerPecent")]
     pub reset_white_fog_timer_percent: Option<f32>,
     /// Whether computer players send air attacks.
-    #[serde(rename = "UseAirAttacks")]
     pub use_air_attacks: Option<bool>,
     /// Whether the sides of a team win and lose together.
-    #[serde(rename = "TeamVictory")]
     pub team_victory: Option<bool>,
     /// How far up its target a projectile flying straight aims.
-    #[serde(rename = "ProjectileTargetHeightRatio")]
     pub projectile_target_height_ratio: Option<f32>,
     /// How far up its target a lobbed or dropped projectile aims.
-    #[serde(rename = "ProjectileArcingTargetHeightRatio")]
     pub projectile_arcing_target_height_ratio: Option<f32>,
     /// The most a resource that limits another provides, in total.
-    #[serde(rename = "EconomyLimitedResourceMax")]
     pub economy_limited_resource_max: Option<f32>,
     /// The most a stockpile holds.
-    #[serde(rename = "EconomyStockpileResourceMax")]
     pub economy_stockpile_resource_max: Option<f32>,
     /// How fast what falls gains speed; negative, for downwards.
-    #[serde(rename = "Gravity")]
     pub gravity: Option<f32>,
     /// How much of its speed times gravity an aircraft shot down gains in
     /// sinking speed each second.
-    #[serde(rename = "PlaneFallGravityTweak")]
     pub plane_fall_gravity_tweak: Option<f32>,
     /// The share of its cost a building sells for.
-    #[serde(rename = "SellFactor")]
     pub sell_factor: Option<f32>,
     /// Whether a building under siege can be sold.
-    #[serde(rename = "AllowSellUnderSiege")]
     pub allow_sell_under_siege: Option<bool>,
     /// What stockpiles start at on new and random maps.
-    #[serde(rename = "ResourceStockpileDefault")]
     pub resource_stockpile_default: Option<f32>,
     /// Seconds a connected relay's stockpile gains each second.
-    #[serde(rename = "SupplyStockpileRechargeRate")]
     pub supply_stockpile_recharge_rate: Option<f32>,
     /// How much nearer the intruder a guard is already after counts.
-    #[serde(rename = "GuardOldTargetBias")]
     pub guard_old_target_bias: Option<f32>,
     /// What [`crate::ExploreRules`] are read from.
-    #[serde(rename = "ExploreNumActorLocations")]
     pub explore_num_actor_locations: Option<u32>,
-    #[serde(rename = "ExploreNumWaypointLocations")]
     pub explore_num_waypoint_locations: Option<u32>,
-    #[serde(rename = "ExploreActorRadiusMin")]
     pub explore_actor_radius_min: Option<f32>,
-    #[serde(rename = "ExploreActorRadiusMax")]
     pub explore_actor_radius_max: Option<f32>,
-    #[serde(rename = "ExploreWaypointTilesIntoFog")]
     pub explore_waypoint_tiles_into_fog: Option<u32>,
-    #[serde(rename = "ExploreActorBaseValue")]
     pub explore_actor_base_value: Option<f32>,
-    #[serde(rename = "ExploreWaypointBaseValue")]
     pub explore_waypoint_base_value: Option<f32>,
-    #[serde(rename = "ExploreDistanceMultiplier")]
     pub explore_distance_multiplier: Option<f32>,
-    #[serde(rename = "ExploreDotProductMultiplier")]
     pub explore_dot_product_multiplier: Option<f32>,
-    #[serde(rename = "ExploreFinishAreaBonus")]
     pub explore_finish_area_bonus: Option<f32>,
-    #[serde(rename = "ExploreFuzzyFactor")]
     pub explore_fuzzy_factor: Option<f32>,
-    #[serde(rename = "ExploreInertiaCloseEnough")]
     pub explore_inertia_close_enough: Option<f32>,
     /// The slowest and fastest a match is played, as powers of two.
-    #[serde(rename = "GameSpeedMin")]
     pub game_speed_min: Option<f32>,
-    #[serde(rename = "GameSpeedMax")]
     pub game_speed_max: Option<f32>,
     /// The lowest a terrain's speed limit comes to.
-    #[serde(rename = "TerrainMinimumMoveSpeed")]
     pub terrain_minimum_move_speed: Option<f32>,
     /// Seconds a bombardment's hit keeps a regiment out of supply.
-    #[serde(rename = "BombardTargetTimeout")]
     pub bombard_target_timeout: Option<f32>,
     /// It's night while the sun's diffuse red, green and blue sum to less
     /// than this.
-    #[serde(rename = "SunNightThreshold")]
     pub sun_night_threshold: Option<f32>,
     /// Seconds an enemy's damage keeps what it hurt under siege.
-    #[serde(rename = "UnderSiegeRecentlyDamagedSeconds")]
     pub under_siege_recently_damaged_seconds: Option<f32>,
     /// What a building's denizens are resupplied at while it's under
     /// siege, as a share of their usual rate.
-    #[serde(rename = "DenizenResupplyRateUnderSiege")]
     pub denizen_resupply_rate_under_siege: Option<f32>,
-    #[serde(rename = "KillCreditTimeout")]
     pub kill_credit_timeout: Option<f32>,
     /// Added to a target's score for a unit it's attacking.
-    #[serde(rename = "AbilityScoreAttackerBonus")]
     pub ability_score_attacker_bonus: Option<f32>,
     /// Whether a regiment's attack target comes before all else its
     /// members could fire on.
-    #[serde(rename = "KillTargetIsHighestPriority")]
     pub kill_target_is_highest_priority: Option<bool>,
     /// The longest a unit waits, once its regiment engages, before it
     /// first decides what to do.
-    #[serde(rename = "EngageReactionTimeRange")]
     pub engage_reaction_time_range: Option<f32>,
     /// Attack efficiency a second a regiment's gains while below its
     /// target.
@@ -1596,120 +1554,67 @@ pub struct SVars {
     pub attack_efficiency_falling: Option<f32>,
     /// How many times its own top speed a regiment's member catching up
     /// with its place goes at most.
-    #[serde(rename = "MoverCatchupSpeed")]
     pub mover_catchup_speed: Option<f32>,
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
-    #[serde(rename = "RecruitSearchRadiusSmall")]
     pub recruit_search_radius_small: Option<f32>,
     /// The least a multiplier that modifiers add up to comes to.
-    #[serde(rename = "ModifierAttributeClampMultiply")]
     pub modifier_attribute_clamp_multiply: Option<f32>,
     /// Morale a second a regiment regaining it gains more in supply.
-    #[serde(rename = "MoraleSupplyBonus")]
     pub morale_supply_bonus: Option<f32>,
     /// How regiments lose and regain morale, and rout: see
     /// [`CombatValueRules`](crate::CombatValueRules).
-    #[serde(rename = "CombatDamageMinimum")]
     pub combat_damage_minimum: Option<f32>,
-    #[serde(rename = "CombatValueRangePower")]
     pub combat_value_range_power: Option<f32>,
-    #[serde(rename = "CombatValueAreaPower")]
     pub combat_value_area_power: Option<f32>,
-    #[serde(rename = "CombatValueOffenseWeight")]
     pub combat_value_offense_weight: Option<f32>,
-    #[serde(rename = "CombatValueDefenseWeight")]
     pub combat_value_defense_weight: Option<f32>,
-    #[serde(rename = "CombatValueDefenseWeightRanged")]
     pub combat_value_defense_weight_ranged: Option<f32>,
-    #[serde(rename = "CombatValueRangedMinimum")]
     pub combat_value_ranged_minimum: Option<f32>,
-    #[serde(rename = "CombatValueMovementWeight")]
     pub combat_value_movement_weight: Option<f32>,
-    #[serde(rename = "CombatValueMovementDefault")]
     pub combat_value_movement_default: Option<f32>,
-    #[serde(rename = "CombatValueMeanValuesDiscardPercent")]
     pub combat_value_mean_values_discard_percent: Option<f32>,
     /// [`ExperienceGains`](crate::ExperienceGains).
-    #[serde(rename = "ExperienceGainMinimum")]
     pub experience_gain_minimum: Option<f32>,
-    #[serde(rename = "ExperienceGainMaximum")]
     pub experience_gain_maximum: Option<f32>,
-    #[serde(rename = "ExperienceKillMultiplier")]
     pub experience_kill_multiplier: Option<f32>,
-    #[serde(rename = "ExperienceCaptureMultiplier")]
     pub experience_capture_multiplier: Option<f32>,
-    #[serde(rename = "ExperienceRoutMultiplier")]
     pub experience_rout_multiplier: Option<f32>,
-    #[serde(rename = "ExperienceEngageMultiplier")]
     pub experience_engage_multiplier: Option<f32>,
-    #[serde(rename = "ExperienceDefaultValue")]
     pub experience_default_value: Option<f32>,
-    #[serde(rename = "ExperienceFactionGainMultiplier")]
     pub experience_faction_gain_multiplier: Option<f32>,
     /// [`MoraleRules`](crate::MoraleRules).
-    #[serde(rename = "MoraleEngagementLoss")]
     pub morale_engagement_loss: Option<f32>,
-    #[serde(rename = "MoraleEngagementLossFactorMax")]
     pub morale_engagement_loss_factor_max: Option<f32>,
-    #[serde(rename = "MoraleDeathFactor")]
     pub morale_death_factor: Option<f32>,
-    #[serde(rename = "MoraleRetreatPenalty")]
     pub morale_retreat_penalty: Option<f32>,
-    #[serde(rename = "MoraleSlayerBase")]
     pub morale_slayer_base: Option<f32>,
-    #[serde(rename = "MoraleSlayerFactorMin")]
     pub morale_slayer_factor_min: Option<f32>,
-    #[serde(rename = "MoraleSlayerFactorMax")]
     pub morale_slayer_factor_max: Option<f32>,
-    #[serde(rename = "MoraleBreakerBase")]
     pub morale_breaker_base: Option<f32>,
-    #[serde(rename = "MoraleBreakerFactorMin")]
     pub morale_breaker_factor_min: Option<f32>,
-    #[serde(rename = "MoraleBreakerFactorMax")]
     pub morale_breaker_factor_max: Option<f32>,
-    #[serde(rename = "MoraleReplenish")]
     pub morale_replenish: Option<f32>,
-    #[serde(rename = "RoutingTime")]
     pub routing_time: Option<f32>,
-    #[serde(rename = "ReformTime")]
     pub reform_time: Option<f32>,
-    #[serde(rename = "RoutRandomCandidates")]
     pub rout_random_candidates: Option<u32>,
-    #[serde(rename = "RoutMaxDistanceDelta")]
     pub rout_max_distance_delta: Option<f32>,
-    #[serde(rename = "RoutSupplyZoneCandidates")]
     pub rout_supply_zone_candidates: Option<u32>,
-    #[serde(rename = "RoutSupplyZoneMaxAngleDelta")]
     pub rout_supply_zone_max_angle_delta: Option<f32>,
-    #[serde(rename = "RoutBaseValue")]
     pub rout_base_value: Option<f32>,
-    #[serde(rename = "RoutFactorEnemyDist")]
     pub rout_factor_enemy_dist: Option<f32>,
-    #[serde(rename = "RoutFactorEnemyDistCap")]
     pub rout_factor_enemy_dist_cap: Option<f32>,
-    #[serde(rename = "RoutFactorEnemyAngle")]
     pub rout_factor_enemy_angle: Option<f32>,
-    #[serde(rename = "RoutFactorMovedDist")]
     pub rout_factor_moved_dist: Option<f32>,
-    #[serde(rename = "RoutFactorMovedDistCap")]
     pub rout_factor_moved_dist_cap: Option<f32>,
-    #[serde(rename = "RoutFactorSupplyDist")]
     pub rout_factor_supply_dist: Option<f32>,
-    #[serde(rename = "RoutFactorSupplyDistCap")]
     pub rout_factor_supply_dist_cap: Option<f32>,
-    #[serde(rename = "RoutPenaltyEnemyZOC")]
     pub rout_penalty_enemy_zoc: Option<f32>,
-    #[serde(rename = "RoutPenaltyEnemyZOG")]
     pub rout_penalty_enemy_zog: Option<f32>,
-    #[serde(rename = "RoutBonusFriendlyZOS")]
     pub rout_bonus_friendly_zos: Option<f32>,
-    #[serde(rename = "RoutBonusSupplyInRange")]
     pub rout_bonus_supply_in_range: Option<f32>,
-    #[serde(rename = "RoutFuzziness")]
     pub rout_fuzziness: Option<f32>,
     /// 0, 1 or 2 for no fog, explored or full; the world rule overrides it.
-    #[serde(rename = "FogOfWar")]
     pub fog_of_war: Option<u8>,
 }
 
@@ -1717,53 +1622,37 @@ pub struct SVars {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UVars {
     /// What marks a figure or option that's no good, such as a shortfall.
-    #[serde(rename = "UIColorOptionInvalid")]
     pub ui_color_option_invalid: Option<[f32; 3]>,
     /// What marks the key for something in its name.
-    #[serde(rename = "UIColorHighlight")]
     pub ui_color_highlight: Option<[f32; 3]>,
     /// What tints the icon of a property a side holds, such as a
     /// technology.
-    #[serde(rename = "UIColorPropertyTechnology")]
     pub ui_color_property_technology: Option<[f32; 3]>,
     /// What tints the icon of a property a building hands its side.
-    #[serde(rename = "UIColorPropertySupport")]
     pub ui_color_property_support: Option<[f32; 3]>,
     /// What tint the icon of a property an ability gave, by whether the
     /// side that used it is a friend or an enemy of the holder's.
-    #[serde(rename = "UIColorPropertyTemporaryFriendly")]
     pub ui_color_property_temporary_friendly: Option<[f32; 3]>,
-    #[serde(rename = "UIColorPropertyTemporaryEnemy")]
     pub ui_color_property_temporary_enemy: Option<[f32; 3]>,
     /// What colours a figure in a tooltip, by whether it's above, below
     /// or at its plain value.
-    #[serde(rename = "UIColorModifierPositive")]
     pub ui_color_modifier_positive: Option<[f32; 3]>,
-    #[serde(rename = "UIColorModifierNegative")]
     pub ui_color_modifier_negative: Option<[f32; 3]>,
-    #[serde(rename = "UIColorModifierNeutral")]
     pub ui_color_modifier_neutral: Option<[f32; 3]>,
     /// The id of the [`HotkeyConfiguration`] in use.
-    #[serde(rename = "HotkeyConfiguration")]
     pub hotkey_configuration: Option<Id>,
     /// The options' volumes, as they start.
-    #[serde(rename = "AudioMainVolume")]
     pub audio_main_volume: Option<f32>,
-    #[serde(rename = "AudioSpeechVolume")]
     pub audio_speech_volume: Option<f32>,
-    #[serde(rename = "AudioMusicVolume")]
     pub audio_music_volume: Option<f32>,
     /// Whether the options' Unit Acknowledgement and Chat Notification
     /// start on.
-    #[serde(rename = "UnitAcknowledgement")]
     pub unit_acknowledgement: Option<bool>,
     #[serde(rename = "UIEventFilterChatSound")]
     pub chat_sound: Option<bool>,
     /// Whether the options' Elapsed Game Time starts on.
-    #[serde(rename = "ViewShowElapsedGameTime")]
     pub view_show_elapsed_game_time: Option<bool>,
     /// Whether the strip of control groups starts open.
-    #[serde(rename = "UIGroupFloaterIsOpen")]
     pub ui_group_floater_is_open: Option<bool>,
 }
 
@@ -1781,85 +1670,54 @@ pub struct HotkeyConfiguration {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AVars {
     /// Which of the in-match interface's optional parts it has.
-    #[serde(rename = "UIUseSidePanel")]
     pub ui_use_side_panel: Option<bool>,
-    #[serde(rename = "UIUseEconomicImpact")]
     pub ui_use_economic_impact: Option<bool>,
-    #[serde(rename = "UIUseRecruitItemFloater")]
     pub ui_use_recruit_item_floater: Option<bool>,
-    #[serde(rename = "UIUsePauseButton")]
     pub ui_use_pause_button: Option<bool>,
-    #[serde(rename = "UIShowFactionExperience")]
     pub ui_show_faction_experience: Option<bool>,
-    #[serde(rename = "UIFloatersDisplayEndCap")]
     pub ui_floaters_display_end_cap: Option<bool>,
     /// The supply border's width in world units, its colour, and the image
     /// drawn along it, by its archive path.
-    #[serde(rename = "ViewZoneFriendlySupplyWidth")]
     pub view_zone_friendly_supply_width: Option<f32>,
-    #[serde(rename = "ViewZoneFriendlySupplyColor")]
     pub view_zone_friendly_supply_color: Option<[f32; 3]>,
-    #[serde(rename = "ViewZoneFriendlySupplyTexture")]
     pub view_zone_friendly_supply_texture: Option<String>,
     /// Seconds between redraws of each of the minimap's layers.
-    #[serde(rename = "MinimapPeriodUpdateFog")]
     pub minimap_period_update_fog: Option<f32>,
-    #[serde(rename = "MinimapPeriodUpdateSupply")]
     pub minimap_period_update_supply: Option<f32>,
-    #[serde(rename = "MinimapPeriodUpdateObjects")]
     pub minimap_period_update_objects: Option<f32>,
     /// The font, by its `ids`, that a tooltip's title is in.
-    #[serde(rename = "TextFontIDSToolTipName")]
     pub text_font_ids_tool_tip_name: Option<String>,
     /// The side, in world units, of the squares the terrain is drawn in.
-    #[serde(rename = "TerrainBlockSize")]
     pub terrain_block_size: Option<f32>,
     /// How much of the sun's ambient and diffuse light the ground reflects.
-    #[serde(rename = "TerrainAmbient")]
     pub terrain_ambient: Option<f32>,
-    #[serde(rename = "TerrainDiffuse")]
     pub terrain_diffuse: Option<f32>,
     /// What the sun's dimmer is multiplied by while the game is paused.
-    #[serde(rename = "SunDimmerMultiplierWhenPaused")]
     pub sun_dimmer_multiplier_when_paused: Option<f32>,
     /// How dark a shadow is, as the share of the sun it takes away.
-    #[serde(rename = "DynamicShadowSunModulate")]
     pub dynamic_shadow_sun_modulate: Option<f32>,
     /// What streamed audio plays in place of a file the archives don't have.
-    #[serde(rename = "DefaultAudioStreamingResource")]
     pub default_audio_streaming_resource: Option<String>,
     /// The music that plays nothing, for stopping music.
-    #[serde(rename = "AudioMusicSilent")]
     pub audio_music_silent: Option<Id>,
     /// What other audio falls to while audio that fades it plays, over how
     /// many seconds, and how long after the last such it starts to recover.
-    #[serde(rename = "AudioFadeVolume")]
     pub audio_fade_volume: Option<f32>,
-    #[serde(rename = "AudioFadeTime")]
     pub audio_fade_time: Option<f32>,
-    #[serde(rename = "AudioRecoverFromFadeTime")]
     pub audio_recover_from_fade_time: Option<f32>,
     /// The match music of someone watching rather than playing.
-    #[serde(rename = "ObserverGameMusic")]
     pub observer_game_music: Option<Id>,
     /// The glyph that marks a side, drawn in its colour, by [`Glyph`] id.
-    #[serde(rename = "KingdomGlyphInfo")]
     pub kingdom_glyph_info: Option<Id>,
     /// The glyph drawn before a side's experience, by [`Glyph`] index.
-    #[serde(rename = "FontFactionExperienceGlyphIndex")]
     pub font_faction_experience_glyph_index: Option<u32>,
     /// The glyphs drawn before a ping, by how good it is, by [`Glyph`] id;
     /// a ping is good below the low cutoff and middling below the medium,
     /// in milliseconds.
-    #[serde(rename = "PingIconGreenGlyphInfo")]
     pub ping_icon_green_glyph_info: Option<Id>,
-    #[serde(rename = "PingIconYellowGlyphInfo")]
     pub ping_icon_yellow_glyph_info: Option<Id>,
-    #[serde(rename = "PingIconRedGlyphInfo")]
     pub ping_icon_red_glyph_info: Option<Id>,
-    #[serde(rename = "ServerBrowserLowPingCutoff")]
     pub server_browser_low_ping_cutoff: Option<u32>,
-    #[serde(rename = "ServerBrowserMediumPingCutoff")]
     pub server_browser_medium_ping_cutoff: Option<u32>,
 }
 

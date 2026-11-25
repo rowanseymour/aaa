@@ -107,7 +107,7 @@ impl GameData {
 
     /// The id of the configuration in use until the player chooses one.
     pub fn default_hotkey_configuration(&self) -> Option<Id> {
-        self.interface_setting(|v| v.hotkey_configuration)
+        self.uvar(|v| v.hotkey_configuration.clone())
     }
 }
 

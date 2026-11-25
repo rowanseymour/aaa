@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{GameData, Id, defs, scoped};
+use crate::{GameData, Id, defs};
 
 /// The game's text by key, whose case doesn't matter, as it doesn't to the
 /// data that names one.
@@ -69,10 +69,7 @@ impl GameData {
     /// What the font's image of the glyph that marks a side is called,
     /// e.g. `Gem`: drawn in the side's colour wherever a side is named.
     pub fn side_glyph(&self) -> Option<String> {
-        let id = self
-            .avars()
-            .iter()
-            .find_map(|v| v.kingdom_glyph_info.clone())?;
+        let id = self.avar(|v| v.kingdom_glyph_info.clone())?;
         glyph_image(&self.glyphs(), &id)
     }
 
@@ -85,7 +82,7 @@ impl GameData {
     /// What the font's image of the glyph drawn before a side's experience
     /// is called, e.g. `FactionExperience`.
     pub fn experience_glyph(&self) -> Option<String> {
-        let index = (self.avars().iter()).find_map(|v| v.font_faction_experience_glyph_index)?;
+        let index = self.avar(|v| v.font_faction_experience_glyph_index)?;
         let glyphs = self.glyphs();
         image_name(glyphs.iter().find(|g| g.index == Some(index))?)
     }
@@ -94,14 +91,12 @@ impl GameData {
     /// it, by how good it is, and where good gives way to middling and
     /// middling to bad.
     pub fn ping_look(&self) -> PingLook {
-        let avars = self.avars();
         let glyphs = self.glyphs();
         let glyph = |of: fn(&defs::AVars) -> Option<Id>| {
-            let id = avars.iter().find_map(of)?;
+            let id = self.avar(of)?;
             glyph_image(&glyphs, &id)
         };
-        let cutoff =
-            |of: fn(&defs::AVars) -> Option<u32>, stock| avars.iter().find_map(of).unwrap_or(stock);
+        let cutoff = |of: fn(&defs::AVars) -> Option<u32>, stock| self.avar(of).unwrap_or(stock);
         PingLook {
             good: glyph(|v| v.ping_icon_green_glyph_info.clone()),
             middling: glyph(|v| v.ping_icon_yellow_glyph_info.clone()),
@@ -112,12 +107,7 @@ impl GameData {
     }
 
     fn read_glyphs(&self) -> Vec<defs::Glyph> {
-        let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
-        let files = scoped(&files);
-        files
-            .iter()
-            .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
-            .collect()
+        self.read_all(|n| n.starts_with("fonts/special_glyphs"), "Glyph")
     }
 }
 
@@ -153,7 +143,7 @@ pub(crate) fn glyph_image(glyphs: &[defs::Glyph], id: &Id) -> Option<String> {
 }
 
 /// What the font's image of `glyph` is called.
-fn image_name(glyph: &defs::Glyph) -> Option<String> {
+pub(crate) fn image_name(glyph: &defs::Glyph) -> Option<String> {
     Some(glyph.display_name.as_deref()?.replace(' ', ""))
 }
 

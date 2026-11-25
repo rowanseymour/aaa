@@ -150,34 +150,29 @@ impl GameData {
 
     /// The minimap's colours.
     pub fn minimap(&self) -> Option<defs::Minimap> {
-        let files = self.parse_tgis(|n| n == "minimap/minimap.tgi");
-        let files = scoped(&files);
-        files.iter().find_map(|f| f.read("Minimap").next())
+        let minimaps = self.read_all(|n| n == "minimap/minimap.tgi", "Minimap");
+        minimaps.into_iter().next()
     }
 
     /// How the supply border is drawn; green and thin where the settings
     /// don't say.
     pub fn supply_border(&self) -> SupplyBorder {
-        let vars = self.avars();
         SupplyBorder {
-            colour: (vars.iter())
-                .find_map(|v| v.view_zone_friendly_supply_color)
+            colour: self
+                .avar(|v| v.view_zone_friendly_supply_color)
                 .unwrap_or([0.0, 1.0, 0.0]),
-            width: (vars.iter())
-                .find_map(|v| v.view_zone_friendly_supply_width)
+            width: self
+                .avar(|v| v.view_zone_friendly_supply_width)
                 .unwrap_or(0.15),
-            texture: (vars.iter()).find_map(|v| v.view_zone_friendly_supply_texture.clone()),
-            block: (vars.iter())
-                .find_map(|v| v.terrain_block_size)
-                .unwrap_or(8.0),
+            texture: self.avar(|v| v.view_zone_friendly_supply_texture.clone()),
+            block: self.avar(|v| v.terrain_block_size).unwrap_or(8.0),
         }
     }
 
     /// Seconds between the minimap's redraws of its fog, supply border
     /// and marks, a second each where the settings don't say.
     pub fn minimap_periods(&self) -> MinimapPeriods {
-        let vars = self.avars();
-        let period = |of: fn(&defs::AVars) -> Option<f32>| vars.iter().find_map(of).unwrap_or(1.0);
+        let period = |of: fn(&defs::AVars) -> Option<f32>| self.avar(of).unwrap_or(1.0);
         MinimapPeriods {
             fog: period(|v| v.minimap_period_update_fog),
             supply: period(|v| v.minimap_period_update_supply),
@@ -187,57 +182,56 @@ impl GameData {
 
     /// Whether the elapsed game time is shown as the options start.
     pub fn shows_elapsed_game_time(&self) -> bool {
-        self.interface_setting(|v| v.view_show_elapsed_game_time)
+        self.uvar(|v| v.view_show_elapsed_game_time)
             .unwrap_or(false)
     }
 
     /// Whether the strip of control groups is open as the first match
     /// starts.
     pub fn group_strip_open(&self) -> bool {
-        self.interface_setting(|v| v.ui_group_floater_is_open)
-            .unwrap_or(false)
+        self.uvar(|v| v.ui_group_floater_is_open).unwrap_or(false)
     }
 
     /// What colours a figure or option that's no good, such as a shortfall.
     pub fn invalid_colour(&self) -> Option<[f32; 3]> {
-        self.interface_setting(|v| v.ui_color_option_invalid)
+        self.uvar(|v| v.ui_color_option_invalid)
     }
 
     /// What colours the key for something where its name is shown.
     pub fn highlight_colour(&self) -> Option<[f32; 3]> {
-        self.interface_setting(|v| v.ui_color_highlight)
+        self.uvar(|v| v.ui_color_highlight)
     }
 
     /// What tints the icon of a property its holder's side holds, such as
     /// a technology.
     pub fn technology_property_colour(&self) -> Option<[f32; 3]> {
-        self.interface_setting(|v| v.ui_color_property_technology)
+        self.uvar(|v| v.ui_color_property_technology)
     }
 
     /// What tints the icon of a property a building hands its side.
     pub fn support_property_colour(&self) -> Option<[f32; 3]> {
-        self.interface_setting(|v| v.ui_color_property_support)
+        self.uvar(|v| v.ui_color_property_support)
     }
 
     /// What tints the icon of a property an ability gave, when the side
     /// that used it is the holder's or an ally.
     pub fn friendly_property_colour(&self) -> Option<[f32; 3]> {
-        self.interface_setting(|v| v.ui_color_property_temporary_friendly)
+        self.uvar(|v| v.ui_color_property_temporary_friendly)
     }
 
     /// What tints the icon of a property an ability gave, when the side
     /// that used it is an enemy of the holder's.
     pub fn enemy_property_colour(&self) -> Option<[f32; 3]> {
-        self.interface_setting(|v| v.ui_color_property_temporary_enemy)
+        self.uvar(|v| v.ui_color_property_temporary_enemy)
     }
 
     /// What colours a tooltip's figure that's above, below and at its
     /// plain value, in that order.
     pub fn modifier_colours(&self) -> [Option<[f32; 3]>; 3] {
         [
-            self.interface_setting(|v| v.ui_color_modifier_positive),
-            self.interface_setting(|v| v.ui_color_modifier_negative),
-            self.interface_setting(|v| v.ui_color_modifier_neutral),
+            self.uvar(|v| v.ui_color_modifier_positive),
+            self.uvar(|v| v.ui_color_modifier_negative),
+            self.uvar(|v| v.ui_color_modifier_neutral),
         ]
     }
 
@@ -397,8 +391,7 @@ impl GameData {
     /// The font, by its `ids`, that a tooltip's title is in, where the
     /// settings name one.
     pub fn tooltip_title_font(&self) -> Option<String> {
-        let vars = self.avars();
-        (vars.iter()).find_map(|v| v.text_font_ids_tool_tip_name.clone())
+        self.avar(|v| v.text_font_ids_tool_tip_name.clone())
     }
 
     /// The images the connection dialog draws, as its layout names them.
@@ -439,9 +432,9 @@ impl GameData {
         localized(&strings, Some(text))
     }
 
-    /// One of the interface's settings.
-    pub(crate) fn interface_setting<T>(&self, of: impl Fn(defs::UVars) -> Option<T>) -> Option<T> {
-        self.uvars().iter().cloned().find_map(of)
+    /// The first of the interface's settings that `of` finds.
+    pub(crate) fn uvar<T>(&self, of: impl Fn(&defs::UVars) -> Option<T>) -> Option<T> {
+        self.uvars().iter().find_map(of)
     }
 
     /// The interface's settings, the game's own before the engine's.
@@ -458,12 +451,10 @@ impl GameData {
     /// The orders the player can give, in the order the files list them.
     pub fn commands(&self) -> Vec<Command> {
         let strings = self.strings();
-        let files = self.parse_tgis(|n| {
-            n.starts_with("game/actor_commands") || n.starts_with("game/actorcommands/")
-        });
-        let files = scoped(&files);
-        (files.iter())
-            .flat_map(|f| f.read::<defs::ActorCommand>("ActorCommand"))
+        let filter =
+            |n: &str| n.starts_with("game/actor_commands") || n.starts_with("game/actorcommands/");
+        (self.read_all::<defs::ActorCommand>(filter, "ActorCommand"))
+            .into_iter()
             .filter_map(|c| command(&strings, c))
             .collect()
     }
@@ -472,10 +463,9 @@ impl GameData {
     /// in the order the files list them.
     pub fn team_commands(&self) -> Vec<Command> {
         let strings = self.strings();
-        let files = self.parse_tgis(|n| n.starts_with("game/team_commands"));
-        let files = scoped(&files);
-        (files.iter())
-            .flat_map(|f| f.read::<defs::ActorCommand>("TeamCommand"))
+        let filter = |n: &str| n.starts_with("game/team_commands");
+        (self.read_all::<defs::ActorCommand>(filter, "TeamCommand"))
+            .into_iter()
             .filter_map(|c| command(&strings, c))
             .collect()
     }
