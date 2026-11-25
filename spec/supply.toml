@@ -440,7 +440,7 @@ text = '''Things outside regiments (ships, aircraft, lone vehicles, trucks) have
 [[topic.rule]]
 id = "building-in-supply"
 tags = ["code"]
-text = '''Buildings: a source is always in supply; a relay is in supply while connected. A building's own health never changes with supply.'''
+text = '''Buildings: a source is always in supply; a relay is in supply while connected. A building with `supply_required` that gives no supply of its own (none in stock data) is judged by its ground, as an unpacking Division HQ or depot is (below). A building's own health never changes with supply.'''
 
 [[topic.rule]]
 id = "unpacking-building-in-supply"
@@ -948,7 +948,7 @@ Command All (button 4 on the command grid, hotkey A, "Select all attached regime
 
 [[topic.rule]]
 id = "command-all-from-regiment-panel"
-tags = ["guess"]
+tags = ["code"]
 text = '''The Command All button isn't shown with an attached regiment selected, so selecting its HQ's regiments that way is reached only through the regiment panel.'''
 
 [[topic.rule]]
