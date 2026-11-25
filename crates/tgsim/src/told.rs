@@ -82,7 +82,7 @@ impl World {
     fn may_use_told(&self, s: Target, w: usize, t: Target) -> Result<(), &'static str> {
         let weapon = &self.fighter(s).ok_or("it's gone")?.weapons[w];
         let has = match s {
-            Target::Unit(u) => self.has(u, weapon),
+            Target::Unit(u) => self.has(u, weapon) && self.unit_may_fire(u),
             Target::Building(b) => !self.buildings[b].constructing,
         };
         let checks = [
@@ -103,6 +103,13 @@ impl World {
             Some((_, why)) => Err(why),
             None => Ok(()),
         }
+    }
+
+    /// Whether the unit at `u` may fire at all: nothing does while its
+    /// regiment routs or while it's coming down.
+    fn unit_may_fire(&self, u: usize) -> bool {
+        let unit = &self.units[u];
+        !self.organizations[unit.organization].routing() && unit.descent.is_none()
     }
 
     /// Whether `s`'s weapon `w` has recharged.
@@ -134,7 +141,7 @@ impl World {
         for mut told in std::mem::take(&mut self.told) {
             let (s, w, t) = (told.by, told.weapon, told.target);
             let usable = match s {
-                Target::Unit(u) => self.units[u].alive(),
+                Target::Unit(u) => self.units[u].alive() && self.unit_may_fire(u),
                 Target::Building(b) => {
                     let state = self.buildings[b].state;
                     state == State::Standing || state == State::Disabled

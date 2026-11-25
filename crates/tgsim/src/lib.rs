@@ -1181,11 +1181,8 @@ pub enum Command {
     Escort { building: usize, on: bool },
     /// Has the thing with the map id `thing` stop and use, once, the
     /// ability of its `[PerformerComponent]` whose definition is `ability`
-    /// on the thing with the id `target`, as a map's script can: turning
-    /// its turret first, then firing, its shot bombardment if the ability
-    /// is flagged `bombard`. Silently does nothing more where it couldn't
-    /// fire on `target` now: out of reach or arc, or recharging. Any side
-    /// may give it of anything.
+    /// on the thing with the id `target`, as a map's script can, or does
+    /// nothing more where it can't now. Any side may give it of anything.
     Ability {
         thing: u32,
         ability: Id,

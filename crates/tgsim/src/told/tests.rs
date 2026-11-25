@@ -214,3 +214,39 @@ fn a_building_not_yet_woken_recharges_what_its_told_to_use() {
     w.tick();
     assert_eq!(health(&w), 80.0);
 }
+
+#[test]
+fn a_unit_that_cant_fire_now_isnt_told_to() {
+    let told = |routing: bool| {
+        let mut w = skirmish();
+        w.units[1].position = [10.0, 32.0];
+        w.units[1].fighter = Some(soldier(Vec::new()));
+        let rifle = &mut w.units[0].fighter.as_mut().unwrap().weapons[0];
+        (rifle.definition, rifle.performed, rifle.range) = (Some(Id::from("Rifle")), true, 25.0);
+        if routing {
+            w.organizations[0].morale = 0.0;
+            w.rout(0);
+        }
+        let command = Command::Ability {
+            thing: 2,
+            ability: Id::from("Rifle"),
+            target: 4,
+        };
+        w.apply(1, command).unwrap();
+        run(&mut w, 1.0);
+        w.units[1].health
+    };
+    assert_eq!(told(false), 50.0);
+    assert_eq!(told(true), 100.0);
+}
+
+#[test]
+fn a_turret_told_to_turn_leaves_its_other_weapons_without_a_target() {
+    // Its gun reaches the soldier, but the shell has the turret.
+    let mut w = bunker(90.0, 360.0, false);
+    let gun = &mut w.buildings[0].fighter.weapons[1];
+    (gun.range, gun.aimed_by) = (30.0, Some(0));
+    tell(&mut w, 20, "Shell", 2);
+    w.tick();
+    assert_eq!(w.buildings[0].target, None);
+}

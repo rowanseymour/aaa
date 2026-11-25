@@ -486,16 +486,19 @@ impl World {
                 if !ready {
                     continue;
                 }
+                // One it's been told to use has the turret meanwhile, so
+                // the weapon on it neither aims nor takes a target.
+                if let (Target::Building(b), Some(i)) = (s, weapon.aimed_by)
+                    && self.told_turret(b) == Some(i)
+                {
+                    continue;
+                }
                 let Some(t) = self.aim(s, weapon, target) else {
                     continue;
                 };
                 target = Some(t);
                 // A building's turret must point at its target first.
                 if let (Target::Building(b), Some(i)) = (s, weapon.aimed_by) {
-                    // One it's been told to use has the turret meanwhile.
-                    if self.told_turret(b) == Some(i) {
-                        continue;
-                    }
                     let building = &self.buildings[b];
                     let turret = &building.fighter.turrets[i];
                     turrets[i].idle = 0.0;
