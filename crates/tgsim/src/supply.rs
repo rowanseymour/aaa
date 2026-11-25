@@ -671,14 +671,14 @@ impl World {
     }
 
     /// The nearest building near the organization at `r` that recruits its
-    /// kind and could send it a member now.
+    /// kind and has a way for its recruits out, whatever it's doing.
     pub(crate) fn recruiter(&self, r: usize) -> Option<&Building> {
         let organization = &self.organizations[r];
         let at = self.leader_position(r);
         let recruits = |b: &&Building| {
             let list = self.rules.recruit_lists.get(&b.template);
             b.standing()
-                && !b.busy()
+                && b.deploy.is_some()
                 && self.shares_supply(organization.owner, b.owner)
                 && list.is_some_and(|l| l.contains(&organization.template))
                 && distance(at, b.position) < organization.control(&self.rules.guard_rules)
@@ -1089,6 +1089,27 @@ mod tests {
         assert!(w.units[lost].path.len() > 1);
         // A new thing, not the dead one.
         assert_ne!(w.units[lost].id, id);
+    }
+
+    #[test]
+    fn replacements_come_from_the_nearest_recruiter_with_a_way_out_whatever_its_doing() {
+        let mut w = division();
+        let mut near = building(70, 1, [26.0, 24.0]);
+        near.template = "depot".into();
+        let mut far = building(71, 1, [26.0, 32.0]);
+        far.template = "depot".into();
+        far.deploy = Some(DeployPoints {
+            creation: [0.0, 0.0],
+            deployment: [-6.0, 0.0],
+        });
+        w.add_buildings(&[near, far]);
+        let (near, far) = (w.buildings.len() - 2, w.buildings.len() - 1);
+        assert_eq!(w.buildings[near].deploy, None);
+        // The nearer has no way out, and the farther is busy unpacking.
+        w.buildings[far].unpacking = Some((w.ticks, w.ticks + 50));
+        assert_eq!(w.recruiter(1).map(|b| b.id), Some(71));
+        w.buildings[near].deploy = w.buildings[far].deploy;
+        assert_eq!(w.recruiter(1).map(|b| b.id), Some(70));
     }
 
     #[test]
