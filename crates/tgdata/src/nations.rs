@@ -439,8 +439,7 @@ impl GameData {
     pub fn sais(&self) -> Vec<Sai> {
         let strings = self.strings();
         let read: Vec<defs::Sai> = self.read_all(|n| n.starts_with("sai/"), "SAI");
-        let ids =
-            |choices: Vec<defs::SaiChoice>| choices.into_iter().filter_map(|c| c.ids).collect();
+        let ids = |choices: Vec<defs::Named>| choices.into_iter().filter_map(|c| c.ids).collect();
         let mut sais: Vec<Sai> = (read.into_iter())
             .filter_map(|s| {
                 let id = s.ids?;
@@ -529,8 +528,7 @@ mod tests {
         let s: defs::Sai = tgi::from_block(block).unwrap();
         assert_eq!(s.ids, Some(Id::from("chuikov_sai")));
         assert_eq!(s.public, Some(false));
-        let ids =
-            |c: &[defs::SaiChoice]| c.iter().filter_map(|c| c.ids.clone()).collect::<Vec<_>>();
+        let ids = |c: &[defs::Named]| c.iter().filter_map(|c| c.ids.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&s.nation), vec![Id::from("nation_rus")]);
         assert_eq!(
             ids(&s.faction),

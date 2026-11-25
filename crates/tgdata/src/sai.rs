@@ -6,6 +6,7 @@
 
 use serde::Deserialize;
 
+pub use crate::defs::Named;
 use crate::{GameData, Id, scoped};
 
 /// A profile and its moods, the first the one it starts in.
@@ -50,11 +51,6 @@ impl Default for SaiBlock {
             ego: Vec::new(),
         }
     }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct Named {
-    pub ids: Option<Id>,
 }
 
 /// A mood: everything a computer player goes by while it's in it.

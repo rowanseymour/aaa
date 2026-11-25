@@ -271,16 +271,24 @@ impl GameData {
     pub fn level_names(&self) -> HashMap<Id, String> {
         let strings = self.strings();
         let mut out = HashMap::new();
+        self.each_level(|id, level| {
+            let name = level.property.as_ref().and_then(|p| p.name.as_deref());
+            let name = crate::strings::localized(&strings, name).filter(|n| !n.is_empty());
+            if let Some(name) = name {
+                out.insert(id, name);
+            }
+        });
+        out
+    }
+
+    /// Calls `f` with each template's experience levels, and the ids
+    /// [`level_property`] gives their properties.
+    fn each_level(&self, mut f: impl FnMut(Id, &defs::ExperienceLevel)) {
         for (template, component) in self.experience_components().iter() {
             for (n, level) in component.experience_level.iter().enumerate() {
-                let name = level.property.as_ref().and_then(|p| p.name.as_deref());
-                let name = crate::strings::localized(&strings, name).filter(|n| !n.is_empty());
-                if let Some(name) = name {
-                    out.insert(level_property(template, n), name);
-                }
+                f(level_property(template, n), level);
             }
         }
-        out
     }
 
     /// Each template's experience component, read once.
@@ -294,13 +302,11 @@ impl GameData {
     /// [`level_property`] gives them, for those that have one.
     pub(crate) fn level_properties(&self) -> Vec<(Id, defs::Property)> {
         let mut out = Vec::new();
-        for (template, component) in self.experience_components().iter() {
-            for (n, level) in component.experience_level.iter().enumerate() {
-                if let Some(p) = &level.property {
-                    out.push((level_property(template, n), p.clone()));
-                }
+        self.each_level(|id, level| {
+            if let Some(p) = &level.property {
+                out.push((id, p.clone()));
             }
-        }
+        });
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
     }

@@ -310,22 +310,9 @@ fn vfx(v: defs::Vfx, model: Option<String>, texture: Option<String>) -> Vfx {
 }
 
 fn object_effects(thing: &defs::Thing) -> ObjectEffects {
-    let view = thing.view.as_ref();
-    let mover = thing.mover_component.as_ref();
-    let of_view =
-        |f: fn(&defs::View) -> &Vec<defs::Fxc>| view.map(|v| vfx_cues(f(v))).unwrap_or_default();
-    let of_mover = |f: fn(&defs::MoverComponent) -> &Vec<defs::Fxc>| {
-        mover.map(|m| vfx_cues(f(m))).unwrap_or_default()
-    };
-    let by_state = |fxcs: &[defs::Fxc]| -> Vec<(Id, VfxCue)> {
-        fxcs.iter()
-            .filter_map(|f| {
-                Some((
-                    not_null(f.actor_state.as_deref().map(Id::from))?,
-                    vfx_cue(f)?,
-                ))
-            })
-            .collect()
+    let commands = Commands {
+        thing,
+        cue: vfx_cue,
     };
     let health = thing
         .body_component
@@ -352,19 +339,56 @@ fn object_effects(thing: &defs::Thing) -> ObjectEffects {
         })
         .collect();
     ObjectEffects {
-        created: of_view(|v| &v.when_created),
-        destroyed: of_view(|v| &v.when_destroyed),
-        constructed: of_view(|v| &v.when_constructed),
-        start_moving: of_mover(|m| &m.when_start_moving),
-        stop_moving: of_mover(|m| &m.when_stop_moving),
-        entered: by_state(&thing.when_enter),
-        left: by_state(&thing.when_leave),
+        created: commands.view(|v| &v.when_created),
+        destroyed: commands.view(|v| &v.when_destroyed),
+        constructed: commands.view(|v| &v.when_constructed),
+        start_moving: commands.mover(|m| &m.when_start_moving),
+        stop_moving: commands.mover(|m| &m.when_stop_moving),
+        entered: commands.by_state(&thing.when_enter),
+        left: commands.by_state(&thing.when_leave),
         health,
-        disturbed: thing
-            .component
-            .iter()
-            .flat_map(|c| vfx_cues(&c.action))
-            .collect(),
+        disturbed: commands.disturbed(),
+    }
+}
+
+/// The cues `cue` finds in a template's commands, by where they sit: in its
+/// view, its mover, its states and its components' disturbances. Audio and
+/// effects read the same commands, each its own kind of them.
+pub(crate) struct Commands<'a, C> {
+    pub thing: &'a defs::Thing,
+    pub cue: fn(&defs::Fxc) -> Option<C>,
+}
+
+impl<C> Commands<'_, C> {
+    fn of(&self, fxcs: &[defs::Fxc]) -> Vec<C> {
+        fxcs.iter().filter_map(self.cue).collect()
+    }
+
+    pub fn view(&self, f: fn(&defs::View) -> &Vec<defs::Fxc>) -> Vec<C> {
+        (self.thing.view.as_ref()).map_or_else(Vec::new, |v| self.of(f(v)))
+    }
+
+    pub fn mover(&self, f: fn(&defs::MoverComponent) -> &Vec<defs::Fxc>) -> Vec<C> {
+        (self.thing.mover_component.as_ref()).map_or_else(Vec::new, |m| self.of(f(m)))
+    }
+
+    /// Those of `fxcs` that name a state, with it.
+    pub fn by_state(&self, fxcs: &[defs::Fxc]) -> Vec<(Id, C)> {
+        (fxcs.iter())
+            .filter_map(|f| {
+                Some((
+                    not_null(f.actor_state.as_deref().map(Id::from))?,
+                    (self.cue)(f)?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Those its components play as something disturbs them.
+    pub fn disturbed(&self) -> Vec<C> {
+        (self.thing.component.iter())
+            .flat_map(|c| self.of(&c.action))
+            .collect()
     }
 }
 

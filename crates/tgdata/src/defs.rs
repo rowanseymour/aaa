@@ -154,6 +154,20 @@ impl Thing {
         self.flags.iter().rev().find_map(of)
     }
 
+    /// The abilities it uses, those it performs and then those it defends
+    /// with.
+    pub fn abilities(&self) -> impl Iterator<Item = &Ability> {
+        let performs = self.performer_component.iter().flat_map(|p| &p.ability);
+        let defends = self.defender_component.iter().flat_map(|d| &d.ability);
+        performs.chain(defends)
+    }
+
+    /// The animations its character plays, none for one without a
+    /// character.
+    pub fn animations(&self) -> &[Animation] {
+        (self.character_component.as_ref()).map_or(&[], |c| &c.animation)
+    }
+
     /// A field of its `[Size]` as the last to set it has it.
     pub fn sized<'a, T>(&'a self, of: impl Fn(&'a Size) -> Option<T>) -> Option<T> {
         self.size.iter().rev().find_map(of)
@@ -326,23 +340,26 @@ pub struct ConstructionComponent {
     pub can_sell: Option<bool>,
     /// What it can be upgraded into.
     #[serde(default)]
-    pub upgrade: Vec<Upgrade>,
+    pub upgrade: Vec<Named>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BuilderComponent {
     #[serde(default)]
-    pub build_actor: Vec<BuildActor>,
+    pub build_actor: Vec<ActorRef>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct BuildActor {
-    pub actor_ids: Option<Id>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Upgrade {
+/// A block that names something by its `ids`, such as an upgrade.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Named {
     pub ids: Option<Id>,
+}
+
+/// A block that names a template by its `actor_ids`, such as one a
+/// builder builds.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActorRef {
+    pub actor_ids: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -355,12 +372,7 @@ pub struct HqComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RecruitComponent {
     #[serde(default)]
-    pub recruit_actor: Vec<RecruitActor>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RecruitActor {
-    pub actor_ids: Option<Id>,
+    pub recruit_actor: Vec<ActorRef>,
 }
 
 /// The technologies an object can research.
@@ -1358,16 +1370,10 @@ pub struct Sai {
     pub difficulty_level: Option<Id>,
     /// The nations it plays as, by id.
     #[serde(default)]
-    pub nation: Vec<SaiChoice>,
+    pub nation: Vec<Named>,
     /// The factions it plays as, by id.
     #[serde(default)]
-    pub faction: Vec<SaiChoice>,
-}
-
-/// A nation or faction a computer player's profile plays as.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SaiChoice {
-    pub ids: Option<Id>,
+    pub faction: Vec<Named>,
 }
 
 /// A special operation a faction gives their side.
