@@ -78,7 +78,7 @@ pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use interface::{
     ActionButton, Backup, Command, ConnectionLook, CursorLook, FontLook, FormationLook,
-    SupplyBorder, Typeface,
+    MinimapPeriods, SupplyBorder, Typeface,
 };
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use morale::{

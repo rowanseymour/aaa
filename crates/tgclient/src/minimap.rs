@@ -2,7 +2,8 @@
 //! a [view](Minimap::view) of, turned the way the game camera sees it,
 //! with units and buildings coloured by how their owner stands toward the
 //! player, buildings such as HQs marked by their own icons, and the ground
-//! the camera sees outlined in white.
+//! the camera sees outlined in white. Each layer over the ground is
+//! redrawn on its own clock, set by the game's settings.
 //! Clicking or dragging on it moves the camera there, unless an order is
 //! being aimed, which a click on it gives there instead.
 
@@ -47,6 +48,80 @@ pub struct Minimap {
     /// The icons buildings are marked with, by template id.
     icons: HashMap<Id, Icon>,
     colours: Colours,
+    /// When each layer over the ground was last redrawn, and what it drew:
+    /// the fog, whether it was lifted, the supply border's lines and the
+    /// things' marks.
+    fog_clock: Clock,
+    revealed: bool,
+    supply_clock: Clock,
+    supply: Vec<(Vec2, Vec2)>,
+    marks_clock: Clock,
+    marks: Marks,
+}
+
+/// A layer's redraws, every `period` seconds of the wall clock from the
+/// first.
+struct Clock {
+    period: f32,
+    last: Option<f32>,
+}
+
+impl Clock {
+    /// The shortest period kept, so that a setting of nothing or less
+    /// still leaves a blink a first half to show in.
+    const SHORTEST: f32 = 1.0 / 60.0;
+
+    fn new(period: f32) -> Self {
+        Clock {
+            period: period.max(Self::SHORTEST),
+            last: None,
+        }
+    }
+
+    /// Whether the layer is to be redrawn now, counting it as redrawn. The
+    /// redraws keep to whole periods from the first, however late a frame
+    /// comes, unless one is missed altogether.
+    fn due(&mut self, now: f32) -> bool {
+        let next = match self.last {
+            Some(last) if now - last < self.period => return false,
+            Some(last) if now - last < 2.0 * self.period => last + self.period,
+            _ => now,
+        };
+        self.last = Some(next);
+        true
+    }
+
+    /// Whether it's the first half of the time since the last redraw.
+    fn first_half(&self, now: f32) -> bool {
+        self.last.is_none_or(|last| now - last < self.period / 2.0)
+    }
+}
+
+/// A thing's mark: its colour, and the colour it blinks to for the first
+/// half of each redraw while the player's own thing is in trouble.
+#[derive(Clone, Copy)]
+struct Ink {
+    rgb: [u8; 3],
+    warning: Option<[u8; 3]>,
+}
+
+impl Ink {
+    fn now(self, warn: bool) -> [u8; 3] {
+        match self.warning {
+            Some(rgb) if warn => rgb,
+            _ => self.rgb,
+        }
+    }
+}
+
+/// The things' marks as last taken: units' dots, with whether each is the
+/// player's selected, drawn over the rest; buildings without an icon as
+/// squares; and buildings' icons, with whether each is selected.
+#[derive(Default)]
+struct Marks {
+    dots: Vec<(Vec2, bool, Ink)>,
+    squares: Vec<(Vec2, Ink)>,
+    icons: Vec<(bool, Id, [f32; 2], Ink)>,
 }
 
 /// An icon's pixels, RGBA, rows running along the map's y axis.
@@ -60,8 +135,6 @@ struct Icon {
 const UNDER_SIEGE: [f32; 3] = [1.0, 0.0, 0.0];
 const REQUIRES_SUPPLY: [f32; 3] = [0.0, 1.0, 0.0];
 const OWNED_SELECTED: [f32; 3] = [1.0; 3];
-/// Seconds a blinking mark spends in each of its colours.
-const BLINK: f32 = 0.5;
 
 /// What things are marked in, buildings and units, by [`Colours::of`].
 struct Colours {
@@ -73,6 +146,8 @@ struct Colours {
     requires_supply: [u8; 3],
     /// What the player's own selected things are marked in.
     selected: [u8; 3],
+    /// What the supply border is drawn in.
+    border: [u8; 3],
 }
 
 impl Colours {
@@ -81,6 +156,7 @@ impl Colours {
             let [r, g, b, _] = Color::srgb(r, g, b).to_srgba().to_u8_array();
             [r, g, b]
         };
+        let border = rgb(game.supply_border().colour);
         match game.minimap() {
             Some(m) => Colours {
                 buildings: [
@@ -100,6 +176,7 @@ impl Colours {
                 under_siege: rgb(m.color_under_siege.unwrap_or(UNDER_SIEGE)),
                 requires_supply: rgb(m.color_requires_supply.unwrap_or(REQUIRES_SUPPLY)),
                 selected: rgb(m.color_owned_selected.unwrap_or(OWNED_SELECTED)),
+                border,
             },
             None => {
                 warn!("no minimap colours; using the marks' tints");
@@ -113,6 +190,7 @@ impl Colours {
                     under_siege: rgb(UNDER_SIEGE),
                     requires_supply: rgb(REQUIRES_SUPPLY),
                     selected: rgb(OWNED_SELECTED),
+                    border,
                 }
             }
         }
@@ -192,6 +270,7 @@ pub fn setup(
         RenderAssetUsages::default(),
     );
     image.data = Some(base.clone());
+    let periods = game.minimap_periods();
     let minimap = Minimap {
         image: images.add(image),
         fogged: base.clone(),
@@ -201,6 +280,12 @@ pub fn setup(
         size: map.ground.size(),
         icons,
         colours: palette,
+        fog_clock: Clock::new(periods.fog),
+        revealed: false,
+        supply_clock: Clock::new(periods.supply),
+        supply: Vec::new(),
+        marks_clock: Clock::new(periods.objects),
+        marks: Marks::default(),
     };
     commands.insert_resource(minimap);
 }
@@ -314,9 +399,10 @@ fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
     }
 }
 
-/// Redraws the markers and the camera's view over the ground. While the
-/// player's side has its minimap's fog lifted, as by Radar Scan, the
-/// ground has no fog and everything is marked as it is now.
+/// Redraws the minimap: each layer over the ground on its own clock, and
+/// the camera's view every frame. While the player's side has its
+/// minimap's fog lifted, as by Radar Scan, the ground has no fog and
+/// everything is marked as it is.
 #[allow(clippy::too_many_arguments)]
 pub fn update(
     mut minimap: ResMut<Minimap>,
@@ -325,13 +411,28 @@ pub fn update(
     local: Res<crate::Local>,
     (selected, selected_building): (Res<crate::Selected>, Res<crate::SelectedBuilding>),
     outline: Res<crate::supply::Outline>,
-    look: Res<crate::supply::BorderLook>,
     time: Res<Time<Real>>,
     cameras: Query<(&Camera, &RtsCamera)>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    if fog.fresh() {
-        fog_ground(&mut minimap, &fog);
+    let now = time.elapsed_secs();
+    let minimap = &mut *minimap;
+    if minimap.fog_clock.due(now) {
+        minimap.revealed = local.0.is_some_and(|p| sim.0.revealed(p));
+        fog_ground(minimap, &fog);
+    }
+    if minimap.supply_clock.due(now) {
+        minimap.supply = supply_lines(minimap.size, &outline.0);
+    }
+    if minimap.marks_clock.due(now) {
+        minimap.marks = take_marks(
+            minimap,
+            &sim.0,
+            &fog,
+            local.0,
+            &selected,
+            &selected_building,
+        );
     }
     let Some(mut image) = images.get_mut(&minimap.image) else {
         return;
@@ -339,44 +440,77 @@ pub fn update(
     let Some(pixels) = image.data.as_mut() else {
         return;
     };
-    let revealed = local.0.is_some_and(|p| sim.0.revealed(p));
-    match revealed {
+    match minimap.revealed {
         true => pixels.copy_from_slice(&minimap.base),
         false => pixels.copy_from_slice(&minimap.fogged),
     }
     let mut canvas = Canvas(pixels);
+    let border = minimap.colours.border;
+    for &(from, to) in &minimap.supply {
+        canvas.line(from, to, border);
+    }
+    let warn = minimap.marks_clock.first_half(now);
+    draw_marks(&mut canvas, minimap, warn);
+    if let Ok((camera, rts)) = cameras.single() {
+        // From where the camera is this frame rather than where it was
+        // last drawn.
+        let transform = GlobalTransform::from(rts.transform());
+        let corners = view_corners(camera, &transform, rts.focus.y);
+        if let Some(corners) = corners {
+            let to_px = |p: [f32; 2]| to_image(minimap.size, p) * PIXELS as f32;
+            let corners = corners.map(to_px);
+            for i in 0..4 {
+                canvas.line(corners[i], corners[(i + 1) % 4], [255; 3]);
+            }
+        }
+    }
+}
+
+/// The supply border's pieces across the image, but for where a zone just
+/// runs off the map.
+fn supply_lines(size: f32, paths: &[Vec<[f32; 2]>]) -> Vec<(Vec2, Vec2)> {
+    let to_px = |p: [f32; 2]| to_image(size, p) * PIXELS as f32;
+    let inside = tgck::map::CELL_SIZE / 2.0..=size - tgck::map::CELL_SIZE / 2.0;
+    let on_map = |[x, y]: [f32; 2]| inside.contains(&x) && inside.contains(&y);
+    let mut lines = Vec::new();
+    for path in paths {
+        for (i, &from) in path.iter().enumerate() {
+            let to = path[(i + 1) % path.len()];
+            if on_map(from) && on_map(to) {
+                lines.push((to_px(from), to_px(to)));
+            }
+        }
+    }
+    lines
+}
+
+/// Where each thing the player can see is marked, and in what.
+fn take_marks(
+    minimap: &Minimap,
+    sim: &tgsim::World,
+    fog: &crate::fog::Fog,
+    local: Option<u32>,
+    selected: &crate::Selected,
+    selected_building: &crate::SelectedBuilding,
+) -> Marks {
+    let revealed = minimap.revealed;
+    let colours = &minimap.colours;
     let to_px = |p: [f32; 2]| to_image(minimap.size, p) * PIXELS as f32;
     // With nobody to play, there's no one to stand toward, so each side
     // keeps its own colour.
-    let colour = |palette: &[[u8; 3]; 4], owner: u32| match local.0 {
-        Some(p) => palette[Colours::of(sim.0.sides.relation(p, owner))],
+    let colour = |palette: &[[u8; 3]; 4], owner: u32| match local {
+        Some(p) => palette[Colours::of(sim.sides.relation(p, owner))],
         None => {
-            let [r, g, b] = sim.0.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
+            let [r, g, b] = sim.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
             let [r, g, b, _] = Color::srgb(r, g, b).to_srgba().to_u8_array();
             [r, g, b]
         }
     };
-    // The supply border, but for where a zone just runs off the map.
-    let [r, g, b, _] = look.colour.to_srgba().to_u8_array();
-    let on_map = |[x, y]: [f32; 2]| {
-        let inside = tgck::map::CELL_SIZE / 2.0..=minimap.size - tgck::map::CELL_SIZE / 2.0;
-        inside.contains(&x) && inside.contains(&y)
-    };
-    for path in &outline.0 {
-        for (i, &from) in path.iter().enumerate() {
-            let to = path[(i + 1) % path.len()];
-            if on_map(from) && on_map(to) {
-                canvas.line(to_px(from), to_px(to), [r, g, b]);
-            }
-        }
-    }
-    // The player's own things in trouble blink.
-    let warn = time.elapsed_secs() % (2.0 * BLINK) < BLINK;
-    let mine = |owner: u32| local.0 == Some(owner);
-    let own = |owner: u32| warn && mine(owner);
-    let neutral = minimap.colours.buildings[Colours::of(Relation::Neutral)];
-    let (mut icons, mut squares) = (Vec::new(), Vec::new());
-    for (b, building) in sim.0.buildings.iter().enumerate() {
+    // Only the player's own things in trouble blink.
+    let mine = |owner: u32| local == Some(owner);
+    let neutral = colours.buildings[Colours::of(Relation::Neutral)];
+    let mut marks = Marks::default();
+    for (b, building) in sim.buildings.iter().enumerate() {
         // Marked as last seen, gone or not.
         let shown = match fog.building(b) {
             _ if revealed => !building.gone(),
@@ -390,66 +524,74 @@ pub fn update(
         // Like the game, leave out the independents' houses and sheds,
         // but not the cities to be taken from them.
         let independent = sim
-            .0
             .sides
             .player(building.owner)
             .is_none_or(|p| p.independent);
-        let picked = mine(building.owner) && selected_building.0 == Some(b);
+        let own = mine(building.owner);
+        let picked = own && selected_building.0 == Some(b);
         let rgb = match building.state {
             _ if independent && building.zone.is_none() => continue,
             _ if independent => neutral,
-            _ if own(building.owner) && building.besieged.is_some() => minimap.colours.under_siege,
-            _ if own(building.owner) && sim.0.out_of_supply(b) => minimap.colours.requires_supply,
-            _ if picked => minimap.colours.selected,
+            _ if picked => colours.selected,
             State::Disabled => [100; 3],
-            _ => colour(&minimap.colours.buildings, building.owner),
+            _ => colour(&colours.buildings, building.owner),
         };
-        match minimap.icons.get(&building.template) {
-            Some(icon) => icons.push((picked, icon, building.position, rgb)),
-            None => squares.push((to_px(building.position), rgb)),
+        let warning = match () {
+            _ if !own || independent => None,
+            _ if building.besieged.is_some() => Some(colours.under_siege),
+            _ if sim.out_of_supply(b) => Some(colours.requires_supply),
+            _ => None,
+        };
+        let ink = Ink { rgb, warning };
+        match minimap.icons.contains_key(&building.template) {
+            true => (marks.icons).push((picked, building.template.clone(), building.position, ink)),
+            false => marks.squares.push((to_px(building.position), ink)),
         }
     }
+    marks.icons.sort_by_key(|&(picked, ..)| picked);
     let shown =
         |(u, unit): &(usize, &tgsim::Unit)| unit.alive() && (revealed || fog.shows_unit(*u));
-    let (mut dots, mut on_top) = (Vec::new(), Vec::new());
-    for (_, unit) in sim.0.units.iter().enumerate().filter(shown) {
-        let organization = &sim.0.organizations[unit.organization];
+    for (_, unit) in sim.units.iter().enumerate().filter(shown) {
+        let organization = &sim.organizations[unit.organization];
+        let own = mine(organization.owner);
         let fighting = !organization.engaged.is_empty() || unit.besieged.is_some();
-        let at = to_px(unit.position);
-        match () {
-            _ if own(organization.owner) && fighting => {
-                dots.push((at, minimap.colours.under_siege))
-            }
-            _ if mine(organization.owner) && selected.0.contains(&unit.organization) => {
-                on_top.push((at, minimap.colours.selected))
-            }
-            _ => dots.push((at, colour(&minimap.colours.units, organization.owner))),
-        }
+        let picked = own && selected.0.contains(&unit.organization);
+        let rgb = match picked {
+            true => colours.selected,
+            false => colour(&colours.units, organization.owner),
+        };
+        let warning = (own && fighting).then_some(colours.under_siege);
+        marks
+            .dots
+            .push((to_px(unit.position), picked, Ink { rgb, warning }));
     }
-    // Drawn from the lowest rank up: units' dots edged in black, then
-    // buildings, then icons, then the player's selected things over all.
-    canvas.dots(&dots);
-    for (at, rgb) in squares {
+    marks
+}
+
+/// Draws the marks from the lowest rank up: units' dots edged in black,
+/// then buildings, then icons, then the player's selected units over all.
+/// A selected unit blinking for trouble is drawn among the rest.
+fn draw_marks(canvas: &mut Canvas, minimap: &Minimap, warn: bool) {
+    let marks = &minimap.marks;
+    let on_top =
+        |&&(_, picked, ink): &&(Vec2, bool, Ink)| picked && !(warn && ink.warning.is_some());
+    let (top, under): (Vec<_>, Vec<_>) = marks.dots.iter().partition(on_top);
+    let inked = |dots: Vec<&(Vec2, bool, Ink)>| -> Vec<(Vec2, [u8; 3])> {
+        dots.into_iter()
+            .map(|&(at, _, ink)| (at, ink.now(warn)))
+            .collect()
+    };
+    canvas.dots(&inked(under));
+    for &(at, ink) in &marks.squares {
         canvas.square(at, 4.0, [0; 3]);
-        canvas.square(at, 3.0, rgb);
+        canvas.square(at, 3.0, ink.now(warn));
     }
-    icons.sort_by_key(|&(picked, ..)| picked);
-    for (_, icon, at, rgb) in icons {
-        canvas.icon(minimap.size, icon, at, rgb);
-    }
-    canvas.dots(&on_top);
-    if let Ok((camera, rts)) = cameras.single() {
-        // From where the camera is this frame rather than where it was
-        // last drawn.
-        let transform = GlobalTransform::from(rts.transform());
-        let corners = view_corners(camera, &transform, rts.focus.y);
-        if let Some(corners) = corners {
-            let corners = corners.map(to_px);
-            for i in 0..4 {
-                canvas.line(corners[i], corners[(i + 1) % 4], [255; 3]);
-            }
+    for (_, template, at, ink) in &marks.icons {
+        if let Some(icon) = minimap.icons.get(template) {
+            canvas.icon(minimap.size, icon, *at, ink.now(warn));
         }
     }
+    canvas.dots(&inked(top));
 }
 
 /// Where the corners of the camera's view meet the ground, taken as flat
@@ -745,6 +887,43 @@ mod tests {
             let i = (p.y as usize * PIXELS + p.x as usize) * 4;
             assert_eq!(pixels[i..i + 3], [255; 3]);
         }
+    }
+
+    #[test]
+    fn layers_redraw_on_their_own_clocks() {
+        let mut clock = Clock::new(1.0);
+        assert!(clock.due(0.25));
+        assert!(!clock.due(0.5));
+        assert!(clock.first_half(0.5));
+        assert!(!clock.first_half(1.0));
+        assert!(!clock.due(1.2));
+        assert!(clock.due(1.3));
+        assert!(clock.first_half(1.7));
+        assert!(!clock.first_half(1.8));
+        assert!(clock.due(5.0));
+        assert!(!clock.due(5.9));
+    }
+
+    #[test]
+    fn a_period_of_nothing_still_blinks() {
+        let mut clock = Clock::new(0.0);
+        assert!(clock.due(1.0));
+        assert!(clock.first_half(1.0));
+    }
+
+    #[test]
+    fn marks_blink_to_their_warning() {
+        let calm = Ink {
+            rgb: [1; 3],
+            warning: None,
+        };
+        let fought = Ink {
+            rgb: [1; 3],
+            warning: Some([2; 3]),
+        };
+        assert_eq!(calm.now(true), [1; 3]);
+        assert_eq!(fought.now(true), [2; 3]);
+        assert_eq!(fought.now(false), [1; 3]);
     }
 
     #[test]

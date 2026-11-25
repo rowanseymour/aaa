@@ -1801,6 +1801,13 @@ pub struct AVars {
     pub view_zone_friendly_supply_color: Option<[f32; 3]>,
     #[serde(rename = "ViewZoneFriendlySupplyTexture")]
     pub view_zone_friendly_supply_texture: Option<String>,
+    /// Seconds between redraws of each of the minimap's layers.
+    #[serde(rename = "MinimapPeriodUpdateFog")]
+    pub minimap_period_update_fog: Option<f32>,
+    #[serde(rename = "MinimapPeriodUpdateSupply")]
+    pub minimap_period_update_supply: Option<f32>,
+    #[serde(rename = "MinimapPeriodUpdateObjects")]
+    pub minimap_period_update_objects: Option<f32>,
     /// The font, by its `ids`, that a tooltip's title is in.
     #[serde(rename = "TextFontIDSToolTipName")]
     pub text_font_ids_tool_tip_name: Option<String>,

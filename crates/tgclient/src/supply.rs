@@ -35,7 +35,6 @@ pub struct Outline(pub Vec<Vec<[f32; 2]>>);
 /// How the border looks, from the game's settings.
 #[derive(Resource)]
 pub struct BorderLook {
-    pub colour: Color,
     width: f32,
     /// The side of the squares the map is cut into, in world units.
     block: f32,
@@ -178,7 +177,6 @@ pub fn setup(
         .map(|i| images.add(i));
     let material = materials.add(overlay::mark_material(image, colour));
     commands.insert_resource(BorderLook {
-        colour,
         width: border.width,
         block: border.block,
         material,
