@@ -176,10 +176,8 @@ fn enchantment(
 
 /// The ids a comma separated list names.
 pub(crate) fn listed(list: Option<&str>) -> Vec<Id> {
-    let ids = list.unwrap_or("").split(',').map(str::trim);
-    ids.filter(|id| !id.is_empty() && !id.eq_ignore_ascii_case("null"))
-        .map(Id::from)
-        .collect()
+    let ids = list.unwrap_or("").split(',').filter_map(crate::named);
+    ids.map(Id::from).collect()
 }
 
 /// What an operation summons, for one that does: the first thing its
@@ -247,11 +245,8 @@ pub(crate) fn enchantments(t: &defs::Thing) -> impl Iterator<Item = &defs::Prope
 
 impl GameData {
     pub fn supply_rules(&self) -> SupplyRules {
-        let svars = self.svars();
         let default = SupplyRules::default();
-        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| {
-            svars.iter().find_map(get).unwrap_or(or)
-        };
+        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| self.svar(get).unwrap_or(or);
         SupplyRules {
             recharge: of(|v| v.supply_stockpile_recharge_rate, default.recharge),
             bombard_timeout: of(|v| v.bombard_target_timeout, default.bombard_timeout),

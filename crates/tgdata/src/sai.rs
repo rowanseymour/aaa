@@ -66,7 +66,6 @@ pub struct Ego {
     pub priority: f32,
     pub filters: Filters,
     pub goal_engine: GoalEngine,
-    #[serde(rename = "ReactiveAI")]
     pub reactive_ai: Reacting,
 }
 
@@ -106,9 +105,7 @@ pub struct GoalEngine {
     pub goal_priority: Vec<GoalPriority>,
     pub resource_management: ResourceManagement,
     pub actor_value: ActorValue,
-    #[serde(rename = "OffensiveCV")]
     pub offensive_cv: Strength,
-    #[serde(rename = "DefensiveCV")]
     pub defensive_cv: Strength,
     pub travel_time: TravelTime,
     pub actor_priority: Vec<ActorPriority>,
@@ -867,7 +864,6 @@ pub struct PowerPriority {
     pub base: f32,
     pub minimum: f32,
     pub fuzzy_factor: f32,
-    #[serde(rename = "CV")]
     pub cv: Tally,
     pub actor_value: Tally,
     pub enemy_influence: EnemyInfluence,
@@ -1076,12 +1072,9 @@ impl GameData {
         // The templates first, so that every profile sees them.
         files.sort_by_key(|(n, _)| !n.to_ascii_lowercase().starts_with("templates/"));
         let files = scoped(&files);
-        let svars = self.svars();
-        let sends_air_attacks = (svars.iter())
-            .find_map(|v| v.use_air_attacks)
-            .unwrap_or(true);
-        let explored_share = (svars.iter())
-            .find_map(|v| v.reset_white_fog_timer_percent)
+        let sends_air_attacks = self.svar(|v| v.use_air_attacks).unwrap_or(true);
+        let explored_share = self
+            .svar(|v| v.reset_white_fog_timer_percent)
             .unwrap_or(0.1);
         ids.into_iter()
             .filter_map(|id| profile(&files, id))

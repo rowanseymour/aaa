@@ -78,8 +78,7 @@ fn company(
     }
     // Templates name an empty slot's element `null`.
     let units: Vec<Id> = (o.slot.iter())
-        .filter_map(|s| s.element_ids.clone())
-        .filter(|e| *e != Id::from("null"))
+        .filter_map(|s| crate::not_null(s.element_ids.clone()))
         .collect();
     let element = |u: &Id| {
         things.get(u).is_some_and(|t| {

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::{GameData, Id, defs, scoped};
+use crate::{GameData, Id, defs};
 
 /// The seconds the remains of a body that sets none rot, then sink.
 const ROT_TIME: f32 = 0.0;
@@ -152,12 +152,9 @@ impl GameData {
 
     /// Each kind of damage's number for death animations, by its id.
     pub fn damage_filters(&self) -> HashMap<Id, i32> {
-        let files = self.parse_tgis(|n| n.eq_ignore_ascii_case("game/damage_types.tgi"));
-        let files = scoped(&files);
-        let types = files
-            .iter()
-            .flat_map(|f| f.read::<defs::DamageType>("DamageType"));
-        types
+        let types: Vec<defs::DamageType> =
+            self.read_all(|n| n == "game/damage_types.tgi", "DamageType");
+        (types.into_iter())
             .filter_map(|d| Some((d.ids?, d.damage_filter?)))
             .collect()
     }

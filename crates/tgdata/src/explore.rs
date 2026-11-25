@@ -50,13 +50,8 @@ impl Default for ExploreRules {
 impl GameData {
     pub fn explore_rules(&self) -> ExploreRules {
         let d = ExploreRules::default();
-        let svars = self.svars();
-        let int = |of: fn(&crate::defs::SVars) -> Option<u32>, or| {
-            svars.iter().find_map(of).unwrap_or(or)
-        };
-        let fixed = |of: fn(&crate::defs::SVars) -> Option<f32>, or| {
-            svars.iter().find_map(of).unwrap_or(or)
-        };
+        let int = |of: fn(&crate::defs::SVars) -> Option<u32>, or| self.svar(of).unwrap_or(or);
+        let fixed = |of: fn(&crate::defs::SVars) -> Option<f32>, or| self.svar(of).unwrap_or(or);
         ExploreRules {
             around_itself: int(|v| v.explore_num_actor_locations, d.around_itself),
             around_point: int(|v| v.explore_num_waypoint_locations, d.around_point),

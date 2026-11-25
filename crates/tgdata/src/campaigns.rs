@@ -54,13 +54,13 @@ impl GameData {
     /// The campaigns, in the order the campaign screen lists them.
     pub fn campaigns(&self) -> Vec<Campaign> {
         let strings = self.strings();
-        let files = self.parse_tgis(|n| n.starts_with("campaign/") || n.starts_with("templates/"));
-        let files = crate::scoped(&files);
-        let read = files
-            .iter()
-            .flat_map(|f| f.read::<defs::Campaign>("Campaign"));
+        let read: Vec<defs::Campaign> = self.read_all(
+            |n| n.starts_with("campaign/") || n.starts_with("templates/"),
+            "Campaign",
+        );
         let exists = |path: &str| self.exists(path);
-        read.filter_map(|c| campaign(c, &strings, &exists))
+        (read.into_iter())
+            .filter_map(|c| campaign(c, &strings, &exists))
             .collect()
     }
 }
@@ -86,8 +86,8 @@ fn campaign(
     Some(Campaign {
         name: localized(strings, c.name.as_deref()).unwrap_or_else(|| id.to_string()),
         id,
-        depends_on: (c.dependent_campaign_ids.as_deref().map(str::trim))
-            .filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case("null"))
+        depends_on: (c.dependent_campaign_ids.as_deref())
+            .and_then(crate::named)
             .map(Id::from),
         complete_picture: given(c.complete_texture),
         incomplete_picture: given(c.incomplete_texture),
@@ -102,10 +102,8 @@ fn mission(
     strings: &Strings,
     exists: &dyn Fn(&str) -> bool,
 ) -> Option<Mission> {
-    let path = |p: Option<&String>| {
-        let p = p?.trim().trim_start_matches('/');
-        (!p.is_empty() && !p.eq_ignore_ascii_case("null")).then(|| p.to_string())
-    };
+    let path =
+        |p: Option<&String>| crate::named(p?.trim().trim_start_matches('/')).map(str::to_string);
     let kind = match m.mission_type.as_deref().map(str::trim) {
         Some(t) if t.eq_ignore_ascii_case("CINEMATIC") => {
             MissionKind::Cinematic(path(m.cinematic.as_ref())?)

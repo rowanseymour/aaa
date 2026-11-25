@@ -637,6 +637,19 @@ impl GameData {
         self.parse_named(names.map(String::as_str))
     }
 
+    /// The blocks of `kind` that read as `T` in every `.tgi` file the game
+    /// loads whose lower-case path passes `filter`, in the order it loads
+    /// them.
+    pub(crate) fn read_all<T: serde::de::DeserializeOwned + 'static>(
+        &self,
+        filter: impl Fn(&str) -> bool,
+        kind: &str,
+    ) -> Vec<T> {
+        let files = self.parse_tgis(filter);
+        let files = scoped(&files);
+        files.iter().flat_map(|f| f.read(kind)).collect()
+    }
+
     /// Archive paths of all maps, sorted.
     pub fn map_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self
@@ -678,83 +691,66 @@ impl GameData {
     /// Whether it's night under a sun of this diffuse colour; never, if the
     /// settings don't say how dark night is.
     pub fn night(&self, [r, g, b]: [f32; 3]) -> bool {
-        let svars = self.svars();
-        let threshold = svars.iter().find_map(|v| v.sun_night_threshold);
+        let threshold = self.svar(|v| v.sun_night_threshold);
         threshold.is_some_and(|t| r + g + b < t)
     }
 
     /// Attack efficiency a second a regiment gains while below its
     /// target, and loses while above it, for those the data sets.
     pub fn efficiency_rates(&self) -> [Option<f32>; 2] {
-        let svars = self.svars();
         [
-            svars.iter().find_map(|v| v.attack_efficiency_climbing),
-            svars.iter().find_map(|v| v.attack_efficiency_falling),
+            self.svar(|v| v.attack_efficiency_climbing),
+            self.svar(|v| v.attack_efficiency_falling),
         ]
     }
 
     /// How many times its own top speed a regiment's member catching up
     /// with its place goes at most, if the data says.
     pub fn catchup_speed(&self) -> Option<f32> {
-        self.svars().iter().find_map(|v| v.mover_catchup_speed)
+        self.svar(|v| v.mover_catchup_speed)
     }
 
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub fn recruit_search_step(&self) -> Option<f32> {
-        self.svars()
-            .iter()
-            .find_map(|v| v.recruit_search_radius_small)
+        self.svar(|v| v.recruit_search_radius_small)
     }
 
     /// Seconds since a site's health last changed that it counts as being
     /// worked on.
     pub fn active_construction_seconds(&self) -> Option<f32> {
-        let svars = self.svars();
-        svars.iter().find_map(|v| v.active_construction_timeout)
+        self.svar(|v| v.active_construction_timeout)
     }
 
     /// Seconds an enemy's damage keeps what it hurt under siege.
     pub fn siege_seconds(&self) -> Option<f32> {
-        let svars = self.svars();
-        svars
-            .iter()
-            .find_map(|v| v.under_siege_recently_damaged_seconds)
+        self.svar(|v| v.under_siege_recently_damaged_seconds)
     }
 
     /// What a building's aircraft are rebuilt and repaired at while it's
     /// under siege, as a share of their usual rate.
     pub fn denizen_siege_rate(&self) -> Option<f32> {
-        let svars = self.svars();
-        svars
-            .iter()
-            .find_map(|v| v.denizen_resupply_rate_under_siege)
+        self.svar(|v| v.denizen_resupply_rate_under_siege)
     }
 
     /// `KillCreditTimeout`, in seconds.
     pub fn kill_credit_seconds(&self) -> Option<f32> {
-        self.svars().iter().find_map(|v| v.kill_credit_timeout)
+        self.svar(|v| v.kill_credit_timeout)
     }
 
     /// `AbilityScoreAttackerBonus`.
     pub fn attacker_bonus(&self) -> Option<f32> {
-        self.svars()
-            .iter()
-            .find_map(|v| v.ability_score_attacker_bonus)
+        self.svar(|v| v.ability_score_attacker_bonus)
     }
 
     /// `KillTargetIsHighestPriority`.
     pub fn attack_target_first(&self) -> Option<bool> {
-        self.svars()
-            .iter()
-            .find_map(|v| v.kill_target_is_highest_priority)
+        self.svar(|v| v.kill_target_is_highest_priority)
     }
 
     /// `EngageReactionTimeRange`, in seconds.
     pub fn engage_reaction(&self) -> Option<f32> {
-        self.svars()
-            .iter()
-            .find_map(|v| v.engage_reaction_time_range)
+        self.svar(|v| v.engage_reaction_time_range)
     }
 
     /// How far around them city centres hold sway, by template id, including
@@ -837,36 +833,29 @@ impl GameData {
     /// How much of the sun's ambient and diffuse light the ground
     /// reflects, all of each where the settings don't say.
     pub fn terrain_light(&self) -> [f32; 2] {
-        let vars = self.avars();
         [
-            vars.iter().find_map(|v| v.terrain_ambient).unwrap_or(1.0),
-            vars.iter().find_map(|v| v.terrain_diffuse).unwrap_or(1.0),
+            self.avar(|v| v.terrain_ambient).unwrap_or(1.0),
+            self.avar(|v| v.terrain_diffuse).unwrap_or(1.0),
         ]
     }
 
     /// What the sun's light is multiplied by while the game is paused,
     /// none of it taken away where the settings don't say.
     pub fn paused_dimmer(&self) -> f32 {
-        let vars = self.avars();
-        let dimmer = vars
-            .iter()
-            .find_map(|v| v.sun_dimmer_multiplier_when_paused);
+        let dimmer = self.avar(|v| v.sun_dimmer_multiplier_when_paused);
         dimmer.unwrap_or(1.0).max(0.0)
     }
 
     /// The share of the sun's light a shadow takes away, all of it where
     /// the settings don't say.
     pub fn shadow_shade(&self) -> f32 {
-        let vars = self.avars();
-        let shade = vars.iter().find_map(|v| v.dynamic_shadow_sun_modulate);
+        let shade = self.avar(|v| v.dynamic_shadow_sun_modulate);
         shade.unwrap_or(1.0).clamp(0.0, 1.0)
     }
 
     /// The lighting presets the player can pick from, by id.
     pub fn sun_presets(&self) -> Vec<defs::Sun> {
-        let files = self.parse_tgis(|n| n.starts_with("sun/"));
-        let files = scoped(&files);
-        let mut out: Vec<defs::Sun> = files.iter().flat_map(|f| f.read("Sun")).collect();
+        let mut out: Vec<defs::Sun> = self.read_all(|n| n.starts_with("sun/"), "Sun");
         out.sort_by(|a, b| a.ids.cmp(&b.ids));
         out
     }
@@ -874,7 +863,7 @@ impl GameData {
     /// How far beyond a blocking building's footprint the ground must be
     /// clear for it to be put there, in world units.
     pub fn building_padding(&self) -> Option<f32> {
-        self.svars().iter().find_map(|v| v.building_padding_meters)
+        self.svar(|v| v.building_padding_meters)
     }
 
     /// The templates whose things each side numbers.
@@ -1102,17 +1091,24 @@ fn find_case_insensitive(dir: &Path, name: &str) -> Option<PathBuf> {
         .map(|e| e.path())
 }
 
+/// `value` trimmed, unless that leaves nothing or `null`, which is how the
+/// files say there's none.
+pub(crate) fn named(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty() && !value.eq_ignore_ascii_case("null")).then_some(value)
+}
+
 pub(crate) fn not_null(id: Option<Id>) -> Option<Id> {
-    id.filter(|id| !id.as_str().eq_ignore_ascii_case("null"))
+    id.filter(|id| named(id.as_str()).is_some())
+}
+
+/// The archive path of an icon a block in `file` names, if it names one.
+pub(crate) fn icon_beside(file: &str, icon: Option<&str>) -> Option<String> {
+    let icon = named(icon?.split_whitespace().next()?)?;
+    Some(beside(file, icon))
 }
 
 /// A path a file gives relative to its own folder, unless it starts with `/`.
-/// The archive path of an icon a block in `file` names, if it names one.
-pub(crate) fn icon_beside(file: &str, icon: Option<&str>) -> Option<String> {
-    let icon = icon?.split_whitespace().next()?;
-    (!icon.eq_ignore_ascii_case("null")).then(|| beside(file, icon))
-}
-
 pub(crate) fn beside(file: &str, path: &str) -> String {
     match path.strip_prefix('/') {
         Some(abs) => abs.to_string(),
@@ -1140,9 +1136,8 @@ pub(crate) fn frames(pattern: &str, exists: impl Fn(&str) -> bool) -> Vec<String
 /// The archive path of an interface image, whose `%s` folder, for a
 /// screen size, is empty for the default images.
 pub(crate) fn ui_path(path: &str) -> Option<String> {
-    let path = path.split_whitespace().next()?;
-    (!path.eq_ignore_ascii_case("null"))
-        .then(|| path.replace("%s/", "").trim_start_matches('/').to_string())
+    let path = named(path.split_whitespace().next()?)?;
+    Some(path.replace("%s/", "").trim_start_matches('/').to_string())
 }
 
 #[cfg(test)]
@@ -1288,6 +1283,30 @@ mod tests {
             game.experience_glyph().as_deref(),
             Some("FactionExperience")
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_handicap_named_by_a_glyph_shows_the_glyphs_image() {
+        let dir = folder(
+            "handicap-glyph",
+            &[
+                ("index_x.lst", "Fonts/*.tgi\nGame/*.tgi"),
+                (
+                    "Fonts/special_glyphs.tgi",
+                    "[Glyph]\n{\nids = ch_a\ndisplay_name = Skill Easy\nindex = 65\n}",
+                ),
+                (
+                    "Game/handicaps.tgi",
+                    "[Handicap]\n{\nids = easy\nname = A\n}",
+                ),
+            ],
+        );
+        let mut game = empty();
+        game.add_depot(&dir).unwrap();
+        let handicaps = game.handicaps();
+        assert_eq!(handicaps[0].glyph.as_deref(), Some("SkillEasy"));
+        assert_eq!(handicaps[0].name, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1594,6 +1613,13 @@ mod tests {
         assert_eq!(map_title("a"), "a");
         assert_eq!(map_title("notes.txt"), "notes.txt");
         assert_eq!(map_title("écu"), "écu");
+    }
+
+    #[test]
+    fn empty_and_null_values_are_none() {
+        assert_eq!(named("  Tank "), Some("Tank"));
+        assert_eq!(named(" NULL "), None);
+        assert_eq!(named("   "), None);
     }
 
     #[test]

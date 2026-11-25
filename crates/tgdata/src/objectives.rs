@@ -52,8 +52,6 @@ impl GameData {
     /// Whether a side's objectives are kept in order of their text, rather
     /// than in the order they're given.
     pub fn sort_objectives(&self) -> bool {
-        (self.svars().iter())
-            .find_map(|v| v.sort_objectives)
-            .unwrap_or(true)
+        self.svar(|v| v.sort_objectives).unwrap_or(true)
     }
 }

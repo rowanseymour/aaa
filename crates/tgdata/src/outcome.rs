@@ -24,9 +24,7 @@ impl GameData {
 
     /// Whether the sides of a team win and lose together.
     pub fn team_victory(&self) -> bool {
-        (self.svars().iter())
-            .find_map(|v| v.team_victory)
-            .unwrap_or(true)
+        self.svar(|v| v.team_victory).unwrap_or(true)
     }
 }
 

@@ -9,7 +9,7 @@ use crate::properties::{Pace, fill, line, number};
 use crate::strings::localized;
 use crate::supply::is;
 use crate::{Cue, VfxCue};
-use crate::{GameData, Id, defs, scoped};
+use crate::{GameData, Id, defs};
 
 /// A special operation as its button and tooltip show it.
 #[derive(Debug, Clone, PartialEq)]
@@ -180,7 +180,7 @@ impl Words<'_> {
     /// "vs Building" for an effect with targets of its own: the required
     /// ones, then "Not" and the excluded ones.
     fn versus(&self, targets: Option<&str>) -> Option<String> {
-        let targets = targets.filter(|t| !t.trim().eq_ignore_ascii_case("null"))?;
+        let targets = targets.and_then(crate::named)?;
         let word = |t: &str| {
             let name = self.categories.get(&Id::from(t)).cloned();
             name.unwrap_or_else(|| t.to_string())
@@ -230,12 +230,9 @@ impl GameData {
         let things: HashMap<Id, String> = (definitions.things.iter())
             .filter_map(|t| Some((t.id.clone(), localized(&strings, t.thing.name.as_deref())?)))
             .collect();
-        let files = self.parse_tgis(|n| n.ends_with("thing_categories.tgi"));
-        let categories: HashMap<Id, String> = (scoped(&files).iter())
-            .flat_map(|f| {
-                f.read::<defs::ThingCategory>("ThingCategory")
-                    .collect::<Vec<_>>()
-            })
+        let read: Vec<defs::ThingCategory> =
+            self.read_all(|n| n.ends_with("thing_categories.tgi"), "ThingCategory");
+        let categories: HashMap<Id, String> = (read.into_iter())
             .filter_map(|c| Some((c.ids?, localized(&strings, c.name.as_deref())?)))
             .collect();
         let words = Words {
@@ -294,10 +291,7 @@ impl GameData {
     pub fn experience_rules(&self) -> ExperienceRules {
         let starting =
             (self.world_rule("StartingExperience")).and_then(|r| r.default?.trim().parse().ok());
-        let svars = self.svars();
-        let per_second = svars
-            .iter()
-            .find_map(|s| s.experience_faction_gain_periodic);
+        let per_second = self.svar(|s| s.experience_faction_gain_periodic);
         let default = ExperienceRules::default();
         ExperienceRules {
             starting: starting.unwrap_or(default.starting),
@@ -315,7 +309,7 @@ fn operation(
     let name = localized(words.strings, a.name.as_deref()).unwrap_or_else(|| id.to_string());
     let icon = (a.icon.as_deref())
         .and_then(|i| i.split_whitespace().next())
-        .filter(|i| !i.eq_ignore_ascii_case("null"))
+        .and_then(crate::named)
         .map(|i| i.trim_start_matches('/').to_string());
     let (category, radius) = match a.volley_area > a.area {
         true => ("AREA_VOLLEY", a.volley_area),

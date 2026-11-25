@@ -174,10 +174,7 @@ impl GameData {
             let m = t.mobile_deployment_component.as_ref()?;
             let d = Deployment::DEFAULT;
             Some(Deployment {
-                unpacks_into: m
-                    .unpack_to_actor_ids
-                    .clone()
-                    .filter(|i| *i != Id::from("null")),
+                unpacks_into: crate::not_null(m.unpack_to_actor_ids.clone()),
                 packed_offset: m.packed_position_offset.unwrap_or(d.packed_offset),
                 packed_facing: m.packed_orientation.unwrap_or(d.packed_facing),
                 packing: m.packing_length.unwrap_or(d.packing),
@@ -193,9 +190,10 @@ impl GameData {
         let renames = self.thing_renames();
         let mut out = HashMap::new();
         for t in &self.definitions().things {
-            let into = (t.thing.mobile_deployment_component.as_ref())
-                .and_then(|m| m.unpack_to_actor_ids.clone())
-                .filter(|i| *i != Id::from("null"));
+            let into = crate::not_null(
+                (t.thing.mobile_deployment_component.as_ref())
+                    .and_then(|m| m.unpack_to_actor_ids.clone()),
+            );
             if let Some(into) = into {
                 let into = renamed(&renames, &into);
                 out.entry(into).or_insert_with(|| t.id.clone());
@@ -285,7 +283,7 @@ impl GameData {
     /// The transport each template that's carried to where it's recruited
     /// names, by template id.
     pub fn transports(&self) -> HashMap<Id, Id> {
-        self.by_template(|t| (t.transport_actor.clone()).filter(|i| *i != Id::from("null")))
+        self.by_template(|t| crate::not_null(t.transport_actor.clone()))
     }
 
     /// How each template that's flown to where it's recruited gets
@@ -326,13 +324,13 @@ impl GameData {
     /// How fast what falls gains speed, in world units a second each
     /// second.
     pub fn gravity(&self) -> Option<f32> {
-        self.svars().iter().find_map(|v| v.gravity).map(f32::abs)
+        self.svar(|v| v.gravity).map(f32::abs)
     }
 
     /// How much of its speed times gravity an aircraft shot down gains in
     /// sinking speed each second.
     pub fn plane_fall_gravity_tweak(&self) -> Option<f32> {
-        self.svars().iter().find_map(|v| v.plane_fall_gravity_tweak)
+        self.svar(|v| v.plane_fall_gravity_tweak)
     }
 
     /// Every id a building a requirement names may go by on a map, as maps

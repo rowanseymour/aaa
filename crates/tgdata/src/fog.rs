@@ -100,8 +100,7 @@ impl GameData {
         let rule =
             (self.world_rule("FogOfWar")).and_then(|r| FogSetting::named(r.default.as_deref()?));
         let tuned = || {
-            let svars = self.svars();
-            let value = svars.iter().find_map(|s| s.fog_of_war)?;
+            let value = self.svar(|s| s.fog_of_war)?;
             FogSetting::named(&value.to_string())
         };
         rule.or_else(tuned).unwrap_or_default()

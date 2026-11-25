@@ -205,12 +205,15 @@ impl GameData {
         })
     }
 
+    /// The first of the look and sound settings that `of` finds.
+    pub(crate) fn avar<T>(&self, of: impl Fn(&defs::AVars) -> Option<T>) -> Option<T> {
+        self.avars().iter().find_map(of)
+    }
+
     /// What music plays when, and how loud.
     pub fn music_settings(&self) -> MusicSettings {
-        let vars = self.avars();
-        let var =
-            |of: fn(&defs::AVars) -> Option<f32>, or: f32| vars.iter().find_map(of).unwrap_or(or);
-        let id = |of: fn(&defs::AVars) -> Option<Id>| vars.iter().find_map(of);
+        let var = |of: fn(&defs::AVars) -> Option<f32>, or: f32| self.avar(of).unwrap_or(or);
+        let id = |of: fn(&defs::AVars) -> Option<Id>| self.avar(of);
         let menu = (self.parsed("UI/Menus/main.tgi")).and_then(|parsed| {
             let block = parsed.root.blocks_of("MainMenuInterface").next()?;
             logged(
@@ -233,9 +236,7 @@ impl GameData {
 
     /// The options' volumes, as they start.
     pub fn volumes(&self) -> Volumes {
-        let uvars = self.uvars();
-        let var =
-            |of: fn(&defs::UVars) -> Option<f32>, or: f32| uvars.iter().find_map(of).unwrap_or(or);
+        let var = |of: fn(&defs::UVars) -> Option<f32>, or: f32| self.uvar(of).unwrap_or(or);
         Volumes {
             main: var(|v| v.audio_main_volume, 0.8),
             fx: FX_VOLUME,
@@ -246,8 +247,7 @@ impl GameData {
 
     /// The options' sound switches, as they start.
     pub fn sound_switches(&self) -> SoundSwitches {
-        let uvars = self.uvars();
-        let on = |of: fn(&defs::UVars) -> Option<bool>| uvars.iter().find_map(of).unwrap_or(true);
+        let on = |of: fn(&defs::UVars) -> Option<bool>| self.uvar(of).unwrap_or(true);
         SoundSwitches {
             replies: on(|v| v.unit_acknowledgement),
             chat: on(|v| v.chat_sound),
@@ -269,22 +269,22 @@ impl GameData {
     }
 
     fn read_audio(&self) -> HashMap<Id, Audio> {
-        let stand_in = (self.avars().iter())
-            .find_map(|v| v.default_audio_streaming_resource.clone())
+        let stand_in = self
+            .avar(|v| v.default_audio_streaming_resource.clone())
             .and_then(|p| self.path(&p.replace('\\', "/")));
-        let files = self.parse_tgis(|n| n.starts_with("audio/") || n.starts_with("templates/"));
-        let files = scoped(&files);
-        files
-            .iter()
-            .flat_map(|f| f.read::<defs::Audio>("Audio"))
-            .filter_map(|a| {
-                let streamed = (a.category.as_deref()).is_some_and(|c| {
-                    c.eq_ignore_ascii_case("MUSIC") || c.eq_ignore_ascii_case("SPEECH")
-                });
-                let stand_in = stand_in.as_deref().filter(|_| streamed);
-                Some((a.ids.clone()?, audio(&a, |p| self.path(p), stand_in)?))
-            })
-            .collect()
+        (self.read_all::<defs::Audio>(
+            |n| n.starts_with("audio/") || n.starts_with("templates/"),
+            "Audio",
+        ))
+        .into_iter()
+        .filter_map(|a| {
+            let streamed = (a.category.as_deref()).is_some_and(|c| {
+                c.eq_ignore_ascii_case("MUSIC") || c.eq_ignore_ascii_case("SPEECH")
+            });
+            let stand_in = stand_in.as_deref().filter(|_| streamed);
+            Some((a.ids.clone()?, audio(&a, |p| self.path(p), stand_in)?))
+        })
+        .collect()
     }
 
     /// An archive path as the archives spell it.
@@ -304,8 +304,7 @@ fn object_audio(thing: &defs::Thing) -> ObjectAudio {
     };
     let by_state = |fxcs: &[defs::Fxc]| -> Vec<(Id, Cue)> {
         fxcs.iter()
-            .filter_map(|f| Some((Id::from(f.actor_state.as_deref()?), cue(f)?)))
-            .filter(|(state, _)| *state != Id::from("null"))
+            .filter_map(|f| Some((Id::from(crate::named(f.actor_state.as_deref()?)?), cue(f)?)))
             .collect()
     };
     let aspects = view
@@ -483,8 +482,7 @@ fn audio_path(file: &str) -> String {
 fn audio_files(list: Option<&str>) -> impl Iterator<Item = &str> {
     list.into_iter()
         .flat_map(|l| l.split(','))
-        .map(str::trim)
-        .filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("null"))
+        .filter_map(crate::named)
 }
 
 /// The upper-case flags of a comma separated list.

@@ -7,7 +7,7 @@ use crate::{GameData, Id, defs};
 
 /// The ids of `states` whose type is `busy`, as the first to define each
 /// has it.
-fn busy(states: impl Iterator<Item = defs::ActorState>) -> HashSet<Id> {
+fn busy(states: impl IntoIterator<Item = defs::ActorState>) -> HashSet<Id> {
     let mut seen = HashSet::new();
     let mut out = HashSet::new();
     for state in states {
@@ -23,9 +23,7 @@ impl GameData {
     /// The states whose type is `busy`, which changes what a building in
     /// one offers.
     pub fn busy_states(&self) -> HashSet<Id> {
-        let files = self.parse_tgis(|n| n.starts_with("game/actor_states"));
-        let files = crate::scoped(&files);
-        busy(files.iter().flat_map(|f| f.read("ActorState")))
+        busy(self.read_all(|n| n.starts_with("game/actor_states"), "ActorState"))
     }
 }
 

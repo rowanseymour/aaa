@@ -123,11 +123,8 @@ fn profile(t: &defs::Thing) -> Option<CombatProfile> {
 
 impl GameData {
     pub fn combat_value_rules(&self) -> CombatValueRules {
-        let svars = self.svars();
         let d = CombatValueRules::default();
-        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| {
-            svars.iter().find_map(get).unwrap_or(or)
-        };
+        let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| self.svar(get).unwrap_or(or);
         CombatValueRules {
             damage_minimum: of(|v| v.combat_damage_minimum, d.damage_minimum),
             range_power: of(|v| v.combat_value_range_power, d.range_power),

@@ -69,15 +69,16 @@ impl GameData {
     /// The properties the state `state` gives what's in it, as the first
     /// of the state files to define it lists them.
     pub fn state_properties(&self, state: &str) -> Vec<Id> {
-        let files = self.parse_tgis(|n| n.starts_with("game/actor_states"));
-        let files = crate::scoped(&files);
-        given(files.iter().flat_map(|f| f.read("ActorState")), state)
+        given(
+            self.read_all(|n| n.starts_with("game/actor_states"), "ActorState"),
+            state,
+        )
     }
 }
 
 /// The properties the first of `states` that's `state` gives.
-fn given(mut states: impl Iterator<Item = defs::ActorState>, state: &str) -> Vec<Id> {
-    let found = states.find(|s| s.ids == Some(Id::from(state)));
+fn given(states: impl IntoIterator<Item = defs::ActorState>, state: &str) -> Vec<Id> {
+    let found = (states.into_iter()).find(|s| s.ids == Some(Id::from(state)));
     let properties = found.into_iter().flat_map(|s| s.property);
     properties.filter_map(|p| p.property_ids).collect()
 }
@@ -102,7 +103,7 @@ mod tests {
              \t[Property]\n\tproperty_ids = wheels_dug_in\n}\n",
             "ActorState",
         );
-        let found = given(states.into_iter(), ENTRENCHED);
+        let found = given(states, ENTRENCHED);
         assert_eq!(found, [Id::from("foot_dug_in"), Id::from("wheels_dug_in")]);
     }
 

@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use crate::strings::localized;
 use crate::supply::{is, listed};
-use crate::{Cue, GameData, Id, WeaponEffects, audio::cues, defs, effects::vfx_cues, not_null};
+use crate::{
+    Cue, GameData, Id, WeaponEffects, audio::cues, defs, effects::vfx_cues, named, not_null,
+};
 
 /// How a template's objects take part in movement.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -332,7 +334,7 @@ impl Targets {
                 None => (&mut out.required, word.strip_prefix('+').unwrap_or(word)),
             };
             // `null` is no restriction, as templates default to.
-            if !flag.is_empty() && !flag.eq_ignore_ascii_case("null") {
+            if let Some(flag) = crate::named(flag) {
                 list.push(Id::from(flag));
             }
         }
@@ -490,13 +492,12 @@ impl GameData {
 
     /// How far up their targets projectiles aim.
     pub fn aim_heights(&self) -> AimHeights {
-        let svars = self.svars();
         AimHeights {
-            straight: (svars.iter())
-                .find_map(|v| v.projectile_target_height_ratio)
+            straight: self
+                .svar(|v| v.projectile_target_height_ratio)
                 .unwrap_or(0.65),
-            arcing: (svars.iter())
-                .find_map(|v| v.projectile_arcing_target_height_ratio)
+            arcing: self
+                .svar(|v| v.projectile_arcing_target_height_ratio)
                 .unwrap_or(0.35),
         }
     }
@@ -534,9 +535,7 @@ fn body(thing: &defs::Thing) -> Body {
         acceleration: mover.and_then(|m| m.acceleration).unwrap_or(0.0).max(0.0),
         turn_rate,
         hitch: hitch.map(|[x, y, _]| [x, y]),
-        trailer: mover
-            .and_then(|m| m.trailer_actor.clone())
-            .filter(|t| !t.as_str().eq_ignore_ascii_case("null")),
+        trailer: not_null(mover.and_then(|m| m.trailer_actor.clone())),
     }
 }
 
@@ -562,7 +561,7 @@ pub(crate) fn soft_shape(thing: &defs::Thing) -> Shape {
         .iter()
         .rev()
         .find_map(|s| s.soft_shape.as_deref())
-        .filter(|k| !k.trim().is_empty() && !k.trim().eq_ignore_ascii_case("null"));
+        .and_then(named);
     let kind = kind.or_else(|| {
         thing
             .size
@@ -590,12 +589,6 @@ fn target_kind(thing: &defs::Thing) -> Option<&str> {
         .or_else(|| size(|s| s.soft_shape.as_deref()).and_then(named))
         .or_else(|| size(|s| s.blocking_shape.as_deref()))
         .map(str::trim)
-}
-
-/// A shape's kind, unless it's left `null`.
-fn named(kind: &str) -> Option<&str> {
-    let kind = kind.trim();
-    (!kind.is_empty() && !kind.eq_ignore_ascii_case("null")).then_some(kind)
 }
 
 /// A shape of the template's `[Size]`, which its shapes share all but the
@@ -652,13 +645,8 @@ pub(crate) fn fighter(
         refs.chain(&c.intrinsic_property)
     });
     for p in properties {
-        let flags = p.enabled_target_flags.as_deref().unwrap_or("");
-        for flag in flags.split(',').map(str::trim) {
-            let flag = Id::from(flag);
-            if !flag.as_str().is_empty()
-                && flag != Id::from("null")
-                && !fighter.flags.contains(&flag)
-            {
+        for flag in listed(p.enabled_target_flags.as_deref()) {
+            if !fighter.flags.contains(&flag) {
                 fighter.flags.push(flag);
             }
         }
@@ -725,14 +713,8 @@ pub(crate) fn fighter(
             targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
             hits,
             centred_on_user: d.flags.iter().any(|f| f.center_on_source),
-            animation: a
-                .animation1
-                .clone()
-                .filter(|ids| !ids.eq_ignore_ascii_case("null")),
-            turret: a
-                .turret_ids
-                .as_deref()
-                .is_some_and(|ids| !ids.eq_ignore_ascii_case("null")),
+            animation: a.animation1.clone().filter(|ids| named(ids).is_some()),
+            turret: a.turret_ids.as_deref().and_then(named).is_some(),
             turret_point: not_null(a.turret_ids.as_deref().map(Id::from)),
             aimed_by: not_null(a.turret_ids.as_deref().map(Id::from)).and_then(|ids| {
                 let found = turrets.iter().position(|(t, _)| *t == Some(&ids));
@@ -772,7 +754,7 @@ pub(crate) fn fighter(
                 recharge: d.recharge_time,
                 amount,
                 targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
-                animation: (a.animation1.clone()).filter(|ids| !ids.eq_ignore_ascii_case("null")),
+                animation: (a.animation1.clone()).filter(|ids| named(ids).is_some()),
                 sounds: cues(&d.when_do),
                 lasts: choice(a, animations).lasts,
             });
@@ -811,12 +793,7 @@ fn choice(a: &defs::Ability, animations: &[defs::Animation]) -> Choice {
             use_now: a.use_bonus.unwrap_or(0.0),
             wait: a.wait_bonus.unwrap_or(0.0),
         },
-        requires: (a.required_properties.as_deref().unwrap_or(""))
-            .split(',')
-            .map(str::trim)
-            .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("null"))
-            .map(Id::from)
-            .collect(),
+        requires: listed(a.required_properties.as_deref()),
         levels: [
             level(a.required_experience_min),
             level(a.required_experience_max),
