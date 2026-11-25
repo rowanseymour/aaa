@@ -789,7 +789,10 @@ pub(crate) fn fighter(
         }
         // Whatever kind of ability it is, if it does damage.
         if let Some(weapon) = weapon_of(a, d, d.range) {
-            fighter.weapons.push(Weapon { performed, ..weapon });
+            fighter.weapons.push(Weapon {
+                performed,
+                ..weapon
+            });
         }
     }
     let dies_with = body.on_death_ability.as_ref();
@@ -1268,7 +1271,10 @@ mod tests {
         let named: Vec<_> = (bunker.weapons.iter())
             .map(|w| (w.definition.as_ref().map(Id::as_str), w.performed, w.range))
             .collect();
-        assert_eq!(named, [(Some("Shell"), true, 50.0), (Some("gun"), false, 25.0)]);
+        assert_eq!(
+            named,
+            [(Some("Shell"), true, 50.0), (Some("gun"), false, 25.0)]
+        );
     }
 
     #[test]

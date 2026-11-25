@@ -929,8 +929,16 @@ mod tests {
         let mut terrains = parsed.root.blocks_of("Terrain");
         let named: Named = templates.deserialize(terrains.next().unwrap()).unwrap();
         assert_eq!(named.template.as_deref(), Some("Base"));
-        let inner: Vec<_> = named.variation.iter().map(|v| v.template.as_deref()).collect();
-        assert!(inner.iter().all(|t| t.is_some_and(|t| t.eq_ignore_ascii_case("tex"))));
+        let inner: Vec<_> = named
+            .variation
+            .iter()
+            .map(|v| v.template.as_deref())
+            .collect();
+        assert!(
+            inner
+                .iter()
+                .all(|t| t.is_some_and(|t| t.eq_ignore_ascii_case("tex")))
+        );
         assert!(!inner.is_empty());
         let plain: Named = templates.deserialize(terrains.next().unwrap()).unwrap();
         assert_eq!(plain.template, None);
