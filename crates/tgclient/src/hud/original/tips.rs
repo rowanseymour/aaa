@@ -11,7 +11,9 @@ use tgdata::widgets::{SCREEN, Tiles, Widget};
 use super::lettering::{Letters, Measured, PLAIN, Sliced};
 use super::{GAME, Pictures};
 use crate::actions::{Said, Tip};
-use crate::ui::{Hinted, Marked};
+use crate::ui::{Hinted, Marked, Piece};
+use std::collections::HashMap;
+use tgdata::Id;
 
 /// The pane's layout.
 const PANE: &str = "ToolTipGame";
@@ -213,6 +215,7 @@ pub fn show(
     said: Res<Said>,
     hinted: Res<Hinted>,
     letters: Res<Letters>,
+    looks: Option<Res<crate::object_display::Looks>>,
     pane: Single<(Entity, &mut Node, &mut Pane)>,
     mut commands: Commands,
 ) {
@@ -237,13 +240,20 @@ pub fn show(
     let mut lines = commands.entity(pane.lines);
     lines.despawn_children();
     if let Some(saying) = &saying {
-        lines.with_children(|lines| write(lines, &pane, &letters, saying));
+        let glyphs = looks.as_ref().map(|l| &l.glyphs);
+        lines.with_children(|lines| write(lines, &pane, &letters, glyphs, saying));
     }
     pane.said = saying;
 }
 
 /// The pane's lines for what it says.
-fn write(lines: &mut ChildSpawnerCommands, pane: &Pane, letters: &Letters, saying: &Saying) {
+fn write(
+    lines: &mut ChildSpawnerCommands,
+    pane: &Pane,
+    letters: &Letters,
+    glyphs: Option<&HashMap<Id, Handle<Image>>>,
+    saying: &Saying,
+) {
     let text = |words: &str, colour: Color| letters.text(&pane.font, words, colour);
     // A title in the title's font but as far apart as the rest's lines, and
     // for a tooltip, the blank line the game puts after it.
@@ -271,7 +281,30 @@ fn write(lines: &mut ChildSpawnerCommands, pane: &Pane, letters: &Letters, sayin
             if let Some(name) = name {
                 title(lines, name, false);
             }
-            if !hint.is_empty() {
+            let pieces = crate::ui::pieces(hint);
+            let glyphed = pieces.iter().any(|p| matches!(p, Piece::Glyph(_)));
+            if glyphed {
+                // A row of words and glyphs, as the game's font draws a
+                // resource's glyph among the words.
+                let row = Node {
+                    align_items: AlignItems::Center,
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                };
+                lines.spawn((row, Pickable::IGNORE)).with_children(|line| {
+                    for piece in pieces {
+                        match piece {
+                            Piece::Words(words, colour) => {
+                                line.spawn(text(&words, colour.unwrap_or(pane.body)));
+                            }
+                            Piece::Glyph(id) => {
+                                let glyph = glyphs.and_then(|g| g.get(&id)).cloned();
+                                spawn_glyph(line, glyph);
+                            }
+                        }
+                    }
+                });
+            } else if !hint.is_empty() {
                 lines.spawn(text("", pane.body)).with_children(|line| {
                     for (words, colour) in crate::ui::stretches(hint) {
                         line.spawn((
@@ -347,9 +380,14 @@ fn write(lines: &mut ChildSpawnerCommands, pane: &Pane, letters: &Letters, sayin
 
 /// The glyph of an amount's resource, where it has one.
 fn glyph(line: &mut ChildSpawnerCommands, q: &crate::actions::Quantity) {
-    if let Some(glyph) = &q.glyph {
+    spawn_glyph(line, q.glyph.clone());
+}
+
+/// A resource's glyph, at a tooltip's size, where there's one to draw.
+fn spawn_glyph(line: &mut ChildSpawnerCommands, glyph: Option<Handle<Image>>) {
+    if let Some(glyph) = glyph {
         line.spawn((
-            ImageNode::new(glyph.clone()),
+            ImageNode::new(glyph),
             Node::default(),
             Measured {
                 size: Some(Vec2::splat(GLYPH)),

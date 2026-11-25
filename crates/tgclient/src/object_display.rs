@@ -2244,8 +2244,12 @@ impl Teller<'_> {
         let Some(now) = counted(self.sim, self.local, status) else {
             return Vec::new();
         };
-        // Only a building ever counts for less than it would.
+        // Only a building ever counts for less than it would, and a city
+        // is taken to count for all it could.
         let full = match status {
+            Status::Building(b) | Status::Structure(b) if self.sim.buildings[b].zone.is_some() => {
+                now.clone()
+            }
             Status::Building(b) | Status::Structure(b) => self.sim.building_full_ledger(b),
             Status::Organization(r) => match self.sim.organizations[r].unpacked_into {
                 Some(b) => self.sim.building_full_ledger(b),
@@ -2428,7 +2432,12 @@ pub(crate) fn counted(sim: &World, local: Option<u32>, status: Status) -> Option
     let (owner, ledger) = match status {
         Status::Unit(_) => return None,
         Status::Building(b) | Status::Structure(b) => {
-            (sim.buildings[b].owner, sim.building_ledger(b))
+            let building = &sim.buildings[b];
+            let ledger = match building.zone {
+                Some(_) => sim.city_ledger(b),
+                None => sim.building_ledger(b),
+            };
+            (building.owner, ledger)
         }
         Status::Organization(r) => {
             let organization = &sim.organizations[r];

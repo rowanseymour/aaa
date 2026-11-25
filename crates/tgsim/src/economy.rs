@@ -253,6 +253,21 @@ impl World {
         self.building_counting(building, false)
     }
 
+    /// What a city counts for: its centre's [`building_ledger`](Self::building_ledger)
+    /// and each of its buildings', those its centre's owner holds.
+    pub fn city_ledger(&self, centre: usize) -> Ledger {
+        let city = &self.buildings[centre];
+        let members = (0..self.buildings.len()).filter(|&b| {
+            let member = &self.buildings[b];
+            b != centre && member.owner == city.owner && city.members.contains(&member.id)
+        });
+        let mut ledger = self.building_ledger(centre);
+        for b in members {
+            ledger += self.building_ledger(b);
+        }
+        ledger
+    }
+
     /// What a building would count for if nothing held it back: built,
     /// standing and in supply, with what its properties add or lift.
     pub fn building_full_ledger(&self, building: usize) -> Ledger {
@@ -547,6 +562,24 @@ mod tests {
         let ledger = w.ledger(1);
         assert_eq!(ledger.production.get("money"), 12.0);
         assert_eq!(ledger.upkeep.get("building_limit_consumed"), 2.0);
+    }
+
+    #[test]
+    fn a_city_counts_for_its_buildings() {
+        let mut w = economy();
+        let first = w.buildings.len();
+        w.add_buildings(&city());
+        let (centre, house) = (first, first + 1);
+        let city = w.city_ledger(centre);
+        assert_eq!(city.production.get("money"), 50.0);
+        assert_eq!(city.upkeep.get("building_limit_consumed"), 2.0);
+        // One another side holds isn't the city's to count.
+        w.buildings[house].owner = 1;
+        assert_eq!(w.city_ledger(centre).production.get("money"), 25.0);
+        w.buildings[house].owner = 2;
+        // A building of it that's lost no longer counts.
+        w.buildings[house].state = State::Destroyed(0);
+        assert_eq!(w.city_ledger(centre).production.get("money"), 25.0);
     }
 
     /// A property doing to the economy what's given, on what has all of

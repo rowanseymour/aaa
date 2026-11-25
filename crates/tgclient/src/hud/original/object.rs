@@ -730,7 +730,9 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
                 font,
                 shown: Vec::new(),
             };
-            self.s.spawn((row, line, Pickable::IGNORE));
+            // Hovered whole, to say the same in the tooltip.
+            let hint = (Hint(String::new()), ui::called("object.economy"));
+            self.s.spawn((row, line, hint, Pickable::default()));
         }
         let parts = self.part("State", &[]);
         if let Some(mut label) = self.entity(&parts, "Label") {
@@ -1561,13 +1563,14 @@ pub fn economy(
     looks: Res<Looks>,
     letters: Res<Letters>,
     images: Res<Assets<Image>>,
-    mut lines: Query<(Entity, &mut Economy)>,
+    mut lines: Query<(Entity, &mut Economy, &mut Hint)>,
 ) {
-    for (row, mut line) in &mut lines {
+    for (row, mut line, mut hint) in &mut lines {
         let now = shown::economy_line(&sim.0, local.0, line.of);
         if line.shown == now {
             continue;
         }
+        hint.0 = said(&now);
         commands.entity(row).despawn_related::<Children>();
         let font = line.font.clone();
         commands.entity(row).with_children(|row| {
@@ -1588,9 +1591,37 @@ pub fn economy(
     }
 }
 
+/// The economy line as its tooltip says it: each figure after its
+/// resource's glyph, two spaces after each.
+fn said(line: &[(Id, String)]) -> String {
+    let each = line
+        .iter()
+        .map(|(kind, figure)| format!("{}{figure}  ", ui::glyph(kind.as_str())));
+    each.collect::<String>().trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_economy_lines_tooltip_says_its_figures_after_their_glyphs() {
+        let line = [
+            (Id::from("ammo"), "-20".to_string()),
+            (Id::from("unit_limit_consumed"), "1".to_string()),
+        ];
+        let said = said(&line);
+        assert_eq!(
+            ui::pieces(&said),
+            [
+                ui::Piece::Glyph("ammo".into()),
+                ui::Piece::Words("-20  ".into(), None),
+                ui::Piece::Glyph("unit_limit_consumed".into()),
+                ui::Piece::Words("1".into(), None),
+            ]
+        );
+        assert_eq!(super::said(&[]), "");
+    }
 
     #[test]
     fn a_bar_blends_through_its_middle_colour() {

@@ -20,7 +20,7 @@ use bevy::ui_widgets::{Activate, Button};
 use bevy::window::PrimaryWindow;
 
 use crate::keys::Chord;
-use crate::ui::{ButtonId, Chosen, Covers};
+use crate::ui::{ButtonId, Chosen, Covers, Hint};
 
 /// A button on screen that can be pressed.
 pub struct Seen {
@@ -35,11 +35,7 @@ pub struct Seen {
 /// What's on screen to press: the buttons, in reading order, and how many
 /// more have no id to press them by.
 pub fn buttons(world: &mut World) -> (Vec<Seen>, usize) {
-    // Only what's on the topmost cover, if anything covers the screen.
-    let mut covers =
-        world.query_filtered::<(Entity, &GlobalZIndex, &InheritedVisibility), With<Covers>>();
-    let shown = covers.iter(world).filter(|(.., shown)| shown.get());
-    let cover = shown.max_by_key(|(_, z, _)| z.0).map(|(e, ..)| e);
+    let cover = topmost_cover(world);
     type Parts<'a> = (
         Entity,
         &'a ComputedNode,
@@ -50,14 +46,10 @@ pub fn buttons(world: &mut World) -> (Vec<Seen>, usize) {
     );
     let mut query = world.query_filtered::<Parts, With<Button>>();
     let world = &*world;
-    let on = |cover: Entity, button: Entity| {
-        let parent = |e: Entity| world.get::<ChildOf>(e).map(ChildOf::parent);
-        std::iter::successors(parent(button), |&e| parent(e)).any(|e| e == cover)
-    };
     let mut unnamed = 0;
     let mut seen = Vec::new();
     for (entity, node, at, shown, id, chosen) in query.iter(world) {
-        let reached = cover.is_none_or(|c| on(c, entity));
+        let reached = cover.is_none_or(|c| on(world, c, entity));
         if !shown.get() || node.size.min_element() <= 0.0 || !reached {
             continue;
         }
@@ -146,6 +138,50 @@ fn pressable(world: &mut World, id: &str) -> Result<(Entity, Vec2), String> {
     Ok((button, middle))
 }
 
+/// What covers the screen topmost, which only what's on it can be reached
+/// past, if anything does.
+fn topmost_cover(world: &mut World) -> Option<Entity> {
+    let mut covers =
+        world.query_filtered::<(Entity, &GlobalZIndex, &InheritedVisibility), With<Covers>>();
+    let shown = covers.iter(world).filter(|(.., shown)| shown.get());
+    shown.max_by_key(|(_, z, _)| z.0).map(|(e, ..)| e)
+}
+
+/// Whether `entity` is on `cover`.
+fn on(world: &World, cover: Entity, entity: Entity) -> bool {
+    let parent = |e: Entity| world.get::<ChildOf>(e).map(ChildOf::parent);
+    std::iter::successors(parent(entity), |&e| parent(e)).any(|e| e == cover)
+}
+
+/// The button with id `id`, or else the part of the interface with that
+/// id that says something when hovered, such as the object display's
+/// economy line.
+fn hoverable(world: &mut World, id: &str) -> Result<Entity, String> {
+    if let Ok((button, _)) = seen(world, id) {
+        return Ok(button);
+    }
+    // Only where a person could reach, as for a button.
+    let cover = topmost_cover(world);
+    type Parts<'a> = (
+        Entity,
+        &'a ButtonId,
+        &'a ComputedNode,
+        &'a InheritedVisibility,
+    );
+    let mut hints = world.query_filtered::<Parts, (With<Hint>, Without<Button>)>();
+    let world = &*world;
+    let mut found = hints.iter(world).filter(|(entity, named, node, shown)| {
+        shown.get()
+            && node.size.min_element() > 0.0
+            && cover.is_none_or(|c| on(world, c, *entity))
+            && named.0.eq_ignore_ascii_case(id)
+    });
+    match found.next() {
+        Some((entity, ..)) => Ok(entity),
+        None => Err(format!("no button {id:?} to press; ui lists them")),
+    }
+}
+
 /// The button the pointer is held over, by [`hover`], as if the mouse were
 /// on it.
 #[derive(Resource, Default)]
@@ -154,7 +190,7 @@ pub struct Over(Option<Entity>);
 /// Holds the pointer over the button with id `id`, showing what hovering
 /// on it would, or with none, takes it off.
 pub fn hover(world: &mut World, id: Option<&str>) -> Result<(), String> {
-    let button = id.map(|id| seen(world, id).map(|(b, _)| b)).transpose()?;
+    let button = id.map(|id| hoverable(world, id)).transpose()?;
     world.resource_mut::<Over>().0 = button;
     Ok(())
 }

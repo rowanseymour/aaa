@@ -126,7 +126,7 @@ pub(crate) const VERBS: &[Verb] = &[
     verb(
         "hover",
         "[button]",
-        "holds the pointer over a button, by its id, as the mouse would be; without one, takes it off",
+        "holds the pointer over a button, or a part that says something when hovered, by its id, as the mouse would be; without one, takes it off",
         |world, args, _| hover(world, args),
     ),
     verb(
