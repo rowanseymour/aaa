@@ -338,7 +338,13 @@ text = '''Attaching is instant and the regiment doesn't travel: it stays where i
 [[topic.rule]]
 id = "attach-cost"
 tags = ["code", "data"]
-text = '''Attaching costs `HQAttachCostPercentage` of the regiment's cost, which is 0 in the stock SVars: free. Were it not, an order the side couldn't afford would be refused with "Insufficient funds to attach X. Requires Y."'''
+text = '''
+The Attach to HQ order costs the regiment's cost × `HQAttachCostPercentage`. Despite its name the value is a fraction: 0.5 would be half. The stock SVars have 0, so attaching is free.
+- The regiment's cost is what recruiting it costs, in every resource: its own `[Cost]` and that of every position in its layout, filled or not. It's scaled by the `RECRUIT_COST` multipliers the regiment itself carries (its own properties and the side's technologies it holds, [economy](economy.toml)), not by the HQ's.
+- Every Attach to HQ order pays, whether the regiment was unattached or is moving on from another HQ. Recruiting at an HQ never pays, and nor does a regiment a transport brings taking its place on arrival.
+- The cost is checked against the side's stockpile as a recruit's is ([economy](economy.toml#insufficient-funds)) and taken as the regiment attaches.
+- An order the side can't afford is refused: nothing is taken, and the regiment stays as it was, still attached to its old HQ if it had one. The side is told "Insufficient funds to attach X. Requires Y." (`hq_error_attach_affording`), located at the HQ. X is the regiment's name, and Y is the cost written as in the other "Insufficient funds" messages: money only, rounded up to a whole number ([economy](economy.toml#cost-rounding)).
+'''
 
 [[topic.rule]]
 id = "attachment-ends"
@@ -599,7 +605,7 @@ Resupply works on one member at a time, chosen each second:
 [[topic.rule]]
 id = "member-with-regiment"
 tags = ["code"]
-text = '''A member is with the regiment when it's the leader, or it stands inside the regiment's control zone (`control_range`, 18 for stock regiments, a zone as in [objects](objects.toml)) and isn't falling by parachute. This is settled when the member ends a move and when the regiment's zone is laid again, not continuously. A member away from the regiment isn't healed until it's back.'''
+text = '''A member is with the regiment when it's the leader, or it stands inside the regiment's control zone (`control_range`, 18 for stock regiments, a zone as in [objects](objects.toml)) and isn't falling by parachute. Each member is judged again once a second, each on its own beat, and also the moment it ends a move, each time it looks along its way while walking back to its regiment, and when the regiment's zone is first laid down. So a straggler walking back counts as with the regiment from its first check after it comes into the zone, without stopping. The zone lies round the regiment's own position, which trails the leader while the regiment moves ([movement](movement.toml#regiment-position)), so members on the march are judged against where that position is, not where the leader is. A member away from the regiment isn't healed until it's back.'''
 
 [[topic.rule]]
 id = "healing-rate"
