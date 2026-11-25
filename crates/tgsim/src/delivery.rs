@@ -1466,4 +1466,38 @@ mod tests {
         assert_eq!(w.organizations[r].hq, Some(50));
         assert_eq!(w.free_places(&hqs[0]), free - 1);
     }
+
+    #[test]
+    fn deliveries_to_an_hq_lost_on_their_way_arrive_unattached() {
+        let mut w = division();
+        let hq = Command::Unpack {
+            organization: 0,
+            at: [30.0, 40.0],
+            facing: NORTH,
+        };
+        w.apply(1, hq).unwrap();
+        run(&mut w, 30.0);
+        let b = w.organizations[0].unpacked_into.expect("unpacked");
+        w.buildings[b].deploy = w.buildings[0].deploy;
+        let company = raised_company(&mut w, 1);
+        recruits(&mut w, "depot", company, 1.0);
+        let airlift = airfield().rules.airlifts.remove(&Id::from("company"));
+        w.rules
+            .airlifts
+            .extend(airlift.map(|a| (Id::from("company"), a)));
+        let order = Command::Deliver {
+            building: b,
+            template: Id::from("company"),
+            to: [50.0, 40.0],
+        };
+        w.apply(1, order).unwrap();
+        run(&mut w, 1.5);
+        assert_eq!(w.bound_for(50).count(), 1);
+        // The HQ is taken while the company's on its way.
+        w.change_hands(b, 2);
+        assert_eq!(w.bound_for(50).count(), 0);
+        run(&mut w, 30.0);
+        let r = w.deliveries[0].organization.expect("dropped");
+        assert_eq!(w.organizations[r].hq, None);
+    }
 }

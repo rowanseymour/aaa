@@ -227,10 +227,14 @@ impl World {
         }
     }
 
-    /// Detaches every organization attached to the HQ `hq`.
+    /// Detaches every organization attached to the HQ `hq`, and frees the
+    /// places aircraft hold there, so what they bring arrives unattached.
     pub(crate) fn detach_all(&mut self, hq: u32) {
         for organization in &mut self.organizations {
             organization.hq = organization.hq.filter(|&id| id != hq);
+        }
+        for delivery in &mut self.deliveries {
+            delivery.hq = delivery.hq.filter(|&id| id != hq);
         }
     }
 
