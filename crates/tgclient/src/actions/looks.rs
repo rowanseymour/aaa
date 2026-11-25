@@ -42,6 +42,40 @@ pub(crate) struct Recruit {
     pub(crate) organization: Option<Organization>,
 }
 
+/// What the game says of a recruit it refuses.
+#[derive(Clone, Debug)]
+pub(crate) struct RecruitWords {
+    /// For one the side can't afford, given its name and cost.
+    pub(crate) affording: String,
+    /// For one at an HQ with no place left, given the HQ's name.
+    pub(crate) attach_full: String,
+    /// For one at a settlement under siege.
+    pub(crate) besieged: String,
+}
+
+impl RecruitWords {
+    /// What's said of the recruit `name` refused for `refused`, given what
+    /// it costs and the name of the HQ it would attach to; nothing where
+    /// the game says nothing.
+    pub(crate) fn refused(
+        &self,
+        refused: tgsim::Refused,
+        name: &str,
+        cost: impl FnOnce() -> f32,
+        hq: impl FnOnce() -> String,
+    ) -> Option<String> {
+        match refused {
+            tgsim::Refused::Unaffordable => {
+                let cost = cost().ceil().to_string();
+                Some(super::tips::fill(&self.affording, &[name, &cost]))
+            }
+            tgsim::Refused::Full => Some(super::tips::fill(&self.attach_full, &[&hq()])),
+            tgsim::Refused::Besieged => Some(self.besieged.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// One of the buildings a regiment can put up, as its button shows.
 pub(crate) struct Buildable {
     look: Look,
@@ -99,9 +133,8 @@ pub struct Looks {
     ally: Look,
     /// The tooltip's heading for what a recruit needs.
     pub(crate) requires: String,
-    /// What a recruit the player can't afford says, given its name and
-    /// cost.
-    pub(crate) affording: String,
+    /// What a refused recruit says.
+    pub(crate) recruit: RecruitWords,
     /// The same for research.
     pub(crate) research_affording: String,
     /// What research refused for anything else says, given its name.
@@ -381,6 +414,11 @@ pub fn setup(
         "recruit_error_affording|ss",
         "Insufficient funds for %s. Requires %s.",
     );
+    let attach_full = title("hq_error_attach_full|s", "Cannot attach to %s. HQ is full.");
+    let besieged = title(
+        "ui_tooltip_cannot_recruit_while_under_siege",
+        "Cannot recruit while under siege.",
+    );
     let research_affording = title(
         "research_error_affording|ss",
         "Insufficient funds for %s. Requires %s.",
@@ -579,7 +617,11 @@ pub fn setup(
         all_allies,
         ally,
         requires,
-        affording,
+        recruit: RecruitWords {
+            affording,
+            attach_full,
+            besieged,
+        },
         research_affording,
         research_refused,
         choose_hero,
@@ -645,6 +687,37 @@ pub(crate) fn look_of<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_recruit_is_told_in_the_games_words() {
+        let words = RecruitWords {
+            affording: "Insufficient funds for %s. Requires %s.".into(),
+            attach_full: "Cannot attach to %s. HQ is full.".into(),
+            besieged: "Cannot recruit while under siege.".into(),
+        };
+        let said = |refused| {
+            words.refused(
+                refused,
+                "Rifle Regiment",
+                || 249.5,
+                || "Infantry HQ 1".into(),
+            )
+        };
+        assert_eq!(
+            said(tgsim::Refused::Unaffordable).as_deref(),
+            Some("Insufficient funds for Rifle Regiment. Requires 250.")
+        );
+        assert_eq!(
+            said(tgsim::Refused::Full).as_deref(),
+            Some("Cannot attach to Infantry HQ 1. HQ is full.")
+        );
+        assert_eq!(
+            said(tgsim::Refused::Besieged).as_deref(),
+            Some("Cannot recruit while under siege.")
+        );
+        // Where the game says nothing.
+        assert_eq!(said(tgsim::Refused::Lacking), None);
+    }
 
     #[test]
     fn an_amount_is_signed_as_gained_or_lost() {

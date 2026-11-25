@@ -142,7 +142,7 @@ pub fn tell(
     mut said: ResMut<Said>,
 ) {
     // The ally page's buttons are named for the sides they're for.
-    let map = log.map(|l| l.map_strings()).unwrap_or_default();
+    let map = log.as_ref().map(|l| l.map_strings()).unwrap_or_default();
     let ally_names: Vec<String> = (super::allies(&sim.0, local.0).into_iter())
         .filter_map(|side| sim.0.sides.player(side))
         .map(|p| leaders.owner(p, &sim.0.sides, &map))
@@ -183,6 +183,7 @@ pub fn tell(
                     refusal: &refusal,
                     bindings: &bindings,
                     ally_names: &ally_names,
+                    log: log.as_deref(),
                 };
                 tip.of(slot, entry)
             });
@@ -206,6 +207,8 @@ struct Grounds<'a> {
     refusal: &'a Refusal,
     bindings: &'a Bindings,
     ally_names: &'a [String],
+    /// For the names of what's refused.
+    log: Option<&'a crate::messages::MessageLog>,
 }
 
 impl Grounds<'_> {
@@ -280,19 +283,15 @@ impl Grounds<'_> {
             _ => {}
         }
         let refused = (self.refusal.0).filter(|(s, _)| *s == slot).map(|(_, r)| r);
-        let unaffordable = match (entry, refused) {
-            (Entry::Recruit(i), Some(tgsim::Refused::Unaffordable)) => {
-                (menu[i].organization.as_ref())
-                    .zip(building)
-                    .map(|(r, b)| (&looks.affording, sim.cost(b, r)))
+        // In the game's words where it has them, as the log says it.
+        let said = match (entry, refused, building) {
+            (Entry::Recruit(i), Some(r), Some(b)) => {
+                super::press::recruit_refused(sim, looks, self.log, b, i, r)
             }
             _ => None,
         };
         let why = match (ready, why, refused) {
-            (_, _, Some(_)) if unaffordable.is_some() => unaffordable.map(|(said, cost)| {
-                let cost = cost.ceil().to_string();
-                fill(said, &[name, &cost])
-            }),
+            (_, _, Some(_)) if said.is_some() => said,
             (_, _, Some(refused)) => Some(refused_why(refused).to_string()),
             (true, _, _) => None,
             (false, Some(why), _) => Some(why),
