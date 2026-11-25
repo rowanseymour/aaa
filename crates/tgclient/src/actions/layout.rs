@@ -530,11 +530,11 @@ pub(crate) fn contents(
             research: looks.research.0.filter(|_| deploys(sim, b)),
             researches: &researches,
             // Where what it raises goes matters whether or not any of it
-            // can be raised now.
+            // can be raised now; a settlement's, while it recruits.
             rally: looks
                 .rally
                 .0
-                .filter(|_| !menu.is_empty() && deploys(sim, b)),
+                .filter(|_| (!menu.is_empty() && deploys(sim, b)) || sim.recruits_companies(b)),
             pack: looks
                 .pack
                 .0

@@ -22,6 +22,14 @@ impl World {
         (self.buildings.iter()).position(|b| b.id == id && b.standing())
     }
 
+    /// Whether the building at `building` is the centre of a settlement
+    /// that recruits companies now: one that lists some and isn't under
+    /// siege.
+    pub fn recruits_companies(&self, building: usize) -> bool {
+        (self.settlement_of(building)).is_some_and(|s| !self.company_list(s).is_empty())
+            && self.buildings[building].besieged.is_none()
+    }
+
     /// The company templates the settlement at `settlement` lists, in its
     /// menu's order, whether or not it can recruit them yet.
     pub fn company_list(&self, settlement: usize) -> &[Id] {
@@ -116,6 +124,8 @@ impl World {
             });
             return Ok(());
         };
+        // On to the settlement's rally point, as a building's recruits go.
+        self.organizations[r].rally = self.buildings[centre].rally;
         if let Some(hero) = hero {
             let organization = &self.organizations[r];
             let captain = organization.leader.map(|p| organization.units[p]);
@@ -270,6 +280,27 @@ pub(crate) mod tests {
         w.apply(1, recruit("company_pikeman")).unwrap();
         let r = &w.organizations[0];
         assert!(r.units.iter().all(|&u| !w.units[u].awaited));
+    }
+
+    #[test]
+    fn a_settlement_sends_its_companies_to_its_rally_point_while_it_can_recruit() {
+        let mut w = village();
+        let rally = |at| Command::Rally {
+            building: 0,
+            at: Some(at),
+        };
+        w.apply(1, rally([30.0, 30.0])).unwrap();
+        w.apply(1, recruit("company_pikeman")).unwrap();
+        assert_eq!(w.organizations[0].rally, Some([30.0, 30.0]));
+        let r = &w.organizations[0];
+        let captain = r.units[r.leader.unwrap()];
+        let before = distance(w.units[captain].position, [30.0, 30.0]);
+        run(&mut w, 2.0);
+        assert!(distance(w.units[captain].position, [30.0, 30.0]) < before);
+        // Not while it's under siege, as it can't recruit then.
+        w.buildings[0].besieged = Some(w.ticks + 100);
+        assert_eq!(w.apply(1, rally([10.0, 10.0])), Err(Refused::Unable));
+        assert_eq!(w.buildings[0].rally, Some([30.0, 30.0]));
     }
 
     #[test]

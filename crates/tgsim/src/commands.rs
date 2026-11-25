@@ -437,7 +437,8 @@ impl World {
     }
 
     fn may_rally(&self, player: u32, building: usize) -> Result<(), Refused> {
-        if self.standing_for(player, building)?.deploy.is_none() {
+        let deploys = self.standing_for(player, building)?.deploy.is_some();
+        if !deploys && !self.recruits_companies(building) {
             return Err(Refused::Unable);
         }
         Ok(())
