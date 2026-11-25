@@ -126,6 +126,7 @@ impl World {
             Command::AirAttack { building, on, .. } => self.may_air_attack(player, building, on),
             Command::Escort { building, .. } => self.may_set_escort(player, building),
             Command::Heard { ref command } => self.may_hear(command),
+            Command::Ability { .. } => Ok(()),
             Command::Select { ref pieces } => self.may_select(pieces),
             Command::Queued { ref command } => self.may_queue(player, command),
         }
@@ -279,6 +280,11 @@ impl World {
             Command::Group { orders } => self.order_group(player, orders)?,
             Command::Queued { command } => self.order_queued(player, *command)?,
             Command::Heard { command } => self.hear(&command)?,
+            Command::Ability {
+                thing,
+                ability,
+                target,
+            } => self.tell_ability(thing, &ability, target),
             Command::Select { pieces } => {
                 self.may_select(&pieces)?;
                 self.triggers.selected.insert(player, pieces);

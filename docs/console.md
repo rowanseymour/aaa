@@ -75,6 +75,7 @@ These run only with --dev, in a match no other machine shares.
 | `missionwon kingdom` | has a kingdom, by name or id, win the match |  | ✓ |
 | `missionlost kingdom` | has a kingdom, by name or id, lose the match |  | ✓ |
 | `objects [kingdom \| template ...]` | lists the buildings and organizations on the map, each with its template, id, kingdom and place; given kingdoms, by name or id, or templates, only those, a word that names a kingdom taken as one |  | ✓ |
+| `ability thing ability target` | has a building or unit, by its id or its organization's, use an ability of its performer, by its definition's id, once on another thing, by its id, as a map's script can; refused silently where it couldn't fire on it now |  | ✓ |
 | `destroyselected` | destroys the selected organizations | ✓ | ✓ |
 | `advance seconds` | plays that much of the game at once, paused or not |  | ✓ |
 | `fog` | lifts the fog of war from the screen, or lays it again | ✓ | ✓ |

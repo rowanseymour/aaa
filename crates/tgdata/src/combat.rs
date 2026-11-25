@@ -113,6 +113,12 @@ pub struct Turret {
 /// An attack a fighter makes by itself on what comes in range.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Weapon {
+    /// The id of its ability definition: the template it's made from, or
+    /// else its own id.
+    pub definition: Option<Id>,
+    /// It's one of its fighter's `[PerformerComponent]` abilities, which a
+    /// building never chooses to use itself.
+    pub performed: bool,
     pub range: f32,
     pub min_range: f32,
     /// Seconds between shots.
@@ -707,13 +713,15 @@ pub(crate) fn fighter(
     let animations = (thing.character_component.as_ref()).map_or(&[][..], |c| &c.animation);
     let performs = thing.performer_component.iter().flat_map(|p| &p.ability);
     let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
-    let abilities = performs.chain(defends);
+    let abilities = (performs.map(|a| (a, true))).chain(defends.map(|a| (a, false)));
     // The weapon an ability is, if it does damage and has a range.
     let weapon_of = |a: &defs::Ability, d: &defs::AbilityDefinition, range: Option<f32>| {
         let hits = weapon_hits(&d.effect);
         let damages = hits.iter().any(|h| !matches!(h.does, Does::Morale(_)));
         let range = range.filter(|_| damages)?;
         Some(Weapon {
+            definition: not_null(d.template.clone().or_else(|| d.ids.clone())),
+            performed: false,
             range,
             min_range: d.min_range,
             recharge: d.recharge_time,
@@ -763,7 +771,8 @@ pub(crate) fn fighter(
             },
         })
     };
-    for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
+    let abilities = abilities.filter_map(|(a, p)| Some((a, a.ability_definition.as_ref()?, p)));
+    for (a, d, performed) in abilities {
         let heals = d.effect.iter().filter(|e| is(&e.kind, "HEAL"));
         let heal: Option<f32> = heals.map(|e| e.amount.unwrap_or(0.0)).reduce(|a, b| a + b);
         if let (Some(amount), Some(range)) = (heal, d.range) {
@@ -780,7 +789,7 @@ pub(crate) fn fighter(
         }
         // Whatever kind of ability it is, if it does damage.
         if let Some(weapon) = weapon_of(a, d, d.range) {
-            fighter.weapons.push(weapon);
+            fighter.weapons.push(Weapon { performed, ..weapon });
         }
     }
     let dies_with = body.on_death_ability.as_ref();
@@ -1202,6 +1211,64 @@ mod tests {
             offset: [1.0, -2.0],
         };
         assert_eq!(hq.turrets, [other, turret]);
+    }
+
+    #[test]
+    fn weapons_are_named_by_their_definitions_and_know_whose_they_are() {
+        let parsed = tgi::parse(
+            "[Template Shell]
+{
+    range = 40
+    [Effect]
+    {
+        type = MAIN_DAMAGE
+        damage_type_IDS = pierce
+        amount = 10
+    }
+}
+[Thing]
+{
+    IDS = bunker
+    [BodyComponent]
+    health = 100
+    [DefenderComponent]
+    {
+        [Ability]
+        {
+            [AbilityDefinition]
+            {
+                IDS = gun
+                range = 25
+                [Effect]
+                {
+                    type = MAIN_DAMAGE
+                    damage_type_IDS = pierce
+                    amount = 5
+                }
+            }
+        }
+    }
+    [PerformerComponent]
+    {
+        [Ability]
+        {
+            [AbilityDefinition Template=Shell]
+            {
+                range = 50
+            }
+        }
+    }
+}
+",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        let bunker = fighter(&thing, &HashMap::new()).unwrap();
+        let named: Vec<_> = (bunker.weapons.iter())
+            .map(|w| (w.definition.as_ref().map(Id::as_str), w.performed, w.range))
+            .collect();
+        assert_eq!(named, [(Some("Shell"), true, 50.0), (Some("gun"), false, 25.0)]);
     }
 
     #[test]

@@ -25,7 +25,9 @@
 //! it's a number, as the game does.
 //!
 //! With [`Templates::deserialize`] every block is resolved against its
-//! template before its contents are read, nested blocks included.
+//! template before its contents are read, nested blocks included. A field
+//! renamed to [`TEMPLATE_FIELD`] takes the name of the template its block
+//! inherits from.
 //!
 //! [`Coverage`] deserializes the same way while counting which keys the
 //! types read and which they skip.
@@ -199,6 +201,10 @@ fn child_path(path: &str, block: &Block) -> String {
     format!("{path}/{}", path_of(block))
 }
 
+/// The name of a struct field that takes the template its block names
+/// (`Template=` or `Inherit=`), which no key in a file can match.
+pub const TEMPLATE_FIELD: &str = "@template";
+
 /// What deserializing carries down into nested blocks.
 #[derive(Clone)]
 struct Ctx<'a> {
@@ -350,6 +356,17 @@ impl<'a> Node<'a> {
                 ));
             }
         };
+        // The template it names, before resolving drops the name.
+        let named = (fields.is_some_and(|f| f.contains(&TEMPLATE_FIELD)))
+            .then(|| crate::inherit::template(block).or(block.resolved_from.as_deref()))
+            .flatten()
+            .map(|name| Field {
+                ty: None,
+                key: TEMPLATE_FIELD.into(),
+                value: Some(name.to_string()),
+                quoted: false,
+                line: block.line,
+            });
         let block = &*resolved(ctx.templates, block)?;
         // Only a struct's own field names fold underscores: a map's keys are
         // what the file says, and `a_b` and `ab` are different ones.
@@ -386,7 +403,10 @@ impl<'a> Node<'a> {
         });
         // The resolved block lives only for this call, so the map access
         // owns what it hands out.
-        let groups: Vec<(String, Node<'_>)> = groups.collect();
+        let mut groups: Vec<(String, Node<'_>)> = groups.collect();
+        if let Some(f) = &named {
+            groups.push((TEMPLATE_FIELD.into(), Node::Field(f)));
+        }
         let line = block.line;
         let mut map = de::value::MapDeserializer::new(groups.into_iter());
         let value = visitor.visit_map(&mut map).map_err(|e| e.at(line))?;
@@ -889,6 +909,31 @@ mod tests {
             }]
         );
         assert!(from_block::<Terrain>(terrain).is_err());
+    }
+
+    #[test]
+    fn a_block_tells_the_template_it_names() {
+        #[derive(Deserialize)]
+        struct Named {
+            #[serde(rename = "@template")]
+            template: Option<String>,
+            #[serde(default)]
+            variation: Vec<Named>,
+        }
+        let parsed = parse(
+            "[Template Tex]\n{\ntexture = t.dds\n}\n\
+             [Template Base]\n{\n[Variation Template=Tex]\n}\n\
+             [Terrain Template=Base]\n{\n[Variation Template=tex]\n}\n[Terrain]\n{\n}",
+        );
+        let templates = Templates::new([&parsed.root]);
+        let mut terrains = parsed.root.blocks_of("Terrain");
+        let named: Named = templates.deserialize(terrains.next().unwrap()).unwrap();
+        assert_eq!(named.template.as_deref(), Some("Base"));
+        let inner: Vec<_> = named.variation.iter().map(|v| v.template.as_deref()).collect();
+        assert!(inner.iter().all(|t| t.is_some_and(|t| t.eq_ignore_ascii_case("tex"))));
+        assert!(!inner.is_empty());
+        let plain: Named = templates.deserialize(terrains.next().unwrap()).unwrap();
+        assert_eq!(plain.template, None);
     }
 
     #[test]

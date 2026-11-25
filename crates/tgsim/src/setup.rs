@@ -132,6 +132,7 @@ impl World {
             next_id: 1,
             next_commission: 0,
             flying: Vec::new(),
+            told: Vec::new(),
             landings: Vec::new(),
             groups: Vec::new(),
             next_group: 0,

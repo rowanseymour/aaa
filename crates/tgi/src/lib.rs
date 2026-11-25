@@ -32,7 +32,7 @@ mod decode;
 mod inherit;
 
 #[cfg(feature = "serde")]
-pub use de::{Count, Coverage, Error, from_block};
+pub use de::{Count, Coverage, Error, TEMPLATE_FIELD, from_block};
 pub use decode::decode;
 pub use inherit::Templates;
 
