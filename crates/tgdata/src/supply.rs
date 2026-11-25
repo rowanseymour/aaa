@@ -149,7 +149,7 @@ fn enchantment(
     let damage = (a.effect.iter())
         .filter(|e| is(&e.kind, "MAIN_DAMAGE"))
         .filter_map(|e| {
-            let targets = Targets::parse(e.targets.as_deref().unwrap_or(""));
+            let targets = Targets::of(e.targets.as_deref());
             let kind = e.damage_type_ids.clone()?;
             Some((
                 targets,
@@ -162,7 +162,7 @@ fn enchantment(
         .collect();
     let projectile = a.projectile_ids.as_ref().and_then(|p| flights.get(p));
     Some(Enchantment {
-        targets: Targets::parse(a.targets.as_deref().unwrap_or("")),
+        targets: Targets::of(a.targets.as_deref()),
         area: a.area,
         max_targets: a.max_targets.unwrap_or(0),
         property: p.ids.clone()?,
@@ -243,6 +243,19 @@ pub(crate) fn enchantments(t: &defs::Thing) -> impl Iterator<Item = &defs::Prope
         .filter_map(|e| e.enchantment_property.as_ref())
 }
 
+/// The properties a template's things hold of their own: the shared ones
+/// it names, then its intrinsic ones.
+pub(crate) fn held<'a>(
+    t: &'a defs::Thing,
+    shared: &'a HashMap<Id, defs::Property>,
+) -> impl Iterator<Item = &'a defs::Property> {
+    t.properties_component.iter().flat_map(move |c| {
+        let refs = c.property.iter();
+        let refs = refs.filter_map(move |r| shared.get(r.property_ids.as_ref()?));
+        refs.chain(&c.intrinsic_property)
+    })
+}
+
 impl GameData {
     pub fn supply_rules(&self) -> SupplyRules {
         let default = SupplyRules::default();
@@ -261,9 +274,7 @@ impl GameData {
     /// Whether a regiment may resupply while doing each activity, by its
     /// actor state id, as the first of the state files to say so has it.
     pub fn resupplying(&self) -> HashMap<Id, bool> {
-        let files = self.parse_tgis(|n| n.starts_with("game/actor_states"));
-        let files = crate::scoped(&files);
-        resupplying(files.iter().flat_map(|f| f.read("ActorState")))
+        resupplying(self.actor_states().iter().cloned())
     }
 
     /// What each property does to supply, for those that do anything to
@@ -303,19 +314,28 @@ impl GameData {
     ) -> HashMap<Id, E> {
         let definitions = self.definitions();
         let shared = definitions.properties.values();
-        let given = definitions
-            .things
-            .iter()
-            .flat_map(|t| enchantments(&t.thing));
-        let operations = (definitions.abilities.iter())
-            .flat_map(|(_, a)| &a.effect)
-            .filter_map(|e| e.enchantment_property.as_ref());
+        let given = definitions.given_properties().map(|(_, p)| p);
         // The first of those given more than once, in the order they load,
         // so every copy of a match reads the same.
         let mut out = HashMap::new();
-        for p in shared.chain(given).chain(operations) {
+        for p in shared.chain(given) {
             if let (Some(id), Some(effect)) = (p.ids.clone(), effect(p)) {
                 out.entry(id).or_insert(effect);
+            }
+        }
+        out
+    }
+
+    /// As [`GameData::property_effects`], with those experience levels give
+    /// on top.
+    pub(crate) fn effects_with_levels<E>(
+        &self,
+        effect: impl Fn(&defs::Property) -> Option<E>,
+    ) -> HashMap<Id, E> {
+        let mut out = self.property_effects(&effect);
+        for (id, p) in self.level_properties() {
+            if let Some(e) = effect(&p) {
+                out.insert(id, e);
             }
         }
         out
@@ -328,11 +348,7 @@ impl GameData {
             let c = t.properties_component.as_ref()?;
             let properties: Vec<Id> =
                 (c.property.iter().filter_map(|r| r.property_ids.clone())).collect();
-            let shared = properties
-                .iter()
-                .filter_map(|p| definitions.properties.get(p));
-            let flags = shared
-                .chain(&c.intrinsic_property)
+            let flags = (held(t, &definitions.properties))
                 .flat_map(|p| listed(p.enabled_target_flags.as_deref()))
                 .collect();
             Some(Kind {
@@ -348,15 +364,8 @@ impl GameData {
     pub fn decays(&self) -> HashMap<Id, f32> {
         let definitions = self.definitions();
         self.by_template(|t| {
-            let c = t.properties_component.as_ref()?;
-            let shared = c.property.iter().filter_map(|r| r.property_ids.as_ref());
-            let shared = shared.filter_map(|p| definitions.properties.get(p));
-            let periodic = |m: &&defs::Modifier| {
-                (m.kind.as_deref()).is_some_and(|k| k.eq_ignore_ascii_case("PERIODIC_DAMAGE"))
-            };
-            let modifiers = shared
-                .chain(&c.intrinsic_property)
-                .flat_map(|p| &p.modifier);
+            let periodic = |m: &&defs::Modifier| is(&m.kind, "PERIODIC_DAMAGE");
+            let modifiers = held(t, &definitions.properties).flat_map(|p| &p.modifier);
             let rate: f32 = modifiers.filter(periodic).filter_map(|m| m.amount).sum();
             (rate > 0.0).then_some(rate)
         })

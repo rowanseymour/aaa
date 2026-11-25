@@ -25,21 +25,17 @@ pub struct Stance {
 /// body.
 fn stances(t: &defs::Thing) -> Option<Vec<Stance>> {
     t.body_component.as_ref()?;
-    fn named(v: &Option<String>) -> Option<&str> {
-        (v.as_deref().map(str::trim)).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("NULL"))
-    }
     let stances: Vec<Stance> = (t.stance.iter())
         .map(|s| Stance {
             ids: Id::from(s.ids.as_deref().unwrap_or("")),
             health: s.health.unwrap_or(1.0),
-            states: (named(&s.actor_state).into_iter())
-                .flat_map(|v| v.split(','))
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(Id::from)
-                .collect(),
-            property: named(&s.property_ids).map(Id::from),
-            look: named(&s.aspect_ids).map(Id::from),
+            states: crate::supply::listed(s.actor_state.as_deref()),
+            property: s
+                .property_ids
+                .as_deref()
+                .and_then(crate::named)
+                .map(Id::from),
+            look: s.aspect_ids.as_deref().and_then(crate::named).map(Id::from),
         })
         .collect();
     (!stances.is_empty()).then_some(stances)

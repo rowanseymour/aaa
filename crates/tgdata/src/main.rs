@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::ExitCode;
 
-use tgdata::GameData;
+use tgdata::{GameData, Id};
 use tgi::Count;
 
 const USAGE: &str = "\
@@ -222,7 +222,7 @@ fn audio(dir: &str, filter: &str) -> Res {
     let filter = filter.to_ascii_lowercase();
     let all = GameData::open(dir.as_ref())?.audio();
     let mut audio: Vec<_> = (all.iter())
-        .filter(|(id, _)| id.as_str().to_ascii_lowercase().contains(&filter))
+        .filter(|(id, _)| matches(id, &filter))
         .collect();
     audio.sort_by(|a, b| a.0.cmp(b.0));
     let mut missing = 0;
@@ -255,7 +255,7 @@ fn cues(dir: &str, filter: &str) -> Res {
     let mut objects: Vec<_> = game
         .object_audio()
         .into_iter()
-        .filter(|(id, _)| id.as_str().to_ascii_lowercase().contains(&filter))
+        .filter(|(id, _)| matches(id, &filter))
         .collect();
     objects.sort_by(|a, b| a.0.cmp(&b.0));
     let mut undefined = BTreeMap::new();
@@ -308,8 +308,6 @@ fn cues(dir: &str, filter: &str) -> Res {
     Ok(())
 }
 
-/// The effects of each object template whose id contains `filter`, ignoring
-/// case, with a `?` on effects that aren't defined and each effect's kind.
 fn campaigns(dir: &str) -> Res {
     let game = GameData::open(dir.as_ref())?;
     for c in game.campaigns() {
@@ -422,6 +420,8 @@ fn messages(dir: &str) -> Res {
     Ok(())
 }
 
+/// The effects of each object template whose id contains `filter`, ignoring
+/// case, with a `?` on effects that aren't defined and each effect's kind.
 fn effects(dir: &str, filter: &str) -> Res {
     let filter = filter.to_ascii_lowercase();
     let game = GameData::open(dir.as_ref())?;
@@ -430,7 +430,7 @@ fn effects(dir: &str, filter: &str) -> Res {
     let mut objects: Vec<_> = game
         .object_effects()
         .into_iter()
-        .filter(|(id, _)| id.as_str().to_ascii_lowercase().contains(&filter))
+        .filter(|(id, _)| matches(id, &filter))
         .collect();
     objects.sort_by(|a, b| a.0.cmp(&b.0));
     let mut undefined = BTreeMap::new();
@@ -511,10 +511,7 @@ fn effects(dir: &str, filter: &str) -> Res {
             line(&format!("health {:?} {}", h.trigger, h.health), &h.cue)?;
         }
     }
-    for (id, f) in fighters
-        .iter()
-        .filter(|(id, _)| id.as_str().to_ascii_lowercase().contains(&filter))
-    {
+    for (id, f) in fighters.iter().filter(|(id, _)| matches(id, &filter)) {
         for (i, w) in f.weapons.iter().enumerate() {
             let e = &w.effects;
             for (event, cues) in [
@@ -538,6 +535,11 @@ fn effects(dir: &str, filter: &str) -> Res {
         outln!("undefined: {id} ({n})");
     }
     Ok(())
+}
+
+/// Whether `id` contains `filter`, which is lower-case, ignoring case.
+fn matches(id: &Id, filter: &str) -> bool {
+    id.as_str().to_ascii_lowercase().contains(filter)
 }
 
 fn add(total: &mut Count, count: Count) {

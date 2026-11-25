@@ -2,6 +2,7 @@
 //! subjects read of them.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::{GameData, Id, defs};
 
@@ -23,7 +24,15 @@ impl GameData {
     /// The states whose type is `busy`, which changes what a building in
     /// one offers.
     pub fn busy_states(&self) -> HashSet<Id> {
-        busy(self.read_all(|n| n.starts_with("game/actor_states"), "ActorState"))
+        busy(self.actor_states().iter().cloned())
+    }
+
+    /// Every state the state files define, in the order they load, those
+    /// defined twice included.
+    pub(crate) fn actor_states(&self) -> Arc<Vec<defs::ActorState>> {
+        self.kept("actor_states", || {
+            self.read_all(|n| n.starts_with("game/actor_states"), "ActorState")
+        })
     }
 }
 

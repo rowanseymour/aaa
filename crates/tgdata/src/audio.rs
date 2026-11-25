@@ -471,11 +471,7 @@ fn audio(
 /// The archive path of a file an [`Audio`] names: from the root where it
 /// starts with a `/`, else from `Audio/`.
 fn audio_path(file: &str) -> String {
-    let file = file.replace('\\', "/");
-    match file.strip_prefix('/') {
-        Some(rooted) => rooted.to_string(),
-        None => format!("Audio/{file}"),
-    }
+    crate::beside("Audio/", &file.replace('\\', "/"))
 }
 
 /// The files of an audio file list, which `NULL` leaves empty.

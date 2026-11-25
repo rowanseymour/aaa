@@ -185,14 +185,9 @@ impl Words<'_> {
             let name = self.categories.get(&Id::from(t)).cloned();
             name.unwrap_or_else(|| t.to_string())
         };
-        let mut required = Vec::new();
-        let mut excluded = Vec::new();
-        for t in targets.split([',', ' ', '\t']).filter(|t| !t.is_empty()) {
-            match t.strip_prefix('-') {
-                Some(t) => excluded.push(word(t)),
-                None => required.push(word(t.trim_start_matches('+'))),
-            }
-        }
+        let targets = crate::Targets::parse(targets);
+        let required: Vec<String> = targets.required.iter().map(|t| word(t.as_str())).collect();
+        let excluded: Vec<String> = targets.excluded.iter().map(|t| word(t.as_str())).collect();
         let mut words = Vec::new();
         let prefix = |key| self.said(key).filter(|p| !p.is_empty());
         words.extend(prefix("ability_effect_desc_target_prefix_required"));
@@ -289,8 +284,8 @@ impl GameData {
     /// How a side's experience starts and grows: the match's Starting
     /// Experience setting and the tuning's gain a second.
     pub fn experience_rules(&self) -> ExperienceRules {
-        let starting =
-            (self.world_rule("StartingExperience")).and_then(|r| r.default?.trim().parse().ok());
+        let starting = (self.world_rule(crate::STARTING_EXPERIENCE))
+            .and_then(|r| r.default?.trim().parse().ok());
         let per_second = self.svar(|s| s.experience_faction_gain_periodic);
         let default = ExperienceRules::default();
         ExperienceRules {
@@ -323,7 +318,7 @@ fn operation(
         description: localized(words.strings, a.description.as_deref()),
         icon,
         recharge: a.recharge_time,
-        on_self: crate::Targets::parse(a.targets.as_deref().unwrap_or(""))
+        on_self: crate::Targets::of(a.targets.as_deref())
             .required
             .contains(&Id::from("self")),
         marker: (a.area > 0.0).then(|| Marker {

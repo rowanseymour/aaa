@@ -219,12 +219,7 @@ pub(crate) fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
             }
             _ if is(&m.kind, "ABILITY_EFFECT") && is(&m.ability_type, "attack") => {
                 let added = m.effect.iter().filter(|e| is(&e.kind, "ADD_DAMAGE"));
-                out.extra.extend(added.filter_map(|e| {
-                    Some(Damage {
-                        kind: e.damage_type_ids.clone()?,
-                        amount: e.amount?,
-                    })
-                }));
+                out.extra.extend(added.filter_map(Damage::of));
             }
             _ => {}
         }
@@ -314,13 +309,7 @@ impl GameData {
     /// anything to it, by its id: the shared ones, those abilities give, and
     /// those experience levels give.
     pub fn combat_effects(&self) -> HashMap<Id, CombatEffect> {
-        let mut out = self.property_effects(combat_effect);
-        for (id, p) in self.level_properties() {
-            if let Some(effect) = combat_effect(&p) {
-                out.insert(id, effect);
-            }
-        }
-        out
+        self.effects_with_levels(combat_effect)
     }
 }
 

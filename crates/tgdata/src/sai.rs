@@ -1076,22 +1076,28 @@ impl GameData {
         let explored_share = self
             .svar(|v| v.reset_white_fog_timer_percent)
             .unwrap_or(0.1);
+        let blocks: Vec<SaiBlock> = files.iter().flat_map(|f| f.read("SAI")).collect();
+        let egos: Vec<Ego> = files.iter().flat_map(|f| f.read("Ego")).collect();
         ids.into_iter()
-            .filter_map(|id| profile(&files, id))
-            .map(|p| Profile {
-                sends_air_attacks,
-                explored_share,
-                ..p
+            .filter_map(|id| {
+                let block = blocks.iter().find(|s| s.ids.as_ref() == Some(id))?;
+                Some(Profile {
+                    id: id.clone(),
+                    ego_fuzziness: block.ego_fuzziness,
+                    max_ge_commands: block.max_ge_commands,
+                    max_rai_commands: block.max_rai_commands,
+                    moods: moods(block, &egos, id),
+                    sends_air_attacks,
+                    explored_share,
+                })
             })
             .collect()
     }
 }
 
-fn profile(files: &[crate::Scoped], id: &Id) -> Option<Profile> {
-    let block: SaiBlock = (files.iter())
-        .flat_map(|f| f.read::<SaiBlock>("SAI"))
-        .find(|s| s.ids.as_ref() == Some(id))?;
-    let egos: Vec<Ego> = files.iter().flat_map(|f| f.read::<Ego>("Ego")).collect();
+/// The moods `block` names that `egos` define, its initial one first, each
+/// once.
+fn moods(block: &SaiBlock, egos: &[Ego], id: &Id) -> Vec<Ego> {
     let named = block
         .initial_ego
         .iter()
@@ -1106,15 +1112,7 @@ fn profile(files: &[crate::Scoped], id: &Id) -> Option<Profile> {
             None => log::warn!("{id}: no mood {name}"),
         }
     }
-    Some(Profile {
-        id: id.clone(),
-        ego_fuzziness: block.ego_fuzziness,
-        max_ge_commands: block.max_ge_commands,
-        max_rai_commands: block.max_rai_commands,
-        moods,
-        sends_air_attacks: true,
-        explored_share: 0.1,
-    })
+    moods
 }
 
 #[cfg(test)]
@@ -1177,11 +1175,16 @@ mod tests {
     #[test]
     fn a_profile_holds_its_moods_resolved_against_their_templates() {
         let files = files();
-        let p = profile(&scoped(&files), &Id::from("test_sai")).unwrap();
-        assert_eq!(p.ego_fuzziness, 10.0);
-        let names: Vec<_> = p.moods.iter().map(|m| m.ids.clone().unwrap()).collect();
+        let files = scoped(&files);
+        let id = Id::from("test_sai");
+        let blocks: Vec<SaiBlock> = files.iter().flat_map(|f| f.read("SAI")).collect();
+        let egos: Vec<Ego> = files.iter().flat_map(|f| f.read("Ego")).collect();
+        let block = blocks.iter().find(|s| s.ids.as_ref() == Some(&id)).unwrap();
+        assert_eq!(block.ego_fuzziness, 10.0);
+        let moods = moods(block, &egos, &id);
+        let names: Vec<_> = moods.iter().map(|m| m.ids.clone().unwrap()).collect();
         assert_eq!(names, [Id::from("low_ego"), Id::from("main_ego")]);
-        let low = &p.moods[0];
+        let low = &moods[0];
         assert_eq!(low.priority, 2000.0);
         assert_eq!(low.filters.item[0].max, 40.0);
         let engine = &low.goal_engine;
@@ -1199,6 +1202,6 @@ mod tests {
         let air = &engine.combat.air_attacks;
         assert_eq!(air.min_time_between_attacks, 90.0);
         assert_eq!(air.engaged_bonus, 2.0);
-        assert!(p.moods[1].filters.item.is_empty());
+        assert!(moods[1].filters.item.is_empty());
     }
 }

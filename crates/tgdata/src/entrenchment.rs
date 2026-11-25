@@ -69,10 +69,7 @@ impl GameData {
     /// The properties the state `state` gives what's in it, as the first
     /// of the state files to define it lists them.
     pub fn state_properties(&self, state: &str) -> Vec<Id> {
-        given(
-            self.read_all(|n| n.starts_with("game/actor_states"), "ActorState"),
-            state,
-        )
+        given(self.actor_states().iter().cloned(), state)
     }
 }
 

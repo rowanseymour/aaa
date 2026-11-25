@@ -15,7 +15,7 @@ impl GameData {
 }
 
 /// The centres a settlement has, one per level.
-fn centres(settlement: &defs::SettlementComponent) -> Vec<Id> {
+pub(crate) fn centres(settlement: &defs::SettlementComponent) -> Vec<Id> {
     (settlement.levels.iter())
         .flat_map(|l| &l.level)
         .filter_map(|l| l.settlement_center_ids.clone())

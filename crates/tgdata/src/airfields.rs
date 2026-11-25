@@ -99,12 +99,7 @@ fn airfield(denizens: &defs::DenizenComponent) -> Option<Airfield> {
         .map(|g| {
             let [fewest, most] = g.size.unwrap_or([1.0, 1.0]).map(|n| n.max(0.0) as usize);
             AirGroup {
-                templates: (g.actor_ids.iter())
-                    .flat_map(|ids| ids.split(','))
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                    .map(Id::from)
-                    .collect(),
+                templates: crate::supply::listed(g.actor_ids.as_deref()),
                 fewest,
                 most: most.max(fewest),
                 jobs: (g.behavior.iter())

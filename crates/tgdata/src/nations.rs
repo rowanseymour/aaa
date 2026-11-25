@@ -324,19 +324,9 @@ impl GameData {
     /// files under `Modern/`, the first for a nation winning. An SVG is
     /// drawn at the emblem's size, any other image at its own.
     pub fn emblems(&self) -> HashMap<Id, String> {
-        let files = self.modern_files();
-        let mut emblems = HashMap::new();
-        for file in scoped(&files) {
-            for emblem in file.read::<defs::Emblem>("Emblem") {
-                let (Some(nation), Some(texture)) = (not_null(emblem.nation_ids), emblem.texture)
-                else {
-                    continue;
-                };
-                let texture = beside(file.file, texture.trim());
-                emblems.entry(nation).or_insert(texture);
-            }
-        }
-        emblems
+        self.modern_textures("Emblem", |e: defs::Emblem| {
+            Some((not_null(e.nation_ids)?, e.texture?))
+        })
     }
 
     /// The nations sides can play as, by name.
@@ -354,8 +344,8 @@ impl GameData {
                     placeholders: placeholders
                         .filter_map(|p| Some((p.placeholder_ids?, p.thing_ids?)))
                         .collect(),
-                    factions: (n.factions.as_deref().unwrap_or("").split(','))
-                        .filter_map(|id| factions.get(&Id::from(id.trim())).cloned())
+                    factions: (crate::supply::listed(n.factions.as_deref()).iter())
+                        .filter_map(|id| factions.get(id).cloned())
                         .collect(),
                     flag: n.flag_icon.as_deref().and_then(ui_path),
                     music: crate::not_null(n.game_music),

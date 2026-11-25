@@ -37,9 +37,8 @@ impl GameData {
         let bias = self.svar(|v| v.guard_old_target_bias);
         let definitions = self.definitions();
         let control = definitions.properties.get(&Id::from(GUARDING)).map(|p| {
-            let ranges = p.modifier.iter().filter(|m| {
-                (m.attribute.as_deref()).is_some_and(|a| a.eq_ignore_ascii_case("control_range"))
-            });
+            let ranges =
+                (p.modifier.iter()).filter(|m| crate::supply::is(&m.attribute, "control_range"));
             1.0 + ranges.filter_map(|m| m.amount).sum::<f32>()
         });
         GuardRules {

@@ -82,8 +82,7 @@ impl GameData {
     }
 
     fn text(&self, name: &str) -> Option<String> {
-        let bytes = self.read(name)?;
-        Some(String::from_utf8_lossy(&bytes).into_owned())
+        Some(tgi::decode(&self.read(name)?))
     }
 
     /// The configurations players choose between, in the order the

@@ -94,14 +94,12 @@ fn possible_structures(
     settlement: &defs::SettlementComponent,
     upgrades: &HashMap<Id, Vec<Id>>,
 ) -> HashSet<Id> {
-    let centres = (settlement.levels.iter())
-        .flat_map(|l| &l.level)
-        .filter_map(|l| l.settlement_center_ids.clone());
+    let centres = crate::settlements::centres(settlement);
     let available = (settlement.available_structures.iter())
         .flat_map(|a| &a.structure)
         .filter_map(|s| s.structure_ids.clone());
     let mut out = HashSet::new();
-    let mut todo: Vec<Id> = centres.chain(available).collect();
+    let mut todo: Vec<Id> = centres.into_iter().chain(available).collect();
     while let Some(s) = todo.pop() {
         if let Some(next) = upgrades.get(&s) {
             todo.extend(next.iter().filter(|n| !out.contains(*n)).cloned());

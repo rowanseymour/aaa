@@ -189,6 +189,28 @@ pub(crate) fn is_thing(kind: &str) -> bool {
 }
 
 impl Definitions {
+    /// Each template by id, and by the old ids `translations` renames.
+    pub(crate) fn by_id(&self, translations: &[defs::Translate]) -> HashMap<Id, &defs::Thing> {
+        let mut out = (self.things.iter())
+            .map(|t| (t.id.clone(), &t.thing))
+            .collect();
+        add_renames(&mut out, translations, "Thing");
+        out
+    }
+
+    /// The properties abilities and special operations give what they land
+    /// on, in the order they load, with the archive path of the file each
+    /// is defined in, or none for an operation's.
+    fn given_properties(&self) -> impl Iterator<Item = (&str, &defs::Property)> {
+        let given = (self.things.iter())
+            .flat_map(|t| supply::enchantments(&t.thing).map(|p| (t.file.as_str(), p)));
+        let operations = (self.abilities.iter())
+            .flat_map(|(_, a)| &a.effect)
+            .filter_map(|e| e.enchantment_property.as_ref())
+            .map(|p| ("", p));
+        given.chain(operations)
+    }
+
     /// Defining a Thing id again is an error that ends the reading of its
     /// file there, the blocks before it kept.
     fn new<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> Self {
@@ -197,7 +219,9 @@ impl Definitions {
         let mut properties = HashMap::new();
         let mut property_files = HashMap::new();
         let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
+        let mut ability_ids = HashSet::new();
         let mut factions: Vec<defs::Faction> = Vec::new();
+        let mut faction_ids = HashSet::new();
         let mut descriptions: Vec<defs::Description> = Vec::new();
         for scope in scoped(files) {
             let file = scope.file;
@@ -228,13 +252,13 @@ impl Definitions {
                 } else if kind.eq_ignore_ascii_case("AbilityDefinition")
                     && let Some(a) = scope.deserialize::<defs::AbilityDefinition>(block)
                     && let Some(id) = a.ids.clone()
-                    && !abilities.iter().any(|(known, _)| *known == id)
+                    && ability_ids.insert(id.clone())
                 {
                     abilities.push((id, a));
                 } else if kind.eq_ignore_ascii_case("Faction")
                     && let Some(g) = scope.deserialize::<defs::Faction>(block)
                     && let Some(id) = &g.ids
-                    && !factions.iter().any(|known| known.ids.as_ref() == Some(id))
+                    && faction_ids.insert(id.clone())
                 {
                     factions.push(g);
                 } else if kind.eq_ignore_ascii_case("Description")
@@ -431,7 +455,18 @@ impl GameData {
         let extras = EXTRA_ARCHIVES
             .iter()
             .filter_map(|name| find_case_insensitive(dir, name));
-        let mut game = GameData {
+        let mut game = GameData::without_depots(dir);
+        for path in [data].into_iter().chain(extras) {
+            game.push(Depot::open(&path)?);
+        }
+        let names: Vec<String> = game.entries().map(str::to_string).collect();
+        game.tag = game_tag(&names);
+        game.list_tgis();
+        Ok(game)
+    }
+
+    fn without_depots(dir: &Path) -> Self {
+        GameData {
             dir: dir.to_path_buf(),
             depots: Vec::new(),
             entries: Vec::new(),
@@ -440,14 +475,7 @@ impl GameData {
             tag: None,
             parsed: Mutex::default(),
             tables: Mutex::default(),
-        };
-        for path in [data].into_iter().chain(extras) {
-            game.push(Depot::open(&path)?);
         }
-        let names: Vec<String> = game.entries().map(str::to_string).collect();
-        game.tag = game_tag(&names);
-        game.list_tgis();
-        Ok(game)
     }
 
     /// Adds the folder or archive at `path` after the depots there are, so
@@ -558,13 +586,18 @@ impl GameData {
     /// The world rule `ids`, the game's own where it has one in place of
     /// the one every game has.
     pub(crate) fn world_rule(&self, ids: &str) -> Option<defs::WorldRule> {
-        (self.world_rules().into_iter())
+        (self.world_rules().iter())
             .find(|r| (r.ids.as_ref()).is_some_and(|id| id.as_str().eq_ignore_ascii_case(ids)))
+            .cloned()
     }
 
     /// Every world rule, those every game has first, each replaced by the
     /// game's own of the same id where it has one, then the game's others.
-    pub(crate) fn world_rules(&self) -> Vec<defs::WorldRule> {
+    pub(crate) fn world_rules(&self) -> Arc<Vec<defs::WorldRule>> {
+        self.kept("world_rules", || self.read_world_rules())
+    }
+
+    fn read_world_rules(&self) -> Vec<defs::WorldRule> {
         let versions = self.versions("Game/world_rules.tgi");
         let at = |n: &str| versions.iter().position(|v| v.eq_ignore_ascii_case(n));
         // The templates are there for the rules to inherit from.
@@ -625,6 +658,28 @@ impl GameData {
     pub(crate) fn modern_files(&self) -> Vec<(String, Arc<tgi::Parsed>)> {
         let names = self.entry_names(|n| n.starts_with("modern/") && n.ends_with(".tgi"));
         self.parse_named(names.iter().map(String::as_str))
+    }
+
+    /// The textures this project's own `kind` blocks give, by the key
+    /// `pick` finds in each with its texture, the first of each key kept and
+    /// each texture named from its file.
+    pub(crate) fn modern_textures<T, K>(
+        &self,
+        kind: &str,
+        pick: impl Fn(T) -> Option<(K, String)>,
+    ) -> HashMap<K, String>
+    where
+        T: serde::de::DeserializeOwned + 'static,
+        K: Eq + std::hash::Hash,
+    {
+        let files = self.modern_files();
+        let mut out = HashMap::new();
+        for file in scoped(&files) {
+            for (key, texture) in file.read::<T>(kind).filter_map(&pick) {
+                (out.entry(key)).or_insert_with(|| beside(file.file, texture.trim()));
+            }
+        }
+        out
     }
 
     /// Every `.tgi` file the game loads whose lower-case path passes
@@ -766,18 +821,24 @@ impl GameData {
     /// The organization templates that fly no banner, such as animal herds:
     /// part of the scenery, which players can't pick.
     pub fn scenery(&self) -> HashSet<Id> {
-        self.by_template(|t| {
+        self.templates_where(|t| {
             let icon = t.view.as_ref().and_then(|v| v.banner_icon.as_deref());
-            (t.organization_component.is_some() && icon.and_then(ui_path).is_none()).then_some(())
+            t.organization_component.is_some() && icon.and_then(ui_path).is_none()
         })
-        .into_keys()
-        .collect()
     }
 
     /// How fast each template that moves moves at most, in world units a
     /// second, by template id.
     pub fn speeds(&self) -> HashMap<Id, f32> {
         self.by_template(|t| t.mover_component.as_ref()?.speed_max.filter(|&s| s > 0.0))
+    }
+
+    /// The templates `has` holds of, including the ids the game has since
+    /// renamed.
+    pub(crate) fn templates_where(&self, has: impl Fn(&defs::Thing) -> bool) -> HashSet<Id> {
+        self.by_template(|t| has(t).then_some(()))
+            .into_keys()
+            .collect()
     }
 
     /// What `of` finds in each template that has it, by template id,
@@ -868,8 +929,7 @@ impl GameData {
 
     /// The templates whose things each side numbers.
     pub fn numbered(&self) -> HashSet<Id> {
-        let numbered = self.by_template(|t| t.numbered.filter(|&n| n));
-        numbered.into_keys().collect()
+        self.templates_where(|t| t.numbered == Some(true))
     }
 }
 
@@ -1196,16 +1256,7 @@ mod tests {
 
     /// Game data with no archives, for what doesn't read any.
     fn empty() -> GameData {
-        GameData {
-            dir: PathBuf::new(),
-            depots: Vec::new(),
-            entries: Vec::new(),
-            paths: HashMap::new(),
-            tgis: Vec::new(),
-            tag: None,
-            parsed: Mutex::default(),
-            tables: Mutex::default(),
-        }
+        GameData::without_depots(Path::new(""))
     }
 
     /// A folder of `files`, by path, for a test called `name`.
@@ -1762,6 +1813,21 @@ mod tests {
             [("a/a.tgi", "jeep", Some(50.0)), ("b/b.tgi", "tank", None),]
         );
         assert!(definitions.properties.contains_key(&Id::from("vehicle")));
+    }
+
+    #[test]
+    fn a_things_later_flags_and_sizes_win() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = plane\n\t[Flags]\n\t{\n\t\tflying = true\n\t\tblocking = true\n\t}\n\
+             \t[Flags]\n\t{\n\t\tflying = false\n\t}\n\t[Size]\n\t{\n\t\tsoft_radius = 1\n\t}\n\
+             \t[Size]\n\t{\n\t\tsoft_radius = 2\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = tgi::from_block(block).unwrap();
+        assert_eq!(thing.flag(|f| f.flying), Some(false));
+        assert_eq!(thing.flag(|f| f.blocking), Some(true));
+        assert_eq!(thing.sized(|s| s.soft_radius), Some(2.0));
+        assert_eq!(thing.flag(|f| f.revealed), None);
     }
 
     #[test]

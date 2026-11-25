@@ -34,14 +34,15 @@ impl GameData {
     /// (`name_3954`) or a side (`independent_5`), from its string table as
     /// stored, in `.tgi` syntax.
     pub fn map_strings(&self, table: &[u8]) -> Strings {
-        table_strings(&tgi::parse_bytes(table), &self.glyph_chars())
+        table_strings([&tgi::parse_bytes(table)], &self.glyph_chars())
     }
 
-    fn glyph_chars(&self) -> HashMap<Id, char> {
-        let glyphs = self.glyphs();
-        (glyphs.iter())
-            .filter_map(|g| Some((g.ids.clone()?, char::from_u32(g.index?)?)))
-            .collect()
+    fn glyph_chars(&self) -> Arc<HashMap<Id, char>> {
+        self.kept("glyph_chars", || {
+            (self.glyphs().iter())
+                .filter_map(|g| Some((g.ids.clone()?, char::from_u32(g.index?)?)))
+                .collect()
+        })
     }
 
     fn read_strings(&self) -> Strings {
@@ -51,13 +52,7 @@ impl GameData {
         let files = self.parse_tgis(|n| {
             n.starts_with("localization/") && !n.starts_with("localization/hotkeys/")
         });
-        let mut out = HashMap::new();
-        let blocks = files.iter().flat_map(|(_, p)| p.root.blocks_of("Text"));
-        for (key, text) in blocks.flat_map(text_strings) {
-            // A key defined again keeps its first text.
-            out.entry(key).or_insert_with(|| unescape(&text, &glyphs));
-        }
-        Strings(out)
+        table_strings(files.iter().map(|(_, p)| &**p), &glyphs)
     }
 
     /// The characters quoted text names by id, such as `n` for a newline
@@ -147,10 +142,14 @@ pub(crate) fn image_name(glyph: &defs::Glyph) -> Option<String> {
     Some(glyph.display_name.as_deref()?.replace(' ', ""))
 }
 
-/// The strings of a table's `Text` blocks, the first text of a key kept.
-fn table_strings(parsed: &tgi::Parsed, glyphs: &HashMap<Id, char>) -> Strings {
+/// The strings of the tables' `Text` blocks, the first text of a key kept.
+fn table_strings<'a>(
+    tables: impl IntoIterator<Item = &'a tgi::Parsed>,
+    glyphs: &HashMap<Id, char>,
+) -> Strings {
     let mut out = HashMap::new();
-    for (key, text) in parsed.root.blocks_of("Text").flat_map(text_strings) {
+    let blocks = tables.into_iter().flat_map(|t| t.root.blocks_of("Text"));
+    for (key, text) in blocks.flat_map(text_strings) {
         out.entry(key).or_insert_with(|| unescape(&text, glyphs));
     }
     Strings(out)
@@ -222,7 +221,7 @@ mod tests {
     fn a_maps_strings_are_read_in_its_own_encoding() {
         // Windows-1252's right quote, which Latin-1 has as a control code.
         let table = b"[Text language=Default]\n{\n\tids = map_strings_table\n\tName_3954 = \"Rommel\x92s HQ\"\n}\n";
-        let strings = table_strings(&tgi::parse_bytes(table), &HashMap::new());
+        let strings = table_strings([&tgi::parse_bytes(table)], &HashMap::new());
         assert_eq!(strings.get("name_3954").unwrap(), "Rommel\u{2019}s HQ");
         assert!(strings.get("ids").is_none());
     }

@@ -147,6 +147,19 @@ pub struct Thing {
     pub stance: Vec<StanceDef>,
 }
 
+impl Thing {
+    /// A flag as the last of its `[Flags]` to set it has it, a template's
+    /// own coming after those it inherits.
+    pub fn flag(&self, of: impl Fn(&Flags) -> Option<bool>) -> Option<bool> {
+        self.flags.iter().rev().find_map(of)
+    }
+
+    /// A field of its `[Size]` as the last to set it has it.
+    pub fn sized<'a, T>(&'a self, of: impl Fn(&'a Size) -> Option<T>) -> Option<T> {
+        self.size.iter().rev().find_map(of)
+    }
+}
+
 /// A `[Stance]` block, as `Templates/template_stance.tgi` declares it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StanceDef {
@@ -235,8 +248,6 @@ pub struct BodyComponent {
     pub on_death_ability: Option<Ability>,
 }
 
-/// What makes a building a city centre, claiming a zone of the map. A city
-/// isn't a settlement: see [`SettlementComponent`].
 /// What lets a thing earn experience and the levels it gains with it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExperienceComponent {
@@ -255,6 +266,8 @@ pub struct ExperienceLevel {
     pub property: Option<Property>,
 }
 
+/// What makes a building a city centre, claiming a zone of the map. A city
+/// isn't a settlement: see [`SettlementComponent`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct CityComponent {
     pub zone_radius: Option<f32>,

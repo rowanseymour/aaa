@@ -2,19 +2,15 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{GameData, Id, defs};
+use crate::{GameData, Id};
 
 impl GameData {
     /// The templates whose things keep their side in the match: those
     /// that recruit, and those that unpack into one that does or into a
     /// regiment.
     pub fn sustaining(&self) -> HashSet<Id> {
-        let having = |has: fn(&defs::Thing) -> bool| -> HashSet<Id> {
-            let found = self.by_template(|t| has(t).then_some(()));
-            found.into_keys().collect()
-        };
-        let recruits = having(|t| t.recruit_component.is_some());
-        let regiments = having(|t| t.organization_component.is_some());
+        let recruits = self.templates_where(|t| t.recruit_component.is_some());
+        let regiments = self.templates_where(|t| t.organization_component.is_some());
         let unpacks = self.by_template(|t| {
             let deployment = t.mobile_deployment_component.as_ref()?;
             deployment.unpack_to_actor_ids.clone()
