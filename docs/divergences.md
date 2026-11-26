@@ -97,6 +97,14 @@ needn't match. See [saved.rs](../crates/tgclient/src/saved.rs).
 
 See [campaigns.rs](../crates/tgclient/src/campaigns.rs).
 
+## Data
+
+- **Refused blocks.** A block that doesn't read is skipped on its own, where the
+  original also skips the rest of its file. Here, a block that doesn't read is most
+  often one this project's types don't read yet, not a fault in the data, so ending
+  its file would drop stock content. Only data the original refuses plays out
+  differently. See `logged` in [lib.rs](../crates/tgdata/src/lib.rs).
+
 ## Multiplayer
 
 Matches between machines work as the original's do: every machine plays its own copy

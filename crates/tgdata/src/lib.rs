@@ -302,12 +302,19 @@ impl Scoped<'_> {
 /// Defining an id again is an error that ends the reading of its file
 /// there, the definitions before it kept: the files that do, by lower-case
 /// path, each as far as it's read. Templates aren't definitions, so a file
-/// keeps all of its own.
+/// keeps all of its own. A block refused before its id is read claims
+/// none: a thing of no category the data defines, or a kind told apart by
+/// `name` without one.
 fn cut_short<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> HashMap<String, Arc<tgi::Parsed>> {
+    let scopes = scoped(files);
+    let categories: HashSet<Id> = (scopes.iter())
+        .flat_map(|s| s.root.blocks_of("ThingCategory"))
+        .filter_map(|b| b.value("ids").map(Id::from))
+        .collect();
     // Whether each id's definition so far has an empty `name`.
     let mut defined: HashMap<(String, Id), bool> = HashMap::new();
     let mut out = HashMap::new();
-    for scope in scoped(files) {
+    for scope in &scopes {
         for (i, item) in scope.root.items.iter().enumerate() {
             let tgi::Item::Block(block) = item else {
                 continue;
@@ -319,10 +326,20 @@ fn cut_short<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> HashMap<String, A
                 continue;
             }
             let set = if is_thing(kind) || kind.eq_ignore_ascii_case("VFX") {
+                let category = category(&scope.templates, block).map(Id::from);
+                if !category.is_some_and(|c| categories.contains(&c)) {
+                    continue;
+                }
                 "thing".to_string()
             } else {
                 kind.to_ascii_lowercase()
             };
+            let by_name = ["KingdomColor", "Cursor"]
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(kind));
+            if by_name && block.value("name").is_none() {
+                continue;
+            }
             let nameless = block.value("name") == Some("");
             match defined.entry((set, Id::from(id))) {
                 std::collections::hash_map::Entry::Vacant(e) => {
@@ -330,12 +347,7 @@ fn cut_short<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> HashMap<String, A
                 }
                 // These are told apart by the first one's name, so one
                 // without is read into again.
-                std::collections::hash_map::Entry::Occupied(mut e)
-                    if *e.get()
-                        && ["KingdomColor", "Cursor"]
-                            .iter()
-                            .any(|k| k.eq_ignore_ascii_case(kind)) =>
-                {
+                std::collections::hash_map::Entry::Occupied(mut e) if *e.get() && by_name => {
                     e.insert(nameless);
                 }
                 std::collections::hash_map::Entry::Occupied(_) => {
@@ -362,6 +374,15 @@ fn cut_short<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> HashMap<String, A
         }
     }
     out
+}
+
+/// A thing's `category`, its own or the nearest template's.
+fn category<'a>(templates: &tgi::Templates<'a>, block: &'a tgi::Block) -> Option<&'a str> {
+    let lineage = templates.lineage(block);
+    let ancestors = lineage.iter().filter_map(|name| templates.get(name));
+    std::iter::once(block)
+        .chain(ancestors)
+        .find_map(|b| b.value("category"))
 }
 
 /// What a block read as, or `None` with a warning: a block that doesn't
@@ -1870,12 +1891,12 @@ mod tests {
     fn definitions_keep_file_order_and_skip_blocks_without_ids_or_after_a_repeat() {
         let a = tgi::parse(
             "[Property]\n{\n\tIDS = vehicle\n}\n\
-             [Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 50\n}\n\
+             [Thing]\n{\n\tIDS = jeep\n\tcategory = unit\n\t[BodyComponent]\n\thealth = 50\n}\n\
              [Thing]\n{\n\t[BodyComponent]\n\thealth = 60\n}\n",
         );
         let b = tgi::parse(
-            "[Thing]\n{\n\tIDS = tank\n}\n[Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 70\n}\n\
-             [Thing]\n{\n\tIDS = car\n}\n[Property]\n{\n\tIDS = wheels\n}\n",
+            "[Thing]\n{\n\tIDS = tank\n\tcategory = unit\n}\n[Thing]\n{\n\tIDS = jeep\n\tcategory = unit\n\t[BodyComponent]\n\thealth = 70\n}\n\
+             [Thing]\n{\n\tIDS = car\n\tcategory = unit\n}\n[Property]\n{\n\tIDS = wheels\n}\n",
         );
         let files = as_read(&[("a/a.tgi".to_string(), a), ("b/b.tgi".to_string(), b)]);
         let definitions = Definitions::new(&files);
@@ -1895,9 +1916,14 @@ mod tests {
         assert!(!definitions.properties.contains_key(&Id::from("wheels")));
     }
 
-    /// `files` as the game reads them ([`cut_short`]).
+    /// `files` as the game reads them ([`cut_short`]), after a file that
+    /// defines the category `unit`.
     fn as_read(files: &[(String, tgi::Parsed)]) -> Vec<(String, tgi::Parsed)> {
-        let cut = cut_short(files);
+        let categories = tgi::parse("[ThingCategory]\nids = unit\n");
+        let all: Vec<_> = std::iter::once(("categories.tgi".to_string(), categories))
+            .chain(files.iter().cloned())
+            .collect();
+        let cut = cut_short(&all);
         (files.iter())
             .map(|(n, p)| {
                 (
@@ -1932,14 +1958,17 @@ mod tests {
     fn a_repeated_id_ends_its_file_for_every_kind() {
         let logged = warnings(|| {
             let read = read_ids(&[
-                ("a.tgi", "[Bone]\nids = gun\n[Thing]\nids = smoke\n"),
+                (
+                    "a.tgi",
+                    "[Bone]\nids = gun\n[Thing]\nids = smoke\ncategory = unit\n",
+                ),
                 (
                     "b.tgi",
                     "[Audio]\nids = smoke\n[Bone]\nids = GUN\n[Template t]\nx = 1\n[Audio]\nids = bang\n",
                 ),
                 (
                     "c.tgi",
-                    "[Audio]\nids = bang\n[VFX]\nids = smoke\n[Bone]\nids = sight\n",
+                    "[Audio]\nids = bang\n[VFX]\nids = smoke\ncategory = unit\n[Bone]\nids = sight\n",
                 ),
             ]);
             assert_eq!(
@@ -1959,6 +1988,36 @@ mod tests {
             [
                 "b.tgi:3: Bone GUN defined again, the rest of the file skipped",
                 "c.tgi:3: VFX smoke defined again, the rest of the file skipped",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_block_refused_before_its_id_claims_none() {
+        let read = read_ids(&[
+            (
+                "a.tgi",
+                "[Template t]\ncategory = unit\n[Thing]\nids = a\n[Thing]\nids = b\ncategory = ship\n\
+                 [Thing template=t]\nids = c\n[KingdomColor]\nids = blue\n",
+            ),
+            (
+                "b.tgi",
+                "[Thing]\nids = a\ncategory = unit\n[Thing]\nids = b\ncategory = unit\n\
+                 [KingdomColor]\nids = blue\nname = Blue\n[Thing]\nids = c\ncategory = unit\n[Bone]\nids = x\n",
+            ),
+        ]);
+        assert_eq!(
+            read,
+            [
+                vec![
+                    "Template ",
+                    "Thing a",
+                    "Thing b",
+                    "Thing c",
+                    "KingdomColor blue"
+                ],
+                // Only `c`, its category from its template, was claimed.
+                vec!["Thing a", "Thing b", "KingdomColor blue"],
             ]
         );
     }
@@ -2029,8 +2088,8 @@ mod tests {
     #[test]
     fn units_and_projectiles_are_things() {
         let a = tgi::parse(
-            "[Unit]\n{\n\tIDS = bowman\n}\n[Projectile]\n{\n\tIDS = arrow\n}\n\
-             [Unit]\n{\n\tIDS = bowman\n}\n",
+            "[Unit]\n{\n\tIDS = bowman\n\tcategory = unit\n}\n[Projectile]\n{\n\tIDS = arrow\n\tcategory = unit\n}\n\
+             [Unit]\n{\n\tIDS = bowman\n\tcategory = unit\n}\n",
         );
         let files = as_read(&[("a/a.tgi".to_string(), a)]);
         let definitions = Definitions::new(&files);
