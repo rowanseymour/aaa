@@ -93,6 +93,9 @@ pub struct Rules {
     /// How many times its own top speed a member catching up with its
     /// place in its regiment goes at most.
     pub catchup_speed: f32,
+    /// The least a regiment's banner goes a second catching up with its
+    /// leader.
+    pub banner_catchup_floor: f32,
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub recruit_search_step: f32,
@@ -155,6 +158,10 @@ pub struct Rules {
     /// How each organization template stands with supply, by template.
     /// Organizations of those without it are never in or out of supply.
     pub logistics: HashMap<Id, tgmap::Logistics>,
+    /// The nation each organization template is of, by template.
+    pub nations: HashMap<Id, Id>,
+    /// How many badges each nation's HQs draw from, by nation.
+    pub badges: HashMap<Id, usize>,
     /// The share of its health each template gets back a second in
     /// supply, by template.
     pub resupply_rates: HashMap<Id, f32>,
@@ -262,6 +269,7 @@ impl Default for Rules {
             type_slots: Default::default(),
             efficiency_rates: [0.01, 0.02],
             catchup_speed: 1.75,
+            banner_catchup_floor: 0.5,
             recruit_search_step: 0.5,
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),
@@ -286,6 +294,8 @@ impl Default for Rules {
             building_padding: tgmap::BUILDING_PADDING,
             decays: HashMap::new(),
             logistics: HashMap::new(),
+            nations: HashMap::new(),
+            badges: HashMap::new(),
             resupply_rates: HashMap::new(),
             resupplying: HashMap::new(),
             busy_states: HashSet::new(),

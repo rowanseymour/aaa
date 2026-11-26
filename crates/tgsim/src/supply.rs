@@ -464,11 +464,11 @@ impl World {
         self.with_organization_in(&zone, u)
     }
 
-    /// The ground round the leader of the organization at `r` that its
+    /// The ground round the organization at `r`'s own position that its
     /// members are with it on.
     fn members_zone(&self, r: usize) -> Zone {
         let control = self.organizations[r].control(&self.rules.guard_rules);
-        (self.pathing).zone(self.leader_position(r), control)
+        (self.pathing).zone(self.organizations[r].banner.at, control)
     }
 
     /// As [`World::with_organization`], given its organization's
@@ -1395,6 +1395,22 @@ mod tests {
         w.buildings[1].state = State::Destroyed(w.ticks);
         run(&mut w, 1.0);
         assert!(w.organizations[1].in_supply);
+    }
+
+    #[test]
+    fn members_are_judged_against_the_regiments_own_position() {
+        let w = &mut supplied_division();
+        let units = w.organizations[1].units.clone();
+        let leader = units[w.organizations[1].leader.unwrap()];
+        let member = *units.iter().find(|&&u| u != leader).unwrap();
+        let [x, y] = w.units[leader].position;
+        w.units[member].position = [x + 1.0, y];
+        assert!(w.with_organization(member));
+        // Its own position well behind on the march, he's beside the
+        // leader but away from it.
+        w.organizations[1].banner = crate::Banner::at([x, y + 30.0]);
+        assert!(!w.with_organization(member));
+        assert!(w.with_organization(leader));
     }
 
     #[test]

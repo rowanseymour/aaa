@@ -9,8 +9,8 @@ use tgmap::{Id, Obstacle, Shape, Tile};
 use crate::value::MULTIPLY_FLOOR;
 
 use crate::{
-    ARRIVAL_REACH, EXACT_REACH, LOOK, Leg, NotYours, TICK, Trailer, Unit, World, normalised, path,
-    within, within_strictly,
+    ARRIVAL_REACH, Banner, EXACT_REACH, LOOK, Leg, NotYours, TICK, Trailer, Unit, World,
+    normalised, path, within, within_strictly,
 };
 
 /// How near a unit's destination is for a move that has to end right there
@@ -1186,6 +1186,39 @@ impl World {
             }
         }
     }
+
+    /// Has each organization's own position look where its leader is once
+    /// a second, each on its own second, and slide that way at its
+    /// catch-up pace.
+    pub(crate) fn keep_banners(&mut self) {
+        for r in 0..self.organizations.len() {
+            if (self.ticks + r as u64).is_multiple_of(crate::SECOND) {
+                self.organizations[r].banner.aim = self.leader_position(r);
+            }
+            let catchup = self.rules.catchup_speed * self.regiment_speed(r);
+            let pace = catchup.max(self.rules.banner_catchup_floor);
+            let banner = &mut self.organizations[r].banner;
+            let (at, aim) = (banner.at, banner.aim);
+            let left = crate::distance(at, aim);
+            banner.at = match left <= pace * TICK {
+                true => aim,
+                false => {
+                    let share = pace * TICK / left;
+                    [
+                        at[0] + (aim[0] - at[0]) * share,
+                        at[1] + (aim[1] - at[1]) * share,
+                    ]
+                }
+            };
+        }
+    }
+}
+
+impl Banner {
+    /// One standing at `at`.
+    pub(crate) fn at(at: [f32; 2]) -> Banner {
+        Banner { at, aim: at }
+    }
 }
 
 #[cfg(test)]
@@ -1570,6 +1603,33 @@ mod tests {
         // Far behind, it would ask for far more than 1.25 × its 2.
         let went = w.units[1].position[1] - from;
         assert!((went - 2.5).abs() < 0.05, "{went}");
+    }
+
+    #[test]
+    fn a_regiments_own_position_trails_its_leader_on_the_march() {
+        let mut w = moved_with_the_right_hand_man_at([11.0, 1.0]);
+        w.organizations[0].leader = Some(0);
+        run(&mut w, 3.0);
+        let behind = distance(w.units[0].position, w.organizations[0].banner.at);
+        assert!(behind > 0.5 && behind < 4.0, "{behind}");
+        // Once its leader stops, it catches up with him.
+        run(&mut w, 20.0);
+        assert!(distance(w.units[0].position, w.organizations[0].banner.at) < 1e-3);
+    }
+
+    #[test]
+    fn a_regiments_own_position_catches_up_no_slower_than_the_floor() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        // 0.1 × the regiment's 2 would be well under the floor of 0.5.
+        w.rules.catchup_speed = 0.1;
+        w.organizations[0].leader = Some(0);
+        let [x, y] = w.organizations[0].banner.at;
+        w.units[0].position = [x, y + 10.0];
+        run(&mut w, 1.0);
+        let was = w.organizations[0].banner.at;
+        run(&mut w, 1.0);
+        let went = distance(was, w.organizations[0].banner.at);
+        assert!((went - 0.5).abs() < 0.01, "{went}");
     }
 
     /// The pace the right-hand man keeps, 2 to his leader's right, both

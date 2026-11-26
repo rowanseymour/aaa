@@ -42,7 +42,7 @@ use tgrender::overlay::BannerImages;
 use tgrender::portrait::{Sitter, Stage};
 use tgsim::{Ledger, Pause, Piece, Relation, State, Target, World};
 
-use crate::banners::{self, Badges};
+use crate::banners;
 use crate::marks::tint;
 use crate::ui::{self, Hint, Ink, Meter, Shade, visible};
 use crate::{
@@ -1017,7 +1017,6 @@ fn ordered<T, K: PartialEq>(mut now: Vec<T>, shown: &[T], key: impl Fn(&T) -> &K
 fn detail(
     sim: &World,
     hqs: &[tgsim::Hq],
-    badges: &Badges,
     looks: &Looks,
     mode: &Mode,
     shown: &[(Id, Tint)],
@@ -1056,7 +1055,7 @@ fn detail(
         _ => None,
     };
     let flying = own.iter().copied().chain(unpacked).chain(attached);
-    let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
+    let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, banners::badge_side(sim, hq)));
     let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
     let properties = holder(sim, mode).map_or(Vec::new(), |of| held(sim, looks, of, shown));
     let stockpile = match mode.actor() {
@@ -1086,7 +1085,6 @@ pub fn choose(
     chosen: Res<SelectedBuilding>,
     sim: Res<Sim>,
     local: Res<Local>,
-    badges: Res<Badges>,
     looks: Res<Looks>,
     mut alone: ResMut<ShownAlone>,
     mut showing: ResMut<Showing>,
@@ -1109,7 +1107,7 @@ pub fn choose(
             }
             _ => &[],
         };
-        let detail = detail(&sim.0, &hqs, &badges, &looks, &m, shown);
+        let detail = detail(&sim.0, &hqs, &looks, &m, shown);
         (m, detail)
     });
     // Who plays decides what owners are called.
@@ -1226,7 +1224,6 @@ pub(crate) struct Shows<'a> {
     pub leaders: &'a Leaders,
     pub gem: &'a ui::Gem,
     pub drawn: &'a Drawn,
-    pub badges: &'a Badges,
     pub detail: &'a Detail,
     pub game: &'a GameData,
     pub looks: &'a mut Looks,
@@ -1243,7 +1240,6 @@ pub(crate) struct ShowsFrom<'w> {
     leaders: Res<'w, Leaders>,
     gem: Res<'w, ui::Gem>,
     drawn: Res<'w, Drawn>,
-    badges: Res<'w, Badges>,
     loaded: Res<'w, Loaded>,
     looks: ResMut<'w, Looks>,
     banners: ResMut<'w, BannerImages>,
@@ -1260,7 +1256,6 @@ impl ShowsFrom<'_> {
             leaders: &self.leaders,
             gem: &self.gem,
             drawn: &self.drawn,
-            badges: &self.badges,
             detail,
             game: &self.loaded.game,
             looks: &mut self.looks,
@@ -1402,7 +1397,7 @@ impl Shows<'_> {
         let faction = self.leaders.banner(organization.owner);
         let looks = banners.layers(game, images, template, faction);
         let badge =
-            wears.and_then(|(hq, _)| self.badges.badge(banners, game, images, template, hq));
+            wears.and_then(|(hq, _)| banners::badge(sim, banners, game, images, template, hq));
         let out_of_supply = looks.out_of_supply.filter(|_| lacks);
         let lit = |c: f32| (c * PORTRAIT_LIGHT).min(1.0);
         [

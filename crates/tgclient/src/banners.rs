@@ -53,95 +53,28 @@ pub struct Banner {
 /// picked it for: a banner is drawn again when either changes.
 pub type Worn = (u32, Option<u32>);
 
-/// Which of its nation's badges each HQ's division wears, by the HQ's id:
-/// what the map gives those it starts with, and for each raised since one
-/// picked from the list, or the first no other of its side's holds where
-/// that one's taken; none where there's none to have. One that changes
-/// side gives its up and picks again from its new side's.
-#[derive(Resource)]
-pub struct Badges(HashMap<u32, Held>);
-
-/// The badge an HQ holds.
-struct Held {
-    /// The side it was picked for, once the HQ's been seen.
-    side: Option<u32>,
-    badge: Option<usize>,
-    /// The nation whose badges it's one of, where that isn't the nation
-    /// of the HQ's template, as after it changes side.
-    nation: Option<String>,
+/// The side the HQ with this id drew its badge for.
+pub fn badge_side(sim: &tgsim::World, hq: u32) -> Option<u32> {
+    sim.badge(hq)?.side
 }
 
-impl Badges {
-    /// Gives each of `hqs` that has no badge one, and each that's changed
-    /// side another, from its new side's nation where `nation` names one
-    /// for its owner. `count` says how many badges an HQ, by its id, has
-    /// to pick from: that nation's, or its own template's for none.
-    fn settle(
-        &mut self,
-        hqs: &[tgsim::Hq],
-        nation: impl Fn(u32) -> Option<String>,
-        count: impl Fn(u32, Option<&str>) -> usize,
-    ) {
-        for hq in hqs {
-            // A badge the map stores is kept only if its nation has that
-            // many; otherwise the HQ draws as a new one does.
-            let stored =
-                |h: &Held| h.side.is_some() || h.badge.is_none_or(|b| b < count(hq.id, None));
-            let held = self.0.get_mut(&hq.id).filter(|h| stored(h));
-            let side = held.as_ref().and_then(|h| h.side);
-            let moved = side.is_some_and(|s| s != hq.owner);
-            if let Some(held) = held.filter(|_| !moved) {
-                held.side = Some(hq.owner);
-                continue;
-            }
-            // Its old side's is free again from here on.
-            self.0.remove(&hq.id);
-            let nation = nation(hq.owner).filter(|_| moved);
-            let count = count(hq.id, nation.as_deref());
-            let worn = |b: usize| {
-                let mut others = hqs.iter().filter(|h| h.owner == hq.owner);
-                others.any(|h| self.0.get(&h.id).is_some_and(|held| held.badge == Some(b)))
-            };
-            // Any of them, the same one every time for the same HQ.
-            let pick = (hq.id as usize).wrapping_mul(2_654_435_761) >> 8;
-            let pick = pick.checked_rem(count).filter(|&b| !worn(b));
-            // None where its nation has none, or every one is held. A
-            // lost HQ's is free again by no longer being among those that
-            // hold one.
-            let badge = pick.or_else(|| (0..count).find(|&b| !worn(b)));
-            let held = Held {
-                side: Some(hq.owner),
-                badge,
-                nation,
-            };
-            self.0.insert(hq.id, held);
-        }
-    }
-
-    /// The side the HQ with this id picked its badge for.
-    pub fn side(&self, hq: u32) -> Option<u32> {
-        self.0.get(&hq)?.side
-    }
-
-    /// The badge an organization of `template` wears when it's attached to, or
-    /// is, the HQ with this id. Any of a nation's templates finds its
-    /// badges.
-    pub fn badge(
-        &self,
-        banners: &mut BannerImages,
-        game: &GameData,
-        images: &mut Assets<Image>,
-        template: &str,
-        hq: u32,
-    ) -> Option<Handle<Image>> {
-        let held = self.0.get(&hq)?;
-        let badge = held.badge?;
-        match &held.nation {
-            Some(nation) => banners.nation_badge(game, images, nation, badge),
-            None => {
-                let template = Id::from(template);
-                banners.badge(game, images, &Division { template, badge })
-            }
+/// The badge an organization of `template` wears when it's attached to, or
+/// is, the HQ with this id. Any of a nation's templates finds its badges.
+pub fn badge(
+    sim: &tgsim::World,
+    banners: &mut BannerImages,
+    game: &GameData,
+    images: &mut Assets<Image>,
+    template: &str,
+    hq: u32,
+) -> Option<Handle<Image>> {
+    let held = sim.badge(hq)?;
+    let badge = held.badge?;
+    match &held.nation {
+        Some(nation) => banners.nation_badge(game, images, nation, badge),
+        None => {
+            let template = Id::from(template);
+            banners.badge(game, images, &Division { template, badge })
         }
     }
 }
@@ -179,16 +112,6 @@ pub fn setup_banners(
     formats: Res<CompressedImageFormatSupport>,
 ) {
     commands.insert_resource(BannerImages::load(&loaded.game, &mut images, formats.0));
-    let things = &loaded.map.things;
-    let badge = |t: &tgck::map::Thing| {
-        let held = Held {
-            side: None,
-            badge: usize::try_from(t.hq_badge()?).ok(),
-            nation: None,
-        };
-        Some((t.id, held))
-    };
-    commands.insert_resource(Badges(things.iter().filter_map(badge).collect()));
     commands.insert_resource(Scenery(loaded.game.scenery()));
 }
 
@@ -235,7 +158,7 @@ pub fn add_hq_banners(
     mut commands: Commands,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
-    (badges, leaders): (Res<Badges>, Res<Leaders>),
+    leaders: Res<Leaders>,
     mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
     flying: Query<&HqBanner>,
     mut bare: bevy::prelude::Local<HashSet<usize>>,
@@ -262,7 +185,7 @@ pub fn add_hq_banners(
         let (banners, assets) = (&mut *images.0, &mut *images.1);
         let icon = banners.icon(&loaded.game, assets, template);
         let looks = banners.layers(&loaded.game, assets, template, leaders.banner(owner));
-        let badge = badges.badge(banners, &loaded.game, assets, template, hq);
+        let badge = badge(&sim.0, banners, &loaded.game, assets, template, hq);
         // Its template names none, and never will.
         if icon.is_none() {
             bare.insert(b);
@@ -589,15 +512,12 @@ pub fn show_banners(
     }
 }
 
-/// Gives each HQ raised since the map's a badge, and each that's changed
-/// side another, and shows on each banner that of the HQ its organization is
-/// attached to, or is, and the banner of the faction of the side it's now
-/// on.
+/// Shows on each banner the badge of the HQ its organization is attached
+/// to, or is, and the banner of the faction of the side it's now on.
 pub fn badge_banners(
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     leaders: Res<Leaders>,
-    mut badges: ResMut<Badges>,
     mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
     mut banners: Query<&mut Banner>,
     mut layers: Query<(&mut ImageNode, &mut Visibility), Without<Banner>>,
@@ -607,25 +527,6 @@ pub fn badge_banners(
         return;
     }
     let hqs = sim.0.hqs();
-    // A side's nation, where it has badges to pick from.
-    let nation = |owner: u32| {
-        let nation = sim.0.sides.player(owner)?.nation.clone()?;
-        (images.0.nation_badges(&nation) > 0).then_some(nation)
-    };
-    // How many badges a nation has, or that of an HQ's own template.
-    let count = |hq: u32, nation: Option<&str>| {
-        let packed = sim.0.organizations.iter().find(|r| r.id == hq);
-        let unpacked = || (0..sim.0.buildings.len()).find(|&b| sim.0.hq_of(b) == Some(hq));
-        let template = match packed {
-            Some(r) => Some(r.template.as_str()),
-            None => unpacked().and_then(|b| sim.0.hq_template(b)),
-        };
-        match nation {
-            Some(nation) => images.0.nation_badges(nation),
-            None => template.map_or(0, |t| images.0.badges(t)),
-        }
-    };
-    badges.settle(&hqs, nation, count);
     for mut banner in &mut banners {
         let organization = &sim.0.organizations[banner.organization];
         if banner.owner != organization.owner {
@@ -674,7 +575,7 @@ pub fn badge_banners(
                 node.image = image.unwrap_or_default();
             }
         }
-        let wears = wears(&sim.0, &hqs, banner.organization).map(|hq| (hq, badges.side(hq)));
+        let wears = wears(&sim.0, &hqs, banner.organization).map(|hq| (hq, badge_side(&sim.0, hq)));
         if banner.wears == wears {
             continue;
         }
@@ -685,8 +586,9 @@ pub fn badge_banners(
         let Ok((mut image, mut visibility)) = layers.get_mut(banner.badge) else {
             continue;
         };
-        let badge = wears
-            .and_then(|(hq, _)| badges.badge(banners, &loaded.game, assets, template.as_str(), hq));
+        let badge = wears.and_then(|(hq, _)| {
+            badge(&sim.0, banners, &loaded.game, assets, template.as_str(), hq)
+        });
         *visibility = visible(badge.is_some());
         // Made with no image, it starts clear.
         image.color = Color::WHITE;
@@ -747,67 +649,6 @@ mod tests {
         // As near as each other, the later wins.
         let banners = [(building, 4), (organization, 4)];
         assert_eq!(nearest(banners.into_iter()), Some(organization));
-    }
-
-    #[test]
-    fn hqs_that_change_side_pick_their_badges_again() {
-        let hq = |id: u32, owner: u32| tgsim::Hq {
-            id,
-            owner,
-            building: Id::from(""),
-            position: [0.0; 2],
-            places: 3,
-        };
-        // The map gives HQ 10 badge 2; side 2 is of a nation with 5.
-        let stored = Held {
-            side: None,
-            badge: Some(2),
-            nation: None,
-        };
-        let mut badges = Badges(HashMap::from([(10, stored)]));
-        let nation = |owner: u32| (owner == 2).then(|| "nation_b".to_string());
-        let count = |_: u32, nation: Option<&str>| match nation {
-            Some(_) => 5,
-            None => 20,
-        };
-        let held = |badges: &Badges, hq: u32| {
-            let held = &badges.0[&hq];
-            (held.side, held.badge, held.nation.clone())
-        };
-        // Seen on side 1, it keeps what the map gave it, and one raised
-        // beside it takes another of their own nation's.
-        badges.settle(&[hq(10, 1), hq(11, 1)], nation, count);
-        assert_eq!(held(&badges, 10), (Some(1), Some(2), None));
-        let (side, raised, of) = held(&badges, 11);
-        assert_eq!((side, of), (Some(1), None));
-        assert!(raised.is_some_and(|b| b < 20 && b != 2));
-        // Nothing changes while it stays.
-        badges.settle(&[hq(10, 1), hq(11, 1)], nation, count);
-        assert_eq!(held(&badges, 10), (Some(1), Some(2), None));
-        // One the map gives a badge beyond its nation's draws afresh.
-        let beyond = Held {
-            side: None,
-            badge: Some(25),
-            nation: None,
-        };
-        badges.0.insert(13, beyond);
-        badges.settle(&[hq(10, 1), hq(11, 1), hq(13, 1)], nation, count);
-        assert!(held(&badges, 13).1.is_some_and(|b| b < 20));
-        // Taken by side 2, it picks from that side's nation, clear of the
-        // one side 2's own HQ holds.
-        badges.settle(&[hq(12, 2)], nation, count);
-        let native = held(&badges, 12).1;
-        badges.settle(&[hq(10, 2), hq(11, 1), hq(12, 2)], nation, count);
-        let (side, taken, of) = held(&badges, 10);
-        assert_eq!((side, of.as_deref()), (Some(2), Some("nation_b")));
-        assert!(taken.is_some_and(|b| b < 5) && taken != native);
-        // Its old badge is free for side 1 again.
-        assert!(
-            !badges
-                .0
-                .values()
-                .any(|h| h.side == Some(1) && h.badge == Some(2))
-        );
     }
 
     #[test]

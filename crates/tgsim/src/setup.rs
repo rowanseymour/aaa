@@ -42,6 +42,17 @@ impl World {
                 .map(|(t, role)| (role, tgmap::owner(t), t.template.as_str())),
         );
         world.settlements = map.settlements.clone();
+        world.badges = (map.things.iter())
+            .filter_map(|t| {
+                let badge = usize::try_from(t.hq_badge()?).ok();
+                let stored = crate::Badge {
+                    side: None,
+                    badge,
+                    nation: None,
+                };
+                Some((t.id, stored))
+            })
+            .collect();
         world.triggers = crate::Triggers::new(map.triggers.as_ref());
         world.triggers.names = map.named().map(|(n, id)| (n.to_string(), id)).collect();
         world.triggers.objectives = map.objectives.clone().into();
@@ -131,6 +142,7 @@ impl World {
             loaded: false,
             next_id: 1,
             next_commission: 0,
+            badges: BTreeMap::new(),
             flying: Vec::new(),
             told: Vec::new(),
             landings: Vec::new(),
@@ -235,6 +247,7 @@ impl World {
                 .map(|m| m.speed)
                 .fold(f32::INFINITY, f32::min),
             position,
+            banner: crate::Banner::at(position),
             facing: normalised(organization.facing).unwrap_or([0.0, -1.0]),
             formations: organization.formations.clone(),
             formation: organization.formation,

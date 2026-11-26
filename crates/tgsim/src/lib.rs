@@ -9,6 +9,7 @@ mod abilities;
 mod airfields;
 mod areas;
 mod attach;
+mod badges;
 mod bombard;
 mod capture;
 mod combat;
@@ -72,6 +73,7 @@ use tgmap::{
 
 pub use airfields::{AirAim, Berth, Job, Sortie, Stage};
 pub use attach::Hq;
+pub use badges::Badge;
 pub use bombard::{Bombardment, Shelled};
 pub use combat::Struck;
 pub use computer::{ComputerPlayer, Idle, Planner};
@@ -270,6 +272,8 @@ pub struct World {
     next_commission: u32,
     /// What the next [`World::chance`] is drawn from.
     rng: u64,
+    /// The badge each HQ holds, by its organization's object id.
+    badges: BTreeMap<u32, Badge>,
 }
 
 #[derive(Clone)]
@@ -299,6 +303,8 @@ pub struct Organization {
     /// Where it stands, or is headed: its members take their places in the
     /// formation around it.
     pub position: [f32; 2],
+    /// Its own position, which follows its leader's.
+    pub banner: Banner,
     /// The way it faces, or will once there.
     pub facing: [f32; 2],
     pub formations: Vec<tgmap::Formation>,
@@ -415,6 +421,16 @@ pub struct Organization {
     /// what its properties set.
     pub efficiency: f32,
 }
+
+/// An organization's own position, chasing its leader's: [movement](../../../docs/spec/movement.toml#regiment-position).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Banner {
+    pub at: [f32; 2],
+    /// Where its leader was at its last look, which it slides towards.
+    aim: [f32; 2],
+}
+
+digest!(Banner { at, aim });
 
 /// An organization's order to put up a building where it's going.
 #[derive(Debug, Clone, PartialEq)]
@@ -1370,6 +1386,7 @@ impl World {
     /// Plays one [`TICK`].
     pub fn tick(&mut self) {
         self.travel();
+        self.keep_banners();
         self.keep_routes();
         self.stand();
         self.notice();
@@ -1396,6 +1413,7 @@ impl World {
         self.lift_sieges();
         self.supply();
         self.resupply();
+        self.keep_badges();
         self.tend_heroes();
         self.produce();
         self.deliver();
@@ -1487,7 +1505,7 @@ impl Sides {
 digest!(World {
     organizations, units, buildings, props, deliveries, sorties, next_wave, cleared, technologies, lost, objectives, fates, over,
     groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, told, landings, numbers, next_id,
-    next_commission, rng, sides,
+    next_commission, rng, sides, badges,
 } skip {
     // Fixed by the map and the game's data.
     rules, tile_terrains, scenery, regions,
@@ -1505,7 +1523,7 @@ digest!(Sides { names, computers } skip {
 
 digest!(Organization {
     group, group_speed, ordered_speed, taking_part,
-    id, template, number, owner, units, speed, position, facing, formation, combat,
+    id, template, number, owner, units, speed, position, banner, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
     guard, arriving, terrain_properties, settled, travelling, route_end, turn_to, entrenched, morale, morale_max,

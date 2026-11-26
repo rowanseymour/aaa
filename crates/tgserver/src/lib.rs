@@ -183,6 +183,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         tgsim::CombatMeans::of(&combat_profiles, &combat_value_rules, &hero_templates);
     let defaults = tgsim::Rules::default();
     let [climbing, falling] = game.efficiency_rates();
+    let banners = game.banners();
     let mut rules = tgsim::Rules {
         seed,
         terrain_rules: game.terrain_rules(),
@@ -234,6 +235,10 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         building_padding: raising.padding(),
         decays: game.decays(),
         logistics: game.logistics(),
+        nations: banners.of_template,
+        badges: (banners.badges.into_iter())
+            .map(|(n, b)| (n, b.len()))
+            .collect(),
         resupply_rates: game.resupply_rates(),
         resupplying: game.resupplying(),
         busy_states: game.busy_states(),
@@ -261,6 +266,8 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
             falling.unwrap_or(defaults.efficiency_rates[1]),
         ],
         catchup_speed: game.catchup_speed().unwrap_or(defaults.catchup_speed),
+        banner_catchup_floor: (game.banner_catchup_floor())
+            .unwrap_or(defaults.banner_catchup_floor),
         recruit_search_step: (game.recruit_search_step()).unwrap_or(defaults.recruit_search_step),
         siege_seconds: game.siege_seconds().unwrap_or(defaults.siege_seconds),
         kill_credit_seconds: (game.kill_credit_seconds()).unwrap_or(defaults.kill_credit_seconds),
