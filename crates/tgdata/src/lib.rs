@@ -211,17 +211,14 @@ impl Definitions {
         given.chain(operations)
     }
 
-    /// Defining a Thing id again is an error that ends the reading of its
-    /// file there, the blocks before it kept.
+    /// From files already cut short where they repeat an id
+    /// ([`cut_short`]).
     fn new<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> Self {
-        let mut ids = HashSet::new();
         let mut things = Vec::new();
         let mut properties = HashMap::new();
         let mut property_files = HashMap::new();
         let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
-        let mut ability_ids = HashSet::new();
         let mut factions: Vec<defs::Faction> = Vec::new();
-        let mut faction_ids = HashSet::new();
         let mut descriptions: Vec<defs::Description> = Vec::new();
         for scope in scoped(files) {
             let file = scope.file;
@@ -231,11 +228,7 @@ impl Definitions {
                     let Some(id) = block.value("ids").map(Id::from) else {
                         continue;
                     };
-                    if ids.contains(&id) {
-                        break;
-                    }
                     if let Some(thing) = scope.deserialize(block) {
-                        ids.insert(id.clone());
                         things.push(Template {
                             file: file.to_string(),
                             id,
@@ -252,13 +245,11 @@ impl Definitions {
                 } else if kind.eq_ignore_ascii_case("AbilityDefinition")
                     && let Some(a) = scope.deserialize::<defs::AbilityDefinition>(block)
                     && let Some(id) = a.ids.clone()
-                    && ability_ids.insert(id.clone())
                 {
                     abilities.push((id, a));
                 } else if kind.eq_ignore_ascii_case("Faction")
                     && let Some(g) = scope.deserialize::<defs::Faction>(block)
-                    && let Some(id) = &g.ids
-                    && faction_ids.insert(id.clone())
+                    && g.ids.is_some()
                 {
                     factions.push(g);
                 } else if kind.eq_ignore_ascii_case("Description")
@@ -306,6 +297,92 @@ impl Scoped<'_> {
             reads::decode(block, Some(&self.templates)),
         )
     }
+}
+
+/// Defining an id again is an error that ends the reading of its file
+/// there, the definitions before it kept: the files that do, by lower-case
+/// path, each as far as it's read. Templates aren't definitions, so a file
+/// keeps all of its own. A block refused before its id is read claims
+/// none: a thing of no category the data defines, or a kind told apart by
+/// `name` without one.
+fn cut_short<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> HashMap<String, Arc<tgi::Parsed>> {
+    let scopes = scoped(files);
+    let categories: HashSet<Id> = (scopes.iter())
+        .flat_map(|s| s.root.blocks_of("ThingCategory"))
+        .filter_map(|b| b.value("ids").map(Id::from))
+        .collect();
+    // Whether each id's definition so far has an empty `name`.
+    let mut defined: HashMap<(String, Id), bool> = HashMap::new();
+    let mut out = HashMap::new();
+    for scope in &scopes {
+        for (i, item) in scope.root.items.iter().enumerate() {
+            let tgi::Item::Block(block) = item else {
+                continue;
+            };
+            let (Some(kind), Some(id)) = (block.kind(), block.value("ids")) else {
+                continue;
+            };
+            if kind.eq_ignore_ascii_case("Template") {
+                continue;
+            }
+            let set = if is_thing(kind) || kind.eq_ignore_ascii_case("VFX") {
+                let category = category(&scope.templates, block).map(Id::from);
+                if !category.is_some_and(|c| categories.contains(&c)) {
+                    continue;
+                }
+                "thing".to_string()
+            } else {
+                kind.to_ascii_lowercase()
+            };
+            let by_name = ["KingdomColor", "Cursor"]
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(kind));
+            if by_name && block.value("name").is_none() {
+                continue;
+            }
+            let nameless = block.value("name") == Some("");
+            match defined.entry((set, Id::from(id))) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(nameless);
+                }
+                // These are told apart by the first one's name, so one
+                // without is read into again.
+                std::collections::hash_map::Entry::Occupied(mut e) if *e.get() && by_name => {
+                    e.insert(nameless);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    log::warn!(
+                        "{}:{}: {kind} {id} defined again, the rest of the file skipped",
+                        scope.file,
+                        block.line
+                    );
+                    let mut root = scope.root.clone();
+                    let rest = root.items.split_off(i);
+                    let templates = rest.into_iter().filter(|item| {
+                        matches!(item, tgi::Item::Block(b)
+                            if b.kind().is_some_and(|k| k.eq_ignore_ascii_case("Template")))
+                    });
+                    root.items.extend(templates);
+                    let parsed = tgi::Parsed {
+                        root,
+                        warnings: Vec::new(),
+                    };
+                    out.insert(scope.file.to_ascii_lowercase(), Arc::new(parsed));
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A thing's `category`, its own or the nearest template's.
+fn category<'a>(templates: &tgi::Templates<'a>, block: &'a tgi::Block) -> Option<&'a str> {
+    let lineage = templates.lineage(block);
+    let ancestors = lineage.iter().filter_map(|name| templates.get(name));
+    std::iter::once(block)
+        .chain(ancestors)
+        .find_map(|b| b.value("category"))
 }
 
 /// What a block read as, or `None` with a warning: a block that doesn't
@@ -571,6 +648,20 @@ impl GameData {
             .collect()
     }
 
+    /// The `Vars` blocks of every `<stem>*.tgi` at the root, which load in
+    /// name order rather than from the load lists, a later one's settings
+    /// replacing an earlier's: the last read first.
+    pub(crate) fn settings<T: serde::de::DeserializeOwned + 'static>(&self, stem: &str) -> Vec<T> {
+        let stem = stem.to_ascii_lowercase();
+        let mut names =
+            self.entry_names(|n| !n.contains('/') && n.starts_with(&stem) && n.ends_with(".tgi"));
+        names.sort_by_key(|n| n.to_ascii_lowercase());
+        let files = self.parse_named(names.iter().map(String::as_str));
+        let mut vars: Vec<T> = scoped(&files).iter().flat_map(|f| f.read("Vars")).collect();
+        vars.reverse();
+        vars
+    }
+
     /// A file every game has, lower-case, after the game's own version of
     /// it, which takes precedence: `Game/SVars.tgi` gives
     /// `game/svars_aa.tgi` then `game/svars.tgi` for AA.
@@ -683,13 +774,22 @@ impl GameData {
     }
 
     /// Every `.tgi` file the game loads whose lower-case path passes
-    /// `filter`, parsed, in the order the game loads them.
+    /// `filter`, parsed, in the order the game loads them, each as far as
+    /// it's read ([`cut_short`]).
     pub(crate) fn parse_tgis(
         &self,
         filter: impl Fn(&str) -> bool,
     ) -> Vec<(String, Arc<tgi::Parsed>)> {
-        let names = (self.tgis.iter()).filter(|n| filter(&n.to_ascii_lowercase()));
-        self.parse_named(names.map(String::as_str))
+        let cut = self.kept("cut_short", || {
+            cut_short(&self.parse_named(self.tgis.iter().map(String::as_str)))
+        });
+        (self.tgis.iter())
+            .filter(|n| filter(&n.to_ascii_lowercase()))
+            .filter_map(|n| {
+                let parsed = cut.get(&n.to_ascii_lowercase()).cloned();
+                Some((n.clone(), parsed.or_else(|| self.parsed(n))?))
+            })
+            .collect()
     }
 
     /// The blocks of `kind` that read as `T` in every `.tgi` file the game
@@ -1794,17 +1894,17 @@ mod tests {
     }
 
     #[test]
-    fn definitions_keep_file_order_and_skip_blocks_without_ids_or_defined_twice() {
+    fn definitions_keep_file_order_and_skip_blocks_without_ids_or_after_a_repeat() {
         let a = tgi::parse(
             "[Property]\n{\n\tIDS = vehicle\n}\n\
-             [Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 50\n}\n\
+             [Thing]\n{\n\tIDS = jeep\n\tcategory = unit\n\t[BodyComponent]\n\thealth = 50\n}\n\
              [Thing]\n{\n\t[BodyComponent]\n\thealth = 60\n}\n",
         );
         let b = tgi::parse(
-            "[Thing]\n{\n\tIDS = tank\n}\n[Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 70\n}\n\
-             [Thing]\n{\n\tIDS = car\n}\n[Property]\n{\n\tIDS = wheels\n}\n",
+            "[Thing]\n{\n\tIDS = tank\n\tcategory = unit\n}\n[Thing]\n{\n\tIDS = jeep\n\tcategory = unit\n\t[BodyComponent]\n\thealth = 70\n}\n\
+             [Thing]\n{\n\tIDS = car\n\tcategory = unit\n}\n[Property]\n{\n\tIDS = wheels\n}\n",
         );
-        let files = [("a/a.tgi".to_string(), a), ("b/b.tgi".to_string(), b)];
+        let files = as_read(&[("a/a.tgi".to_string(), a), ("b/b.tgi".to_string(), b)]);
         let definitions = Definitions::new(&files);
         let found: Vec<_> = definitions
             .things
@@ -1819,6 +1919,161 @@ mod tests {
             [("a/a.tgi", "jeep", Some(50.0)), ("b/b.tgi", "tank", None),]
         );
         assert!(definitions.properties.contains_key(&Id::from("vehicle")));
+        assert!(!definitions.properties.contains_key(&Id::from("wheels")));
+    }
+
+    /// `files` as the game reads them ([`cut_short`]), after a file that
+    /// defines the category `unit`.
+    fn as_read(files: &[(String, tgi::Parsed)]) -> Vec<(String, tgi::Parsed)> {
+        let categories = tgi::parse("[ThingCategory]\nids = unit\n");
+        let all: Vec<_> = std::iter::once(("categories.tgi".to_string(), categories))
+            .chain(files.iter().cloned())
+            .collect();
+        let cut = cut_short(&all);
+        (files.iter())
+            .map(|(n, p)| {
+                (
+                    n.clone(),
+                    cut.get(n).map_or_else(|| p.clone(), |c| (**c).clone()),
+                )
+            })
+            .collect()
+    }
+
+    /// The ids of the blocks each file is read as far as, by kind.
+    fn read_ids(files: &[(&str, &str)]) -> Vec<Vec<String>> {
+        let files: Vec<_> = (files.iter())
+            .map(|(n, t)| (n.to_string(), tgi::parse(t)))
+            .collect();
+        (as_read(&files).iter())
+            .map(|(_, p)| {
+                (p.root.blocks())
+                    .map(|b| {
+                        format!(
+                            "{} {}",
+                            b.kind().unwrap_or(""),
+                            b.value("ids").unwrap_or("")
+                        )
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_repeated_id_ends_its_file_for_every_kind() {
+        let logged = warnings(|| {
+            let read = read_ids(&[
+                (
+                    "a.tgi",
+                    "[Bone]\nids = gun\n[Thing]\nids = smoke\ncategory = unit\n",
+                ),
+                (
+                    "b.tgi",
+                    "[Audio]\nids = smoke\n[Bone]\nids = GUN\n[Template t]\nx = 1\n[Audio]\nids = bang\n",
+                ),
+                (
+                    "c.tgi",
+                    "[Audio]\nids = bang\n[VFX]\nids = smoke\ncategory = unit\n[Bone]\nids = sight\n",
+                ),
+            ]);
+            assert_eq!(
+                read,
+                [
+                    vec!["Bone gun", "Thing smoke"],
+                    // An audio id is its own, but the bone is a repeat; the
+                    // template after it stays.
+                    vec!["Audio smoke", "Template "],
+                    // Effects share ids with things.
+                    vec!["Audio bang"],
+                ]
+            );
+        });
+        assert_eq!(
+            logged,
+            [
+                "b.tgi:3: Bone GUN defined again, the rest of the file skipped",
+                "c.tgi:3: VFX smoke defined again, the rest of the file skipped",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_block_refused_before_its_id_claims_none() {
+        let read = read_ids(&[
+            (
+                "a.tgi",
+                "[Template t]\ncategory = unit\n[Thing]\nids = a\n[Thing]\nids = b\ncategory = ship\n\
+                 [Thing template=t]\nids = c\n[KingdomColor]\nids = blue\n",
+            ),
+            (
+                "b.tgi",
+                "[Thing]\nids = a\ncategory = unit\n[Thing]\nids = b\ncategory = unit\n\
+                 [KingdomColor]\nids = blue\nname = Blue\n[Thing]\nids = c\ncategory = unit\n[Bone]\nids = x\n",
+            ),
+        ]);
+        assert_eq!(
+            read,
+            [
+                vec![
+                    "Template ",
+                    "Thing a",
+                    "Thing b",
+                    "Thing c",
+                    "KingdomColor blue"
+                ],
+                // Only `c`, its category from its template, was claimed.
+                vec!["Thing a", "Thing b", "KingdomColor blue"],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_colour_without_a_name_is_read_into_again() {
+        let read = read_ids(&[(
+            "a.tgi",
+            "[KingdomColor]\nids = blue\nname = \"\"\n[KingdomColor]\nids = blue\nname = Blue\n\
+             [KingdomColor]\nids = blue\nname = Navy\n",
+        )]);
+        assert_eq!(read, [vec!["KingdomColor blue", "KingdomColor blue"]]);
+    }
+
+    #[test]
+    fn files_are_read_as_far_as_their_first_repeat() {
+        let dir = folder(
+            "repeat",
+            &[
+                ("index_x.lst", "Game/bones*.tgi"),
+                ("Game/bones_a.tgi", "[Bone]\nids = gun\nbone_name = a\n"),
+                (
+                    "Game/bones_b.tgi",
+                    "[Bone]\nids = sight\nbone_name = s\n[Bone]\nids = gun\nbone_name = b\n[Bone]\nids = hull\nbone_name = h\n",
+                ),
+            ],
+        );
+        let mut game = empty();
+        game.add_depot(&dir).unwrap();
+        let bones = game.bones();
+        assert_eq!(bones.get(&Id::from("gun")).map(String::as_str), Some("a"));
+        assert!(bones.contains_key(&Id::from("sight")));
+        assert!(!bones.contains_key(&Id::from("hull")));
+    }
+
+    #[test]
+    fn settings_files_load_in_name_order_the_last_winning() {
+        let vars = |width: u8| format!("[Vars]\nview_zone_friendly_supply_width = {width}\n");
+        let dir = folder(
+            "settings",
+            &[
+                ("AVars.tgi", &vars(1)),
+                ("avars_zz.tgi", &vars(3)),
+                ("AVars_AA.tgi", &vars(2)),
+                ("Game/AVars_zzz.tgi", &vars(4)),
+            ],
+        );
+        let mut game = empty();
+        game.add_depot(&dir).unwrap();
+        assert_eq!(game.avar(|v| v.view_zone_friendly_supply_width), Some(3.0));
     }
 
     #[test]
@@ -1839,10 +2094,10 @@ mod tests {
     #[test]
     fn units_and_projectiles_are_things() {
         let a = tgi::parse(
-            "[Unit]\n{\n\tIDS = bowman\n}\n[Projectile]\n{\n\tIDS = arrow\n}\n\
-             [Unit]\n{\n\tIDS = bowman\n}\n",
+            "[Unit]\n{\n\tIDS = bowman\n\tcategory = unit\n}\n[Projectile]\n{\n\tIDS = arrow\n\tcategory = unit\n}\n\
+             [Unit]\n{\n\tIDS = bowman\n\tcategory = unit\n}\n",
         );
-        let files = [("a/a.tgi".to_string(), a)];
+        let files = as_read(&[("a/a.tgi".to_string(), a)]);
         let definitions = Definitions::new(&files);
         let found: Vec<_> = definitions.things.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(found, ["bowman", "arrow"]);

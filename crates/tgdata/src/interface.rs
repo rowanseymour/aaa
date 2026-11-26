@@ -423,20 +423,15 @@ impl GameData {
         localized(&strings, Some(text))
     }
 
-    /// The first of the interface's settings that `of` finds.
+    /// The interface setting that `of` finds, as the last file to set it
+    /// sets it.
     pub(crate) fn uvar<T>(&self, of: impl Fn(&defs::UVars) -> Option<T>) -> Option<T> {
         self.uvars().iter().find_map(of)
     }
 
-    /// The interface's settings, the game's own before the engine's.
+    /// The interface's settings, the last read first.
     pub(crate) fn uvars(&self) -> Arc<Vec<defs::UVars>> {
-        self.kept("uvars", || {
-            // Not in the load lists.
-            let versions = self.versions("UVars.tgi");
-            let files = self.parse_named(versions.iter().map(String::as_str));
-            let files = scoped(&files);
-            files.iter().flat_map(|f| f.read("Vars")).collect()
-        })
+        self.kept("uvars", || self.settings("UVars"))
     }
 
     /// The orders the player can give, in the order the files list them.
@@ -499,6 +494,8 @@ impl GameData {
                     continue;
                 }
                 let [x, y] = c.hotspot_offset.unwrap_or_default();
+                // The only repeats left are those read into a first
+                // without a name ([`crate::cut_short`]).
                 out.insert(
                     ids,
                     CursorLook {
