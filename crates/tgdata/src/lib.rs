@@ -765,6 +765,12 @@ impl GameData {
         self.svar(|v| v.mover_catchup_speed)
     }
 
+    /// The least a regiment's banner goes a second catching up with its
+    /// leader, if the data says.
+    pub fn banner_catchup_floor(&self) -> Option<f32> {
+        self.svar(|v| v.banner_min_catchup_speed)
+    }
+
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub fn recruit_search_step(&self) -> Option<f32> {

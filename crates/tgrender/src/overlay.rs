@@ -253,18 +253,6 @@ impl BannerImages {
         self.image(game, images, path)
     }
 
-    /// How many badges the nation of an organization of `template` has.
-    pub fn badges(&self, template: &str) -> usize {
-        let nation = self.nation_of(template);
-        nation.map_or(0, |n| self.nation_badges(&n))
-    }
-
-    /// How many badges `nation` has, by its id.
-    pub fn nation_badges(&self, nation: &str) -> usize {
-        let badges = self.banners.badges.get(&Id::from(nation));
-        badges.map_or(0, Vec::len)
-    }
-
     /// The `badge`th of `nation`'s badges, by its id; loaded the first time
     /// it's asked for.
     pub fn nation_badge(
@@ -281,7 +269,6 @@ impl BannerImages {
 
     /// The badge an organization in `division` wears below its banner's
     /// plate, drawn the banner's size; loaded the first time it's asked for.
-    /// A nation with more divisions than badges goes round them again.
     pub fn badge(
         &mut self,
         game: &GameData,
@@ -289,9 +276,7 @@ impl BannerImages {
         division: &Division,
     ) -> Option<Handle<Image>> {
         let nation = self.nation_of(division.template.as_str())?;
-        let count = self.nation_badges(&nation);
-        let badge = division.badge.checked_rem(count)?;
-        self.nation_badge(game, images, &nation, badge)
+        self.nation_badge(game, images, &nation, division.badge)
     }
 
     fn image(

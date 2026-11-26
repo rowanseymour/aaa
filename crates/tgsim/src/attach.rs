@@ -14,6 +14,8 @@ pub struct Hq {
     pub owner: u32,
     /// The template of the building it is, or unpacks into.
     pub building: Id,
+    /// The template of its organization, whose nation its badge is from.
+    pub organization: Id,
     pub position: [f32; 2],
     /// How many organizations it takes.
     pub places: u32,
@@ -43,17 +45,19 @@ impl World {
                     id: organization.id,
                     owner: organization.owner,
                     building: building.clone(),
+                    organization: organization.template.clone(),
                     position: self.centre(r),
                     places,
                 });
             }
         }
         for (b, building) in self.buildings.iter().enumerate() {
-            if let Some((id, places, _)) = self.hq_behind(b).filter(|_| !building.gone()) {
+            if let Some((id, places, template)) = self.hq_behind(b).filter(|_| !building.gone()) {
                 out.push(Hq {
                     id,
                     owner: building.owner,
                     building: building.template.clone(),
+                    organization: Id::from(template),
                     position: building.position,
                     places,
                 });

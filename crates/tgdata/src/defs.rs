@@ -1583,6 +1583,9 @@ pub struct SVars {
     /// How many times its own top speed a regiment's member catching up
     /// with its place goes at most.
     pub mover_catchup_speed: Option<f32>,
+    /// The least a regiment's banner goes a second catching up with its
+    /// leader.
+    pub banner_min_catchup_speed: Option<f32>,
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub recruit_search_radius_small: Option<f32>,
