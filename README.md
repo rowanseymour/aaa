@@ -34,7 +34,7 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
   controls differently on purpose, that's listed in [divergences](docs/divergences.md).
 - Playable on macOS, Linux and Windows.
 - Stay driven by the data files so the original's maps and mods keep working, and new ones are easier to make.
-- Exhaustive documentation including [spec](docs/spec/README.md), [file formats](docs/formats/README.md), [console](docs/console.md).
+- Exhaustive documentation including [behavior spec](docs/spec/README.md), [file formats](docs/formats/README.md), [console commands](docs/console.md).
 
 ## Status
 
