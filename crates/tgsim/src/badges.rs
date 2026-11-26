@@ -183,9 +183,31 @@ mod tests {
 
     #[test]
     fn an_hq_that_changes_side_draws_from_its_new_nation() {
-        let mut w = badged(20);
+        let mut w = badged(5);
         w.tick();
+        // Side 2 holds all but one of its nation's already.
+        for (id, badge) in (60..).zip(0..4) {
+            let side = Some(2);
+            let badge = Some(badge);
+            let nation = None;
+            w.badges.insert(
+                id,
+                Badge {
+                    side,
+                    badge,
+                    nation,
+                },
+            );
+        }
+        let hqs: Vec<_> = (w.hqs().into_iter())
+            .chain((60..64).map(|id| crate::Hq {
+                id,
+                owner: 2,
+                ..w.hqs()[0].clone()
+            }))
+            .collect();
         w.organizations[0].owner = 2;
+        assert_eq!(w.draw_badge(2, 5, &hqs), Some(4));
         w.tick();
         let held = w.badge(50).unwrap();
         assert_eq!(

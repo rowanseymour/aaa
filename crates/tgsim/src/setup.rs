@@ -44,10 +44,10 @@ impl World {
         world.settlements = map.settlements.clone();
         world.badges = (map.things.iter())
             .filter_map(|t| {
-                let badge = usize::try_from(t.hq_badge()?).ok();
+                let badge = usize::try_from(t.hq_badge()?).ok()?;
                 let stored = crate::Badge {
                     side: None,
-                    badge,
+                    badge: Some(badge),
                     nation: None,
                 };
                 Some((t.id, stored))
