@@ -83,6 +83,21 @@ tags = ["code"]
 text = '''The error ends the reading of the file holding the second definition: that block and every block after it in the file are skipped, the blocks before it are kept, and loading goes on with the next file. A load error doesn't stop the game. So a mod file that repeats one stock id loses everything written after that block.'''
 
 [[topic.rule]]
+id = "refused-block-keeps-id"
+tags = ["code"]
+text = '''A block refused for what its fields hold (a value of the wrong type, a required field missing, a reference to something undefined) still defines its id, whatever the kind: the refusal ends its file ([above](#duplicate-ends-file)), but the id stays taken, so a later definition of it, in any file, is a duplicate, refused and ending its own file. The refused block isn't removed: its id keeps the definition as far as it was read before the error.'''
+
+[[topic.rule]]
+id = "refused-before-id"
+tags = ["code"]
+text = '''Only a block refused before it gets as far as its id claims nothing, and a later definition of that id loads as the first. That is a block of a kind the game doesn't know, one with no id, a `Thing`, `Unit`, `Projectile` or `VFX` block with no `category` or one naming an unknown category, and, for the kinds whose set of ids the game fixes itself, a block with an id outside that set. For the kinds whose repeats are recognised by `name` ([below](#duplicate-needs-name)), a block refused for a missing `name` leaves its id unclaimed too; one refused for any later field doesn't.'''
+
+[[topic.rule]]
+id = "rejected-file-defines-nothing"
+tags = ["code", "guess"]
+text = '''A file rejected whole (one that [redefines a template](#template-redefined) still loaded, or that can't be read at all) defines nothing: none of its ids count, so each can still be defined first by a later file. The templates it defined before the error don't stay either: later files can't use them.'''
+
+[[topic.rule]]
 id = "thing-kinds-share-ids"
 tags = ["code"]
 text = '''`Thing`, `Unit`, `Projectile` and `VFX` blocks share one set of ids: a visual effect with the id of a unit is a duplicate of it. Every other kind has its own set, so an `Audio` block and a `VFX` block can share an id.'''
@@ -283,6 +298,11 @@ text = '''`&name.` becomes the glyph called `name`: `&ch_gem.` is the gem icon. 
 id = "escape-characters-settings"
 tags = ["guess"]
 text = '''The three characters `\`, `&` and `.` are game settings, not fixed; these are the stock ones, as the shipped data uses them.'''
+
+[[open]]
+q = '''What does the game do with a refused block's half-read definition in play: is a unit defined by one placeable and usable, and with which values for the fields it never read?'''
+by = "analysis"
+asked = 2026-11-26
 
 [[open]]
 q = '''When is a `SELECTED` animation's sound skipped?'''
