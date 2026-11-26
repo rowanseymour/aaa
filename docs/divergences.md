@@ -104,6 +104,10 @@ See [campaigns.rs](../crates/tgclient/src/campaigns.rs).
   often one this project's types don't read yet, not a fault in the data, so ending
   its file would drop stock content. Only data the original refuses plays out
   differently. See `logged` in [lib.rs](../crates/tgdata/src/lib.rs).
+- **The user's documents data folder.** A source in the Windows documents folder
+  (`%USERDATA%/data/`) isn't read, as other systems have no folder to match it.
+  Loose files go in the install's `data/` or `Userdata/` instead. See `sources` in
+  [lib.rs](../crates/tgdata/src/lib.rs).
 
 ## Multiplayer
 
