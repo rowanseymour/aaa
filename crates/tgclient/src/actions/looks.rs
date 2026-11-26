@@ -12,9 +12,9 @@ use crate::{Loaded, Raising, Sim};
 use super::layout::{GameHas, Place};
 use super::tips::{Row, Said};
 use super::{
-    AIR_ATTACK, ALL_ALLIES, Aim, CANCEL_LOOK, COMMAND_ALL_HELP, COMMAND_ALL_ICON, COMMAND_ALL_NAME,
-    DEPLOY, DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON, Entry, Give, Menu, ORDERS, PACK, Page,
-    RALLY, RESEARCH, Refusal, SELECT_ALLY, SELL, Shown, TEAM_CANCEL, TEAM_COMMANDS,
+    AIR_ATTACK, AIR_RECON, ALL_ALLIES, Aim, CANCEL_LOOK, COMMAND_ALL_HELP, COMMAND_ALL_ICON,
+    COMMAND_ALL_NAME, DEPLOY, DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON, Entry, Give, Menu, ORDERS,
+    PACK, Page, RALLY, RESEARCH, Refusal, SELECT_ALLY, SELL, Shown, TEAM_CANCEL, TEAM_COMMANDS,
 };
 
 /// How a button shows.
@@ -119,6 +119,7 @@ pub struct Looks {
     pub(crate) pack: (Option<Place>, Look),
     pub(crate) sell: (Option<Place>, Look),
     pub(crate) air_attack: (Option<Place>, Look),
+    pub(crate) air_recon: (Option<Place>, Look),
     escort_on: (Option<Place>, Look),
     escort_off: (Option<Place>, Look),
     cancel: Look,
@@ -267,6 +268,7 @@ impl Looks {
             &self.pack,
             &self.sell,
             &self.air_attack,
+            &self.air_recon,
             &self.escort_on,
             &self.escort_off,
         ];
@@ -358,6 +360,7 @@ pub fn setup(
     let pack = look_of(game, PACK);
     let sell = look_of(game, SELL);
     let air_attack = look_of(game, AIR_ATTACK);
+    let air_recon = look_of(game, AIR_RECON);
     let escort_on = look_of(game, ESCORT_ON);
     let escort_off = look_of(game, ESCORT_OFF);
     let (site, cancel) = look_of(game, CANCEL_LOOK);
@@ -613,6 +616,7 @@ pub fn setup(
         pack,
         sell,
         air_attack,
+        air_recon,
         escort_on,
         escort_off,
         cancel,
@@ -676,6 +680,7 @@ pub(crate) fn look_of<'a>(
         Entry::Research(i) => &looks.topics(sim, building)[i].look,
         Entry::Rally => &looks.rally.1,
         Entry::AirAttack => &looks.air_attack.1,
+        Entry::AirRecon => &looks.air_recon.1,
         Entry::Escort => {
             let on = building.is_some_and(|b| sim.buildings[b].escort);
             &looks.escort(on).1

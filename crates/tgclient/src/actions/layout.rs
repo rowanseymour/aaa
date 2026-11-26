@@ -80,8 +80,10 @@ pub(crate) struct BuildingButtons<'a> {
     /// Where its Cancel button goes, while it's a site going up, which
     /// has no other.
     site: Option<Place>,
-    /// Where an airfield's Air Attack button goes.
+    /// Where an airfield's Air Attack and Air Recon buttons go, while
+    /// enough of their planes are ready.
     air_attack: Option<Place>,
+    air_recon: Option<Place>,
     /// Where an airfield's escort switch goes.
     escort: Option<Place>,
 }
@@ -297,6 +299,7 @@ pub(crate) fn layout(
                 ),
                 (true, b.sell, Entry::Sell),
                 (true, b.air_attack, Entry::AirAttack),
+                (true, b.air_recon, Entry::AirRecon),
                 (true, b.escort, Entry::Escort),
                 (true, b.pack, Entry::Pack),
                 // Even once there's nothing left to research.
@@ -348,16 +351,20 @@ pub(crate) fn layout(
             }
             out[CANCEL] = Some(Entry::Cancel);
         }
-        (Page::AirAttack, Some(b)) => {
-            if let Some(s) = (b.air_attack)
-                .map(|p| p.slot)
-                .filter(|&s| s < SLOTS && s != CANCEL)
-            {
-                out[s] = Some(Entry::AirAttack);
+        (Page::AirAttack | Page::AirRecon, Some(b)) => {
+            let (place, entry) = match page {
+                Page::AirAttack => (b.air_attack, Entry::AirAttack),
+                _ => (b.air_recon, Entry::AirRecon),
+            };
+            if let Some(s) = place.map(|p| p.slot).filter(|&s| s < SLOTS && s != CANCEL) {
+                out[s] = Some(entry);
             }
             out[CANCEL] = Some(Entry::Cancel);
         }
-        (Page::Menu(_) | Page::Rally | Page::AirAttack | Page::Delivering(_), None) => {}
+        (
+            Page::Menu(_) | Page::Rally | Page::AirAttack | Page::AirRecon | Page::Delivering(_),
+            None,
+        ) => {}
         (Page::Placing(_), Some(_)) => {}
         (Page::Orders, None) => {
             let shown = (slots.iter().enumerate()).filter(|&(i, _)| offered[i]);
@@ -450,9 +457,9 @@ pub(crate) fn ready(
                 && lacking.properties.is_empty()
                 && lacking.structures.is_empty()
         }
-        // Greyed while too few of its planes are ready.
-        Entry::AirAttack => building.is_some_and(|b| sim.planes_ready(b, tgmap::AirJob::Offensive)),
         Entry::Cancel
+        | Entry::AirAttack
+        | Entry::AirRecon
         | Entry::Escort
         | Entry::Open(_)
         | Entry::Rally
@@ -481,6 +488,7 @@ pub(crate) fn lit(entry: Entry, page: Page) -> bool {
         }
         Entry::Rally => page == Page::Rally,
         Entry::AirAttack => page == Page::AirAttack,
+        Entry::AirRecon => page == Page::AirRecon,
         _ => false,
     }
 }
@@ -553,7 +561,9 @@ pub(crate) fn contents(
                 .filter(|_| local.is_some_and(|p| sim.check(p, &sell_command(b)).is_ok())),
             site: looks.site.filter(|_| sim.buildings[b].constructing),
             air_attack: (looks.air_attack.0)
-                .filter(|_| deploys(sim, b) && airfield(sim, b, tgmap::AirJob::Offensive)),
+                .filter(|_| deploys(sim, b) && sim.planes_ready(b, tgmap::AirJob::Offensive)),
+            air_recon: (looks.air_recon.0)
+                .filter(|_| deploys(sim, b) && sim.planes_ready(b, tgmap::AirJob::Recon)),
             escort: (looks.escort(sim.buildings[b].escort).0)
                 .filter(|_| deploys(sim, b) && airfield(sim, b, tgmap::AirJob::Escort)),
         }),
@@ -860,6 +870,7 @@ mod tests {
             sell: None,
             site: high(11),
             air_attack: None,
+            air_recon: None,
             escort: None,
         };
         let grid = layout(Page::Orders, &GAME, &all, Some(site), false, 0, None);
@@ -1071,6 +1082,7 @@ mod tests {
             sell: at(11),
             site: None,
             air_attack: None,
+            air_recon: None,
             escort: None,
         };
         let grid = layout(
@@ -1152,6 +1164,7 @@ mod tests {
             sell: None,
             site: None,
             air_attack: None,
+            air_recon: None,
             escort: None,
         };
         let grid = layout(
@@ -1300,6 +1313,7 @@ mod tests {
             sell: None,
             site: None,
             air_attack: None,
+            air_recon: None,
             escort: None,
         };
         let grid = layout(
@@ -1350,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn an_airfield_has_air_attack_and_its_escort_switch_and_aims_the_attack() {
+    fn an_airfield_has_air_attack_air_recon_and_its_escort_switch_and_aims_them() {
         let airfield = BuildingButtons {
             deploy: None,
             location: None,
@@ -1362,17 +1376,35 @@ mod tests {
             sell: None,
             site: None,
             air_attack: at(4),
-            escort: at(5),
+            air_recon: at(5),
+            escort: at(9),
         };
         let all = [true; ORDERS.len()];
         let grid = layout(Page::Orders, &GAME, &all, Some(airfield), false, 0, None);
         assert_eq!(grid[4], Some(Entry::AirAttack));
-        assert_eq!(grid[5], Some(Entry::Escort));
+        assert_eq!(grid[5], Some(Entry::AirRecon));
+        // Pack keeps slot 9 over Escort, which takes the first free one
+        // (`airfields#grid-slots`).
         assert_eq!(grid[9], Some(Entry::Pack));
+        assert_eq!(grid[0], Some(Entry::Escort));
         let aiming = layout(Page::AirAttack, &GAME, &all, Some(airfield), false, 0, None);
         assert_eq!(aiming[4], Some(Entry::AirAttack));
         assert_eq!(aiming[CANCEL], Some(Entry::Cancel));
         assert_eq!(aiming.iter().flatten().count(), 2);
         assert!(lit(Entry::AirAttack, Page::AirAttack));
+        let aiming = layout(Page::AirRecon, &GAME, &all, Some(airfield), false, 0, None);
+        assert_eq!(aiming[5], Some(Entry::AirRecon));
+        assert_eq!(aiming.iter().flatten().count(), 2);
+        assert!(lit(Entry::AirRecon, Page::AirRecon));
+        // With too few planes ready, Air Attack and Air Recon have no
+        // button at all, not a greyed one (`airfields#grid-commands`).
+        let none_ready = BuildingButtons {
+            air_attack: None,
+            air_recon: None,
+            ..airfield
+        };
+        let grid = layout(Page::Orders, &GAME, &all, Some(none_ready), false, 0, None);
+        assert!(!grid.contains(&Some(Entry::AirAttack)) && !grid.contains(&Some(Entry::AirRecon)));
+        assert_eq!(grid[0], Some(Entry::Escort));
     }
 }

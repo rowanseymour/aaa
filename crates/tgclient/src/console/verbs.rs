@@ -12,8 +12,8 @@ use super::interface::{
 };
 use super::parse::commands;
 use super::play::{
-    advance, air_attack, attach, attach_hero, build, building_order, commission, create, decide,
-    destroy_selected, detach_hero, disband, escort, heroes, objects, order, outcome,
+    advance, air_attack, air_recon, attach, attach_hero, build, building_order, commission, create,
+    decide, destroy_selected, detach_hero, disband, escort, heroes, objects, order, outcome,
     placement_kingdom, player_kingdom, record, repair, research, select, settlements, sun,
     tell_ability, unpack, use_faction_ability,
 };
@@ -377,6 +377,13 @@ pub(crate) const VERBS: &[Verb] = &[
         "(x y | id)",
         "sends the selected airfield's air attack at x y, or on a building or organization by its id",
         |world, args, _| air_attack(world, args),
+    )
+    .in_match(),
+    verb(
+        "airrecon",
+        "x y",
+        "sends the selected airfield's air recon to x y",
+        |world, args, _| air_recon(world, args),
     )
     .in_match(),
     verb(

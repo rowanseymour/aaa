@@ -24,6 +24,8 @@ pub struct Flights {
     crates: HashMap<usize, Option<Entity>>,
     /// Each airfield's plane out, by its sortie's index.
     sorties: HashMap<usize, Option<Entity>>,
+    /// The scale each of those is drawn at in full.
+    full_size: HashMap<Entity, Vec3>,
     /// How many of the sim's deliveries, from the first, are over: gone,
     /// with all they brought on the ground.
     over: usize,
@@ -54,10 +56,16 @@ pub fn show(
         let ours = friends.as_ref().is_none_or(|f| f.contains(&owner));
         crate::ui::visible(ours || fog.at(at) == Seen::Visible)
     };
-    let mut place = |e: Entity, at: Vec3, turned: Quat, shown: Visibility| {
+    let full_size = &mut flights.full_size;
+    // `size` is of the size it was first drawn at.
+    let mut place = |e: Entity, at: Vec3, turned: Quat, shown: Visibility, size: f32| {
         if let Ok((mut transform, mut visibility)) = placed.get_mut(e) {
             (transform.translation, transform.rotation) = (at, turned);
             visibility.set_if_neq(shown);
+            if size != 1.0 || full_size.contains_key(&e) {
+                let full = *full_size.entry(e).or_insert(transform.scale);
+                transform.scale = full * size;
+            }
         }
     };
     let done = |d: &tgsim::Delivery| {
@@ -104,7 +112,7 @@ pub fn show(
             let dip = Quat::from_axis_angle(axis.normalize_or_zero(), -delivery.dive().atan());
             let turned = dip * turned;
             if let Some(e) = plane {
-                place(e, over, turned, seen(delivery.owner, at));
+                place(e, over, turned, seen(delivery.owner, at), 1.0);
             }
         }
         if let Some(b) = delivery.building {
@@ -139,7 +147,7 @@ pub fn show(
             let let_go = level - delivery.height + descent.dropped_from();
             over.y = lands + (let_go - lands) * descent.left(t);
             if let Some(e) = falling {
-                place(e, over, turned, seen(delivery.owner, at));
+                place(e, over, turned, seen(delivery.owner, at), 1.0);
             }
         }
         let Some(r) = delivery.organization else {
@@ -172,20 +180,18 @@ pub fn show(
             let let_go = level - delivery.height + descent.dropped_from();
             over.y = lands + (let_go - lands) * descent.left(t);
             if let Some(e) = falling {
-                place(e, over, turned, seen(delivery.owner, at));
+                place(e, over, turned, seen(delivery.owner, at), 1.0);
             }
         }
     }
     // Those over, from the first, are passed over from here on.
     let rest = sim.0.deliveries.iter().skip(flights.over);
     flights.over += rest.take_while(|d| done(d)).count();
+    let mut forgotten = Vec::new();
     for (s, sortie) in sim.0.sorties.iter().enumerate() {
-        let flying = matches!(
-            sortie.stage,
-            tgsim::Stage::Out | tgsim::Stage::Home | tgsim::Stage::Falling
-        );
-        let Some(u) = sortie.plane.filter(|_| flying) else {
+        let Some(u) = sortie.plane.filter(|_| !sortie.stage.over()) else {
             if let Some(Some(e)) = flights.sorties.remove(&s) {
+                forgotten.push(e);
                 commands.entity(e).despawn();
             }
             continue;
@@ -205,8 +211,13 @@ pub fn show(
         let (mut over, turned) = pose(ground, at, unit.facing, None, Footing::Ground);
         over.y = ground.stand_at(Footing::Ground, at) + sortie.height;
         if let Some(e) = plane {
-            place(e, over, turned, seen(sortie.owner, at));
+            // Smaller near the ground.
+            let size = sim.0.flight_scale(s);
+            place(e, over, turned, seen(sortie.owner, at), size);
         }
+    }
+    for e in forgotten {
+        flights.full_size.remove(&e);
     }
 }
 

@@ -872,6 +872,11 @@ pub struct Building {
     pub hangar: Vec<Berth>,
     /// For an airfield, whether its air attacks take an escort.
     pub escort: bool,
+    /// For an airfield, the enemies it has noticed near it, in the order
+    /// it noticed them.
+    pub intruders: Vec<Piece>,
+    /// For an airfield, whether its guard zone is laid round it.
+    pub guarding: bool,
     /// Its fall, for one coming down by parachute.
     pub descent: Option<Descent>,
 }
@@ -1187,8 +1192,8 @@ pub enum Command {
         on: Option<Piece>,
     },
     /// Sends an air attack from an airfield on `on`, or at `at` for none:
-    /// its attack group's planes that are ready, and its escort if that's
-    /// on, paid for as they go. One its side can't afford sends nothing
+    /// its attack group's planes that are ready, paid for as they go, and
+    /// an escort with them while that's on. One its side can't afford sends nothing
     /// and tells it so. Refused for a building with no planes for one, and
     /// while too few are ready.
     AirAttack {
@@ -1196,6 +1201,11 @@ pub enum Command {
         at: [f32; 2],
         on: Option<Piece>,
     },
+    /// Sends air recon from an airfield to `at`: its recon group's planes
+    /// that are ready, paid for as they go. One its side can't afford
+    /// sends nothing and tells it so. Refused for a building with no
+    /// planes for it, and while too few are ready.
+    AirRecon { building: usize, at: [f32; 2] },
     /// Sets whether an airfield's air attacks take an escort.
     Escort { building: usize, on: bool },
     /// Has the thing with the map id `thing` stop and use, once, the
@@ -1592,7 +1602,7 @@ digest!(Building {
     noticed, awake,
     inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
     captured, unpacked_from, zone, members, supply, properties, created, remembered, constructing,
-    hangar, escort, descent,
+    hangar, escort, intruders, guarding, descent,
 } skip {
     // Its template's, or as the map has it.
     fighter, deploy, organization, obstacle,

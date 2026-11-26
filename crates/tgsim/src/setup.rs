@@ -490,6 +490,8 @@ impl World {
                 constructing: false,
                 hangar,
                 escort: false,
+                intruders: Vec::new(),
+                guarding: false,
                 descent: None,
             });
             self.next_id = self.next_id.max(b.id + 1);

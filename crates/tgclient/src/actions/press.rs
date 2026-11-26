@@ -17,9 +17,9 @@ use super::layout::{allies, builds};
 use super::looks::{Looks, Recruit, TeamCommand};
 use super::tips::fill;
 use super::{
-    AIR_ATTACK, Aim, CANCEL_LOOK, CONSTRUCT, DEPLOY, DEPLOY_TO_LOCATION, ESCORT_OFF, ESCORT_ON,
-    Entry, Give, Menu, ORDERS, PACK, Page, RALLY, RESEARCH, Refusal, SELECT_ALLY, SELL, SLOTS,
-    Shown, TEAM_CANCEL, TEAM_CHAT, TEAM_COMMANDS, Target, WIDGET,
+    AIR_ATTACK, AIR_RECON, Aim, CANCEL_LOOK, CONSTRUCT, DEPLOY, DEPLOY_TO_LOCATION, ESCORT_OFF,
+    ESCORT_ON, Entry, Give, Menu, ORDERS, PACK, Page, RALLY, RESEARCH, Refusal, SELECT_ALLY, SELL,
+    SLOTS, Shown, TEAM_CANCEL, TEAM_CHAT, TEAM_COMMANDS, Target, WIDGET,
 };
 
 /// What the game's hotkeys call what a button does, and the button
@@ -52,6 +52,7 @@ pub(crate) fn bound(
         Entry::Sell => vec![command(SELL)],
         Entry::Rally => vec![command(RALLY)],
         Entry::AirAttack => vec![command(AIR_ATTACK)],
+        Entry::AirRecon => vec![command(AIR_RECON)],
         // Either switch, whichever shows.
         Entry::Escort => vec![command(ESCORT_ON), command(ESCORT_OFF)],
         Entry::CommandAll => vec!["CommandAll".into()],
@@ -245,6 +246,7 @@ impl Presser<'_, '_> {
             Entry::Open(menu) => *self.page = Page::Menu(menu),
             Entry::Rally => *self.page = Page::Rally,
             Entry::AirAttack => *self.page = Page::AirAttack,
+            Entry::AirRecon => *self.page = Page::AirRecon,
             Entry::Escort => {
                 if let Some(b) = self.chosen.0 {
                     let on = !sim.buildings[b].escort;

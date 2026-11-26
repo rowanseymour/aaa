@@ -444,16 +444,20 @@ pub(crate) fn told(
             let text = fill(&said, &[&look.name(template.as_str()), &cost]);
             Told::Line("GENERIC_ERROR", text, at(About::Organization(organization)))
         }
-        Notice::AirAttackUnaffordable {
+        Notice::AirUnaffordable {
             player,
             building,
+            job,
             cost,
         } if ours(player) => {
             let said = look.said(
                 "denizen_error_affording|ss",
                 "Insufficient funds for %s. Requires %s.",
             );
-            let job = look.said("denizen_air_attack", "Air Attack");
+            let job = match job {
+                tgmap::AirJob::Recon => look.said("denizen_air_recon", "Air Recon"),
+                _ => look.said("denizen_air_attack", "Air Attack"),
+            };
             let text = fill(&said, &[&job, &cost.ceil().to_string()]);
             Told::Line("GENERIC_ERROR", text, at(About::Building(building)))
         }

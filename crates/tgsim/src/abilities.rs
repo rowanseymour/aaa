@@ -156,6 +156,12 @@ impl World {
     /// scores. Going after a target with a weapon still recharging scores
     /// as waiting would, but with its fighter's bonus for moving.
     pub(crate) fn score(&self, u: usize, w: usize, rating: Rating, t: Target) -> f32 {
+        self.score_at(u, w, rating, Some(t))
+    }
+
+    /// What the unit at `u`'s weapon `w`, rating `rating`, scores against
+    /// `t`, or used on the ground for none.
+    pub(crate) fn score_at(&self, u: usize, w: usize, rating: Rating, t: Option<Target>) -> f32 {
         let Some(fighter) = &self.units[u].fighter else {
             return 0.0;
         };
@@ -168,8 +174,12 @@ impl World {
         let own = choice.priority * as_if.of(&choice.weight) + as_if.of(&choice.bonus);
         let score = own + rating.of(&fighter.bonus);
         let main = weapon.main_damage().next();
-        match (fighter.check_resistance, main, self.fighter(t)) {
-            (true, Some(d), Some(target)) => {
+        match (
+            fighter.check_resistance,
+            main,
+            t.and_then(|t| Some((t, self.fighter(t)?))),
+        ) {
+            (true, Some(d), Some((t, target))) => {
                 let shelter = self.shelter(t);
                 let ground = self.protection(t, &shelter);
                 score * (1.0 - resistance(target, &ground, &d.kind))
