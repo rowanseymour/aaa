@@ -394,7 +394,8 @@ impl Presser<'_, '_> {
         let cost = sim.attach_cost(r).ceil().to_string();
         let text = fill(&self.looks.recruit.attach_affording, &[&name, &cost]);
         let hq = sim.attaches_to(r);
-        let building = (0..sim.buildings.len()).find(|&b| hq.is_some() && sim.hq_of(b) == hq);
+        let building = (0..sim.buildings.len())
+            .find(|&b| hq.is_some() && !sim.buildings[b].gone() && sim.hq_of(b) == hq);
         let packed = (0..sim.organizations.len()).find(|&o| hq.is_some() && sim.packed_hq(o) == hq);
         let about = building
             .map(About::Building)
