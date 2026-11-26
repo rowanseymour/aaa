@@ -122,13 +122,16 @@ use tgck::{Archive, Map};
 pub struct GameData {
     /// The install's folder.
     dir: PathBuf,
-    /// Where the files are, in the order their paths are looked up: the
-    /// game's archives, then those [`GameData::add_depot`] adds.
+    /// Where the files are, in the order they were added: the game's
+    /// sources, then those [`GameData::add_depot`] adds.
     depots: Vec<Depot>,
+    /// Each depot's priority, or none for one [`GameData::add_depot`] adds.
+    priorities: Vec<Option<i32>>,
     /// Each depot's paths, as it spells them, to look them up without a
     /// lock.
     entries: Vec<Vec<String>>,
-    /// Lower-case path to entry; where depots share a path the first wins.
+    /// Lower-case path to entry; where depots share a path, the one
+    /// [`GameData::push`] chose.
     paths: HashMap<String, EntryRef>,
     /// The archive paths of the `.tgi` files the game loads, in the order
     /// it loads them.
@@ -513,28 +516,60 @@ impl Skin {
 /// A path under `dir`, each of its parts matched without regard to case.
 fn find_path(dir: &Path, path: &str) -> Option<PathBuf> {
     (path.split(['/', '\\']))
-        .filter(|part| !part.is_empty())
-        .try_fold(dir.to_path_buf(), |at, part| {
-            find_case_insensitive(&at, part)
+        .filter(|part| !part.is_empty() && *part != ".")
+        .try_fold(dir.to_path_buf(), |at, part| match part {
+            ".." => at.parent().map(Path::to_path_buf),
+            _ => find_case_insensitive(&at, part),
         })
 }
 
-/// The archives besides `Data.rwd` that are opened when present, in the
-/// order their paths are looked up.
-const EXTRA_ARCHIVES: [&str; 2] = ["Music.rwd", "Speech.rwd"];
+/// The sources an install without `startup/autoexec.txt` is read from.
+const DEFAULT_SOURCES: &str = "adddepot Data.rwd\nadddepot Music.rwd\nadddepot Speech.rwd\n";
+
+/// The sources `autoexec` adds that are there under `dir`, in the order it
+/// adds them, with their priorities.
+fn sources(dir: &Path, autoexec: &str) -> Vec<(PathBuf, i32)> {
+    let mut out = Vec::new();
+    for line in autoexec.lines() {
+        let mut words = line.split_whitespace();
+        let (Some(command), Some(path)) = (words.next(), words.next()) else {
+            continue;
+        };
+        if !["adddepot", "addlocaledepot"]
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(command))
+        {
+            continue;
+        }
+        // The user's documents folder is the Windows one, which this
+        // project has no counterpart to.
+        if path.contains('%') {
+            continue;
+        }
+        let priority = words.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        if let Some(path) = find_path(dir, path) {
+            out.push((path, priority));
+        }
+    }
+    out
+}
 
 impl GameData {
-    /// Opens the archives in the game's install directory: `Data.rwd`, which
-    /// must be there, and the music and speech archives if they are.
+    /// Opens the sources in the game's install directory that its
+    /// `startup/autoexec.txt` adds, `Data.rwd` among them, which must be
+    /// there.
     pub fn open(dir: &Path) -> Result<Self, String> {
-        let data = find_case_insensitive(dir, "Data.rwd")
+        find_case_insensitive(dir, "Data.rwd")
             .ok_or_else(|| format!("no Data.rwd in {}", dir.display()))?;
-        let extras = EXTRA_ARCHIVES
-            .iter()
-            .filter_map(|name| find_case_insensitive(dir, name));
+        let autoexec = (find_path(dir, "startup/autoexec.txt"))
+            .and_then(|p| std::fs::read(p).ok())
+            .map(|b| tgi::decode(&b));
         let mut game = GameData::without_depots(dir);
-        for path in [data].into_iter().chain(extras) {
-            game.push(Depot::open(&path)?);
+        for (path, priority) in sources(dir, autoexec.as_deref().unwrap_or(DEFAULT_SOURCES)) {
+            match Depot::open(&path) {
+                Ok(depot) => game.push(depot, Some(priority)),
+                Err(e) => log::warn!("{e}"),
+            }
         }
         let names: Vec<String> = game.entries().map(str::to_string).collect();
         game.tag = game_tag(&names);
@@ -546,6 +581,7 @@ impl GameData {
         GameData {
             dir: dir.to_path_buf(),
             depots: Vec::new(),
+            priorities: Vec::new(),
             entries: Vec::new(),
             paths: HashMap::new(),
             tgis: Vec::new(),
@@ -563,7 +599,7 @@ impl GameData {
         if !path.exists() {
             return Err(format!("no {}", path.display()));
         }
-        self.push(Depot::open(path)?);
+        self.push(Depot::open(path)?, None);
         self.list_tgis();
         // What was read before may have been read without it.
         self.parsed
@@ -577,15 +613,24 @@ impl GameData {
         Ok(())
     }
 
-    fn push(&mut self, depot: Depot) {
+    /// A path more than one of the game's sources has is read from the one
+    /// of highest `priority`, of those the last added. One added with no
+    /// priority is looked in only for the paths no other has.
+    fn push(&mut self, depot: Depot, priority: Option<i32>) {
         let d = self.depots.len();
         let names = depot.names();
         for (i, name) in names.iter().enumerate() {
-            self.paths
-                .entry(name.to_ascii_lowercase())
-                .or_insert((d, i));
+            let key = name.to_ascii_lowercase();
+            let replaces = match self.paths.get(&key) {
+                None => true,
+                Some(&(had, _)) => priority.is_some() && priority >= self.priorities[had],
+            };
+            if replaces {
+                self.paths.insert(key, (d, i));
+            }
         }
         self.depots.push(depot);
+        self.priorities.push(priority);
         self.entries.push(names);
     }
 
@@ -1375,6 +1420,51 @@ mod tests {
             std::fs::write(path, text).unwrap();
         }
         dir
+    }
+
+    #[test]
+    fn sources_are_those_autoexec_adds_that_are_there() {
+        let dir = folder(
+            "sources",
+            &[("Data/x", ""), ("Userdata/y", ""), ("Video/z", "")],
+        );
+        let autoexec = "# adddepot commented/\n\
+                        adddepot ../Elsewhere/\n\
+                        adddepot ./data/../data/ \n\
+                        addlocaledepot video/\n\
+                        adddepot missing.rwd\n\
+                        adddepot %USERDATA%/data/ 1\n\
+                        ADDDEPOT Userdata/ 1\n";
+        let found: Vec<_> = (sources(&dir, autoexec).into_iter())
+            .map(|(p, priority)| (p.strip_prefix(&dir).unwrap().to_path_buf(), priority))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (PathBuf::from("Data"), 0),
+                (PathBuf::from("Video"), 0),
+                (PathBuf::from("Userdata"), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_path_is_read_from_the_highest_priority_source_added_last() {
+        let first = folder("priority-first", &[("x.tgi", "one"), ("y.tgi", "three")]);
+        let second = folder("priority-second", &[("X.tgi", "two")]);
+        let user = folder("priority-user", &[("y.tgi", "four")]);
+        let after = folder("priority-after", &[("Y.TGI", "five")]);
+        let own = folder("priority-own", &[("x.tgi", "six"), ("z.tgi", "seven")]);
+        let mut game = empty();
+        game.push(Depot::open(&first).unwrap(), Some(0));
+        game.push(Depot::open(&user).unwrap(), Some(1));
+        game.push(Depot::open(&second).unwrap(), Some(0));
+        game.push(Depot::open(&after).unwrap(), Some(0));
+        game.add_depot(&own).unwrap();
+        let read = |name| String::from_utf8(game.read(name).unwrap()).unwrap();
+        assert_eq!(read("x.tgi"), "two");
+        assert_eq!(read("y.tgi"), "four");
+        assert_eq!(read("z.tgi"), "seven");
     }
 
     #[test]
