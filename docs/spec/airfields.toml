@@ -46,8 +46,8 @@ text = '''A plane that dies away from home frees its place at once, at no health
 
 [[topic.rule]]
 id = "grid-commands"
-tags = ["code", "guess"]
-text = '''What a stocked plane can do is on the grid as soon as enough planes are ready: Air Attack while the attack group's fewest are ready, Air Recon likewise.'''
+tags = ["code"]
+text = '''An airfield's Air Attack has a button only while at least its attack group's fewest planes are ready, and Air Recon likewise for its recon group; otherwise there's no button, never a greyed one. One of the two Escort buttons shows whenever the airfield has an escort group. While the airfield is razing itself none of these show.'''
 
 [[topic]]
 title = "Air attack"
@@ -92,19 +92,24 @@ text = '''Each plane is given an attack on the target and flies it on its own.''
 
 [[topic.rule]]
 id = "attack-passes"
-tags = ["code", "guess"]
+tags = ["code"]
 text = '''
-It goes round in passes, each made of:
-- an approach to a point short of the target, 1.75 times its longest weapon range back along the line it's coming in on (a bomber's bombs reach 15, so about 26), at its operational height, aiming ahead of a moving target by how far it will have moved in the plane's flight time;
-- a run in at the target, dropping down towards half its operational height;
-- when it's below half that height, or has passed the target (the target is no longer ahead of it), a climb out straight ahead;
-- a turn away, alternately 45° to the left and to the right of the line to the target on successive passes, then round again.
+On a thing on the ground, or a place, it goes round in passes, each made of:
+- an approach to a point short of the target, 1.75 times its longest weapon range back along the line from the plane to the target (a bomber's bombs reach 15, so about 26), at its operational height above the ground there, aiming ahead of a moving target by how far it will have moved in the plane's flight time;
+- a run in at the target, again aiming ahead of it, dropping down towards half its operational height;
+- when it's below half that height, or pointed more than 60° away from the target (cosine 0.5), a climb out straight ahead for two seconds' flight, then on straight ahead for three more;
+- a turn away, to a point 1.75 times its weapon range from the target, on the line to it turned 45° alternately to the left and to the right on successive passes, then round again.
 '''
+
+[[topic.rule]]
+id = "air-target-chase"
+tags = ["code"]
+text = '''On a plane in the air it makes no passes: it flies straight after it, at that plane's operational height, and fires whenever it's pointed at it within reach as above.'''
 
 [[topic.rule]]
 id = "bomb-drop"
 tags = ["code"]
-text = '''It drops its bombs while it's on a run in, pointed at the target (within about 26°, cosine 0.9) and the target is within a bomb's reach, using the bomber's abilities as any attack does ([combat](combat.toml#choosing-an-ability)).'''
+text = '''It drops its bombs whenever it's pointed at the target (within about 26°, cosine 0.9) and the target is within a bomb's reach, using the bomber's abilities as any attack does ([combat](combat.toml#choosing-an-ability)). The leg doesn't matter, but the approach stops short of a bomb's reach and the climb points away, so it's the run in that drops them.'''
 
 [[topic.rule]]
 id = "bomb-load"
@@ -140,8 +145,8 @@ text = '''An airfield's Escort can be switched on and off with its commands (`es
 
 [[topic.rule]]
 id = "escort-group"
-tags = ["code", "guess"]
-text = '''While it's on and an air attack is out, the airfield also sends its `AIR_ESCORT` group, if ready. It costs nothing.'''
+tags = ["code"]
+text = '''While Escort is on and an air attack's planes are out (not all of them finished), the airfield sends its `AIR_ESCORT` group with that attack if it has none yet, as soon as the group is ready. So the escort goes out with the attack if it's ready when the attack is ordered, and otherwise later, when it's ready or when Escort is switched on, while the attack is still out. Each attack out gets its own escort. It costs nothing.'''
 
 [[topic.rule]]
 id = "escort-retaliation"
@@ -150,7 +155,7 @@ text = '''The escort flies with the attack's planes. Whenever an enemy hits one 
 
 [[topic.rule]]
 id = "escort-off-recall"
-tags = ["code", "guess"]
+tags = ["code"]
 text = '''Switching Escort off drops the escort from the attack; it comes home.'''
 
 [[topic]]
@@ -168,7 +173,7 @@ text = '''If the recon group's fewest planes are ready, they go out and the cost
 
 [[topic.rule]]
 id = "recon-flight"
-tags = ["code", "guess"]
+tags = ["code"]
 text = '''The plane flies to the point at its operational height and, on getting there, turns straight for home. What it sees on the way is what any plane sees ([fog](fog.toml)); there's no other reveal.'''
 
 [[topic]]
@@ -176,7 +181,7 @@ title = "Defending the airfield"
 
 [[topic.rule]]
 id = "guard-range"
-tags = ["code", "data", "guess"]
+tags = ["code", "data"]
 text = '''An airfield notices intruders within its `guard_range` (30): any enemy thing that can be targeted and that its side can see. A unit in a regiment counts as its regiment.'''
 
 [[topic.rule]]
@@ -204,8 +209,13 @@ title = "Coming home"
 
 [[topic.rule]]
 id = "landing"
-tags = ["code", "guess"]
-text = '''A plane that has finished flies back to its airfield at its operational height, lands on the runway and goes back into its place in the stock, keeping its health.'''
+tags = ["code"]
+text = '''A plane that has finished flies back to its airfield at its operational height and goes back into its place in the stock, keeping its health.'''
+
+[[topic.rule]]
+id = "landing-touchdown"
+tags = ["guess"]
+text = '''It lands on the runway on the way in.'''
 
 [[topic.rule]]
 id = "lost-on-sortie"
@@ -217,17 +227,22 @@ title = "When the airfield goes"
 
 [[topic.rule]]
 id = "airfield-destroyed"
-tags = ["code", "guess"]
-text = '''Destroyed: planes in the air carry on with their job. When one turns for home and its airfield no longer exists, it dies where it is, as if shot down ([combat](combat.toml#dying-in-the-air)).'''
+tags = ["code"]
+text = '''Destroyed: planes in the air carry on with their job. A plane flying home whose airfield no longer exists dies where it is, as if shot down ([combat](combat.toml#dying-in-the-air)): at once if it was already on its way home, or when it turns for home.'''
 
 [[topic.rule]]
 id = "airfield-captured"
-tags = ["code", "guess"]
-text = '''Captured: the airfield keeps its stock and its planes in the air; they keep their old side, and on coming home go back into the stock, now the new owner's.'''
+tags = ["code"]
+text = '''Captured: the airfield keeps its stock and its planes in the air, which on coming home go back into the stock, now the new owner's.'''
+
+[[topic.rule]]
+id = "airfield-captured-side"
+tags = ["guess"]
+text = '''The planes in the air keep their old side until they're home.'''
 
 [[topic.rule]]
 id = "airfield-packed"
-tags = ["code", "data", "guess"]
+tags = ["code", "data"]
 text = '''Packed: the truck has no stock, so the stock is lost. Planes in the air fly home to the truck, which now holds the airfield's identity, and are removed when they reach it, without being stored. The airfield it later unpacks into starts with an empty stock.'''
 
 [[topic.rule]]
@@ -236,11 +251,6 @@ tags = ["code"]
 text = '''Upgraded or otherwise replaced by a building that has a stock of the same kinds of plane: each place's health and the planes in the air pass over to it.'''
 
 [[open]]
-q = '''Are the Air Attack and Air Recon buttons greyed or hidden while too few planes are ready?'''
+q = '''Which planes chase even a target on the ground, rather than making passes? It depends on their weapons, which hasn't been traced.'''
 by = "analysis"
-asked = 2026-11-22
-
-[[open]]
-q = '''Does an escort take off when the attack is ordered, or once the attack's planes are in the air?'''
-by = "analysis"
-asked = 2026-11-22
+asked = 2026-11-26
