@@ -7,8 +7,8 @@ title = "Which files load"
 
 [[topic.rule]]
 id = "index-lists"
-tags = ["code"]
-text = '''Only the `.tgi` files the `index*.lst` files name are loaded, in the order those lists give.'''
+tags = ["code", "data"]
+text = '''Only the `.tgi` files the `index*.lst` files name are loaded, in the order those lists give. The `index*.lst` files themselves are read in name order (`index_aa.lst` says so itself), each from top to bottom; a list named inside another is read where it's named. How files are stored inside an archive or a folder plays no part in the order.'''
 
 [[topic.rule]]
 id = "pattern-sort-order"
@@ -19,6 +19,30 @@ text = '''A `*` pattern in a list loads its matches in sorted name order (plain 
 id = "file-named-twice"
 tags = ["code"]
 text = '''A file named twice (twice in the lists, or by a name and a `*`) is read each time. The second reading meets its own ids as duplicates, so it fails at its first definition (below) and the first reading stands.'''
+
+[[topic]]
+title = "Data sources"
+intro = '''Where a file named in the lists is read from, when the archive, the loose data folder and the user data folder can each hold a copy.'''
+
+[[topic.rule]]
+id = "source-priority"
+tags = ["code", "data"]
+text = '''The game reads its files from the sources that `startup/autoexec.txt` adds (`adddepot`, and `addlocaledepot` for localised ones): archives such as `Data.rwd` and folders such as `data/`, each taking paths relative to its own root. A number after the source is its priority; without one it's 0. The stock file adds, in order, `EngineData/`, `Data.rwd`, `data/`, then music, video and speech, all at priority 0, and last `%USERDATA%/data/` and `Userdata/` at priority 1.'''
+
+[[topic.rule]]
+id = "one-copy-per-path"
+tags = ["code"]
+text = '''A path held by more than one source is one file, read from one source only: the one with the highest priority, and among sources of equal priority the one added last. Paths match ignoring case, with `\\` and `/` alike. The other copies are never read, so nothing in them counts, not even definitions the chosen copy lacks.'''
+
+[[topic.rule]]
+id = "stock-source-precedence"
+tags = ["code", "data"]
+text = '''With the stock `autoexec.txt`: a loose file in the game's `data/` folder replaces the file of the same path in `Data.rwd`, and one in `Userdata/` (or the user's `My Documents` data folder, `%USERDATA%/data/`) replaces both; between those two, `Userdata/` wins, being added last. This holds for every kind of file alike: definition files, index lists, textures, models and sounds.'''
+
+[[topic.rule]]
+id = "patterns-span-sources"
+tags = ["guess"]
+text = '''A `*` pattern, and the search for `index*.lst`, match the files of every source together, as one folder: a new loose file in a listed folder (`data/Game/resources_mod.tgi` under `Game/resources*.tgi`) loads, in name order among the archive's files.'''
 
 [[topic]]
 title = "Ids, renames and duplicates"
@@ -49,9 +73,39 @@ tags = ["code"]
 text = '''Renaming the same old id twice is a load error, the first rename is kept. Renames inside comments don't count.'''
 
 [[topic.rule]]
+id = "first-definition-wins"
+tags = ["code"]
+text = '''For every kind of definition, a second definition of an id already defined is a load error, and the first one read stays exactly as it was: nothing of the second is taken, not even fields the first left out. This is the same for things and visual effects, audio, bones, cursors, formations, kingdom colours, nations, resources and every other kind, and the same whether the two are in one file, in two files, or one in `Data.rwd` and one in a loose file of another path. Ids are compared ignoring case. "First" is in the order files load ([which files load](#which-files-load)), then top to bottom within a file.'''
+
+[[topic.rule]]
+id = "duplicate-ends-file"
+tags = ["code"]
+text = '''The error ends the reading of the file holding the second definition: that block and every block after it in the file are skipped, the blocks before it are kept, and loading goes on with the next file. A load error doesn't stop the game. So a mod file that repeats one stock id loses everything written after that block.'''
+
+[[topic.rule]]
+id = "thing-kinds-share-ids"
+tags = ["code"]
+text = '''`Thing`, `Unit`, `Projectile` and `VFX` blocks share one set of ids: a visual effect with the id of a unit is a duplicate of it. Every other kind has its own set, so an `Audio` block and a `VFX` block can share an id.'''
+
+[[topic.rule]]
+id = "duplicate-needs-name"
+tags = ["code"]
+text = '''For kingdom colours and cursors a repeat is recognised by the first definition's `name`, which each definition must have. If the first's `name` is empty text, a later definition of the same id is read into the same entry instead of being refused, its fields replacing the first's.'''
+
+[[topic.rule]]
 id = "duplicate-thing-id"
 tags = ["code"]
-text = '''Two definitions with the same `Thing` id are a load error. The first definition stays. The error ends the reading of the file holding the second: that block and every block after it in the file are skipped, the blocks before it are kept, and loading goes on with the next file. A load error doesn't stop the game. The shipped `eastern_europe_city_center02_large` and `_small` pair is no conflict: one copy lives in a subfolder no index list names, so it never loads.'''
+text = '''The shipped `eastern_europe_city_center02_large` and `_small` pair is no conflict: one copy lives in a subfolder no index list names, so it never loads.'''
+
+[[topic.rule]]
+id = "vars-last-wins"
+tags = ["code", "game"]
+text = '''Settings files are the exception: every `AVars*.tgi` and `UVars*.tgi` loads, across all sources, in name order, and a setting a later one sets replaces the earlier value. So `data/AVars_zz_mine.tgi` overrides the shipped app settings.'''
+
+[[topic.rule]]
+id = "duplicates-reported-in-log"
+tags = ["code", "game"]
+text = '''A duplicate, like every other load error, is reported only in the run's log file in the game folder's `Logs` folder (`log-N…log`), naming the file, the line and the id. Nothing is shown on screen. A string key defined twice ([string tables](#duplicate-key)) isn't reported at all unless the strict data checking setting (`DataCheckingStrict`) is on.'''
 
 [[topic]]
 title = "Templates"
@@ -236,9 +290,9 @@ by = "analysis"
 asked = 2026-11-08
 
 [[open]]
-q = '''Where the same file is both in `Data.rwd` and loose in the data folder, which is read?'''
+q = '''Does a `*` pattern in an index list, and the search for `index*.lst`, find files that only a loose folder holds, alongside the archive's?'''
 by = "analysis"
-asked = 2026-11-08
+asked = 2026-11-25
 
 [[open]]
 q = '''What does a leading `@` on a quoted value do (the tables' own `name = "@Localization/strings_data_AA.tgi"`)? Is a quoted value without `#` always shown as written?'''
