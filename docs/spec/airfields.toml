@@ -49,6 +49,11 @@ id = "grid-commands"
 tags = ["code"]
 text = '''An airfield's Air Attack has a button only while at least its attack group's fewest planes are ready, and Air Recon likewise for its recon group; otherwise there's no button, never a greyed one. One of the two Escort buttons shows whenever the airfield has an escort group. While the airfield is razing itself none of these show.'''
 
+[[topic.rule]]
+id = "grid-slots"
+tags = ["data"]
+text = '''An airfield's buttons want slot 4 for Air Attack (`air_attack`), 5 for Air Recon (`air_recon`) and 9 for Escort (`escort_on` or `escort_off`), so Air Recon and Escort don't contend. Where two commands want one slot, [commands](commands.toml#button-placement) settles it: Pack (`pack`, also slot 9) keeps it over Escort, which then takes the first free slot counting up from 0.'''
+
 [[topic]]
 title = "Air attack"
 
@@ -79,7 +84,44 @@ under = "Air attack"
 [[topic.rule]]
 id = "runway-takeoff"
 tags = ["code", "data"]
-text = '''The planes appear at the airfield's `[Runway]` and take off from it one at a time, the runway's `delay` seconds apart (stock 1), as for a plane a runway launches with a delivery ([deliveries](deliveries.toml)). Each then flies to its job at its `operational_height` above the ground. Every job below takes off this way.'''
+text = '''Every plane an airfield sends out, whatever its job (attack, escort, recon, defence, or a plane its runway launches with a delivery, [deliveries](deliveries.toml)), waits its turn for the one runway. They take off in the order they were sent, the runway's `delay` seconds apart (stock 1): one goes as soon as `delay` seconds have passed since the last take-off, so the first after a quiet spell goes at once. A plane that dies while waiting is passed over. A runway whose `delay` isn't above 0 launches nothing; no shipped runway has one.'''
+
+[[topic.rule]]
+id = "plane-appears"
+tags = ["code", "data"]
+text = '''A plane sent out appears at once at the runway's `hangar_offset` (an offset from the building's position, turned with the building's facing), `taxi_height` above it, facing `hangar_orientation` (turned likewise), and drawn at `taxi_scale` of its size ([Drawn size](#drawn-size)). It waits there for its turn.'''
+
+[[topic.rule]]
+id = "takeoff-run"
+tags = ["code", "data"]
+text = '''
+On its turn it takes off along these legs ([Flying a leg](#flying-a-leg)), the offsets and directions turned with the building as above:
+- if `hangar_length` is above 0, forward that far along `hangar_orientation`, at `taxi_speed` and `taxi_height` above the hangar point;
+- to the runway's start, `offset`, arriving pointed along the runway's `orientation`, at `taxi_speed` and `taxi_height` above it (left out when the start is the hangar point);
+- along the runway for its `length`, picking up speed steadily to its full speed (`speed_max`), still at `taxi_height`;
+- straight on to a point four times `length` past the runway's end (24 past its start if `length` isn't above 0), climbing steadily to its `operational_height` above the ground, which it reaches there.
+
+Then it starts its job. Stock airfield runways are 4.8 long, so a plane climbs to its height over the 19.2 beyond the runway.
+'''
+
+[[topic.rule]]
+id = "drawn-size"
+tags = ["code", "data"]
+text = '''While it's taking off, landing, or on a run in ([The attack](#the-attack)), a plane is drawn smaller near the ground: at `taxi_scale` (stock 0.4) of its size at `taxi_height` above the ground or lower, growing evenly with height to full size at `operational_height`. At other times it's drawn full size. Only the drawing changes.'''
+
+[[topic]]
+title = "Flying a leg"
+under = "Air attack"
+
+[[topic.rule]]
+id = "leg-path"
+tags = ["code"]
+text = '''A plane flies each leg of its flight (take-off, the legs of a pass, recon, coming home, landing) along a smooth path that runs exactly through the leg's point, arriving pointed the way the leg asks where it asks one. It has got there when it reaches the end of that path: there's no allowance for being near. Along each piece of the path its height and its speed change steadily from what they were at the piece's start to what the leg asks at its end.'''
+
+[[topic.rule]]
+id = "leg-behind"
+tags = ["code"]
+text = '''A point it can't simply turn towards (more than 60° off its heading, or too near to turn onto) isn't skipped: the path first takes it round and then through the point. If no path can be made, it circles until it decides again.'''
 
 [[topic]]
 title = "The attack"
@@ -96,9 +138,9 @@ tags = ["code"]
 text = '''
 On a thing on the ground, or a place, it goes round in passes, each made of:
 - an approach to a point short of the target, 1.75 times its longest weapon range back along the line from the plane to the target (a bomber's bombs reach 15, so about 26), at its operational height above the ground there, aiming ahead of a moving target by how far it will have moved in the plane's flight time;
-- a run in at the target, again aiming ahead of it, dropping down towards half its operational height;
-- when it's below half that height, or pointed more than 60° away from the target (cosine 0.5), a climb out straight ahead for two seconds' flight, then on straight ahead for three more;
-- a turn away, to a point 1.75 times its weapon range from the target, on the line to it turned 45° alternately to the left and to the right on successive passes, then round again.
+- a run in at the target, again aiming ahead of it, heading for a point half its operational height below the ground there, so that it comes down steadily along that line;
+- when it's below half its operational height above the ground, or pointed more than 60° away from the target (cosine 0.5), a climb out: first straight ahead for two seconds' flight at the height it had then, then straight ahead for three seconds' more, rising steadily to its operational height, which it has again at the end of that leg;
+- a turn away, at its operational height, to a point 1.75 times its weapon range from the target, on the line to it turned 45° alternately to the left and to the right on successive passes, then round again.
 '''
 
 [[topic.rule]]
@@ -149,6 +191,11 @@ tags = ["code"]
 text = '''While Escort is on and an air attack's planes are out (not all of them finished), the airfield sends its `AIR_ESCORT` group with that attack if it has none yet, as soon as the group is ready. So the escort goes out with the attack if it's ready when the attack is ordered, and otherwise later, when it's ready or when Escort is switched on, while the attack is still out. Each attack out gets its own escort. It costs nothing.'''
 
 [[topic.rule]]
+id = "escort-once"
+tags = ["code"]
+text = '''An attack gets one escort. Once one has gone out with it, it gets no other while Escort stays on, even when every plane of the escort has been shot down. Switching Escort off and on again while the attack is out sends a new one, once the group is ready. The escort is as many of the group as are ready when it goes, up to its most (stock: 1 or 2); a fighter that's ready later doesn't join it.'''
+
+[[topic.rule]]
 id = "escort-retaliation"
 tags = ["code"]
 text = '''The escort flies with the attack's planes. Whenever an enemy hits one of them, or one of the escort, it goes after the one that hit most recently, as an attack on it ([The attack](#the-attack)). When the attack's planes have all finished, it comes home.'''
@@ -169,7 +216,7 @@ text = '''Air Recon takes a place. The side must afford `[AirReconCost]` (stock 
 [[topic.rule]]
 id = "recon-group"
 tags = ["code"]
-text = '''If the recon group's fewest planes are ready, they go out and the cost is paid; otherwise nothing happens.'''
+text = '''If the recon group's fewest planes are ready, they go out and the cost is paid; otherwise nothing happens. They take off like any other ([Taking off](#taking-off)). Ordering it again while one is out sends another, if planes are ready and the side can pay.'''
 
 [[topic.rule]]
 id = "recon-flight"
@@ -182,22 +229,39 @@ title = "Defending the airfield"
 [[topic.rule]]
 id = "guard-range"
 tags = ["code", "data"]
-text = '''An airfield notices intruders within its `guard_range` (30): any enemy thing that can be targeted and that its side can see. A unit in a regiment counts as its regiment.'''
+text = '''An airfield notices intruders that come into its guard zone, the zone of radius `guard_range` (30) round it, which is laid and entered like any zone ([objects](objects.toml#zones)): a unit is in when the tile under its centre is. An intruder is any enemy thing that can be targeted and that its side can see when it comes in. A unit in a regiment brings in its regiment, which is what's noticed.'''
 
 [[topic.rule]]
 id = "guard-operational-range"
 tags = ["code", "data"]
-text = '''An intruder is forgotten once it's dead, no longer an enemy or a target, outside `guard_operational_range` (48), or (a regiment) has none of its units with it.'''
+text = '''
+An intruder is forgotten, checked all the time, once:
+- it's dead, or no longer an enemy of the airfield's side, or no longer a target;
+- it's out of range: the distance across the map (heights left out) from the airfield's position to the thing's is `guard_operational_range` (48) or more. A regiment is out of range only when every one of its units is; it's measured from each unit, not from the regiment;
+- (a regiment) none of its units is with it, as [supply](supply.toml#member-with-regiment) judges that: none is its leader or inside its control zone.
+
+Seeing doesn't matter for forgetting. With a `guard_operational_range` of 0, an intruder is forgotten at once.
+'''
 
 [[topic.rule]]
 id = "defensive-group"
 tags = ["code"]
-text = '''While it has intruders, the airfield sends its `AIR_DEFENSIVE` group as soon as it's ready, free of charge.'''
+text = '''While it has intruders, the airfield sends out its `AIR_DEFENSIVE` group again and again, free of charge, for as long as at least the group's fewest planes are ready, each group as many as are ready up to its most. So every fighter that's ready goes up at once, and each one repaired or rebuilt while intruders remain goes up as soon as it's ready. The stock's planes are shared between the groups that name them, so fighters up in defence aren't there for an escort or recon.'''
 
 [[topic.rule]]
 id = "defender-targets"
 tags = ["code"]
-text = '''Each of those fighters attacks the nearest intruder it can attack, as in [The attack](#the-attack), keeping to the one it's fighting while that one is still an intruder, and picking again when it's gone. With no intruders left, or its airfield gone, it comes home.'''
+text = '''Each of those fighters attacks the nearest intruder it can attack (nearest across the map), as in [The attack](#the-attack), keeping to the one it's fighting while that one is still an intruder, and picking again when it's gone. With no intruders left that it can attack, or its airfield gone, it comes home.'''
+
+[[topic.rule]]
+id = "defender-out-of-shots"
+tags = ["code", "data"]
+text = '''A fighter carries 20 shots (`mana_max` 20, its guns' `mana_cost` 1, nothing refilled in the air). When it can't fire any more, it finishes the pass it's on and comes home, intruders or not. Each time a plane goes out it has its full load.'''
+
+[[topic.rule]]
+id = "defenders-airfield-changes"
+tags = ["code"]
+text = '''Its intruders are always the airfield's present ones. Once the airfield is captured, they're the new side's enemies, so its fighters fight on only against those they themselves can still attack, and otherwise come home, to the captured airfield ([When the airfield goes](#when-the-airfield-goes)). Once it's packed there are none, and they come home at once.'''
 
 [[topic.rule]]
 id = "fighter-guns"
@@ -213,9 +277,21 @@ tags = ["code"]
 text = '''A plane that has finished flies back to its airfield at its operational height and goes back into its place in the stock, keeping its health.'''
 
 [[topic.rule]]
+id = "landing-approach"
+tags = ["code", "data"]
+text = '''It heads for a point out beyond the runway: from the runway's start, four times its `length` along the take-off direction (so three lengths past its end), at its operational height, arriving pointed back along the runway, against the take-off direction ([Flying a leg](#flying-a-leg)).'''
+
+[[topic.rule]]
 id = "landing-touchdown"
-tags = ["guess"]
-text = '''It lands on the runway on the way in.'''
+tags = ["code", "data"]
+text = '''
+From there it lands, its legs the take-off's run backwards:
+- down to the runway's far end, `length` from its start, at `taxi_height` above it;
+- back along the runway to its start (if `length` isn't 0), at `taxi_speed` from here on;
+- if `hangar_length` is above 0, to `hangar_length` out from the hangar point and on to the hangar point, still at `taxi_height`, pointed against `hangar_orientation`.
+
+It goes back into the stock at the end of that. A building with `has_landing_runway` (carriers) lands planes the same way along its `landing_` fields: down at `landing_offset`, along `landing_length`, then to `landing_hangar_offset`.
+'''
 
 [[topic.rule]]
 id = "lost-on-sortie"
@@ -228,7 +304,12 @@ title = "When the airfield goes"
 [[topic.rule]]
 id = "airfield-destroyed"
 tags = ["code"]
-text = '''Destroyed: planes in the air carry on with their job. A plane flying home whose airfield no longer exists dies where it is, as if shot down ([combat](combat.toml#dying-in-the-air)): at once if it was already on its way home, or when it turns for home.'''
+text = '''Destroyed: planes in the air carry on with their job. A plane heading home whose airfield no longer exists (when it turns for home, or on the way) heads instead for the nearest living thing of its side whose stock has places for that kind of plane, another airfield or a carrier. If there's none, or that one has no runway, it dies where it is, as if shot down ([combat](combat.toml#dying-in-the-air)). A plane still waiting for the runway when the airfield goes dies there.'''
+
+[[topic.rule]]
+id = "landing-elsewhere"
+tags = ["code"]
+text = '''Landing at a building that isn't the one it came from, a plane takes a place of its kind there that's empty (at home with no health, being rebuilt from nothing), keeping its own health as a share of its maximum. If there's no such place it's removed.'''
 
 [[topic.rule]]
 id = "airfield-captured"
@@ -243,7 +324,7 @@ text = '''The planes in the air keep their old side until they're home.'''
 [[topic.rule]]
 id = "airfield-packed"
 tags = ["code", "data"]
-text = '''Packed: the truck has no stock, so the stock is lost. Planes in the air fly home to the truck, which now holds the airfield's identity, and are removed when they reach it, without being stored. The airfield it later unpacks into starts with an empty stock.'''
+text = '''Packed: the truck has no stock, so the stock is lost. The truck now holds the airfield's identity, so a plane heading home heads for it, and since the truck has no runway it dies where it is, as if shot down ([combat](combat.toml#dying-in-the-air)): at once if it was already heading home, or when it turns for home. The airfield it later unpacks into starts with an empty stock.'''
 
 [[topic.rule]]
 id = "airfield-upgraded"
@@ -252,5 +333,15 @@ text = '''Upgraded or otherwise replaced by a building that has a stock of the s
 
 [[open]]
 q = '''Which planes chase even a target on the ground, rather than making passes? It depends on their weapons, which hasn't been traced.'''
+by = "analysis"
+asked = 2026-11-26
+
+[[open]]
+q = '''The shape of a plane's path through a leg's point: how tight its turns are (its `turn_radius`, or less), and how it goes round a point it can't turn straight towards.'''
+by = "analysis"
+asked = 2026-11-26
+
+[[open]]
+q = '''Landing: how a plane's speed changes on the way down to the runway, and the exact moment it disappears into the stock (at the hangar point, or once its legs are done).'''
 by = "analysis"
 asked = 2026-11-26
