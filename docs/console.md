@@ -44,6 +44,7 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `usefactionability n x y` | uses the nth of the faction's special operations, from 0 as the panel lists them, on the ground at x y | ✓ | ✓ |
 | `pack` | packs up the selected building |  | ✓ |
 | `airattack (x y \| id)` | sends the selected airfield's air attack at x y, or on a building or organization by its id |  | ✓ |
+| `airrecon x y` | sends the selected airfield's air recon to x y |  | ✓ |
 | `escort on \| off` | switches the selected airfield's escort for its air attacks on or off |  | ✓ |
 | `sell` | sells the selected building |  | ✓ |
 | `disband organization` | disbands an organization, by its id |  | ✓ |

@@ -611,6 +611,17 @@ pub(super) fn air_attack(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
+pub(super) fn air_recon(world: &mut World, args: &[&str]) -> Reply {
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let building = selected_building(world)?;
+    let at = match args {
+        [x, y] => place(&world.resource::<Loaded>().map.ground, x, y)?,
+        _ => return Err(usage("airrecon")),
+    };
+    give(world, player, tgsim::Command::AirRecon { building, at })?;
+    Ok(String::new())
+}
+
 pub(super) fn escort(world: &mut World, args: &[&str]) -> Reply {
     let on = match args {
         ["on"] => true,

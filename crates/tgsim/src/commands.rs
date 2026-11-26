@@ -123,7 +123,12 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.may_cancel_construction(player, building)
             }
-            Command::AirAttack { building, on, .. } => self.may_air_attack(player, building, on),
+            Command::AirAttack { building, on, .. } => {
+                self.may_send(player, building, tgmap::AirJob::Offensive, on)
+            }
+            Command::AirRecon { building, .. } => {
+                self.may_send(player, building, tgmap::AirJob::Recon, None)
+            }
             Command::Escort { building, .. } => self.may_set_escort(player, building),
             Command::Heard { ref command } => self.may_hear(command),
             Command::Ability { .. } => Ok(()),
@@ -278,6 +283,7 @@ impl World {
             Command::AirAttack { building, at, on } => {
                 self.order_air_attack(player, building, at, on)?
             }
+            Command::AirRecon { building, at } => self.order_air_recon(player, building, at)?,
             Command::Escort { building, on } => self.set_escort(player, building, on)?,
             Command::Group { orders } => self.order_group(player, orders)?,
             Command::Queued { command } => self.order_queued(player, *command)?,

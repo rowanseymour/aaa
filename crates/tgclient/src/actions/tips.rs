@@ -357,6 +357,7 @@ fn prompted(
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
         (None, Page::AirAttack) => prompt("Left click on a target to air attack"),
+        (None, Page::AirRecon) => prompt("Left click where to scout"),
         (None, Page::Delivering(_)) => prompt("Left click where to deploy"),
         (None, Page::Placing(i)) => {
             let built = builds(sim, selected).into_iter().nth(i);

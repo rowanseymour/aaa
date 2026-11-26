@@ -92,11 +92,12 @@ pub enum Notice {
         template: Id,
     },
     /// An airfield of its, by index into [`World::buildings`], was
-    /// ordered to send out an air attack, which costs `cost` in money, that
-    /// it couldn't pay for.
-    AirAttackUnaffordable {
+    /// ordered to send its group on `job`, an air attack or air recon,
+    /// which costs `cost` in money, that it couldn't pay for.
+    AirUnaffordable {
         player: u32,
         building: usize,
+        job: tgmap::AirJob,
         cost: f32,
     },
     /// The building of `template` an organization of its was to put up

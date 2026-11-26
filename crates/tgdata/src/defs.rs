@@ -497,6 +497,8 @@ pub struct DenizenComponent {
     pub runway: Option<Runway>,
     /// What sending out an air attack costs.
     pub air_attack_cost: Option<Resources>,
+    /// What sending out air recon costs.
+    pub air_recon_cost: Option<Resources>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -530,6 +532,12 @@ pub struct Runway {
     /// axes, and the way it runs.
     pub offset: Option<[f32; 3]>,
     pub orientation: Option<[f32; 2]>,
+    pub length: Option<f32>,
+    /// Where its aircraft wait, the way they face there, and how far they
+    /// taxi straight out from there.
+    pub hangar_offset: Option<[f32; 3]>,
+    pub hangar_orientation: Option<[f32; 2]>,
+    pub hangar_length: Option<f32>,
     /// Seconds between aircraft taking off.
     pub delay: Option<f32>,
 }
@@ -889,6 +897,10 @@ pub struct AircraftComponent {
     pub operational_height: Option<f32>,
     /// How far above the ground it sits when down.
     pub taxi_height: Option<f32>,
+    /// How fast it moves on the ground.
+    pub taxi_speed: Option<f32>,
+    /// What it's drawn at, of its size, on the ground.
+    pub taxi_scale: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

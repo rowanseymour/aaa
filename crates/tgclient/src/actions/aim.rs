@@ -136,7 +136,7 @@ pub fn aim(
 ) {
     if !matches!(
         *page,
-        Page::Aiming(_) | Page::Rally | Page::AirAttack | Page::Delivering(_)
+        Page::Aiming(_) | Page::Rally | Page::AirAttack | Page::AirRecon | Page::Delivering(_)
     ) {
         return;
     }
@@ -206,6 +206,24 @@ pub fn aim(
         *page = Page::Orders;
         if let Some(b) = chosen.0 {
             air_attack(&sim.0, &mut orders, &mut refused, player, b, focus, point);
+        }
+        return;
+    }
+    // Air recon takes only places, so a click on a thing is on the ground
+    // under it.
+    if *page == Page::AirRecon {
+        *page = Page::Orders;
+        if let Some(b) = chosen.0 {
+            let recon = tgsim::Command::AirRecon {
+                building: b,
+                at: point,
+            };
+            if let Err(e) = orders.give(&sim.0, player, recon) {
+                debug!(
+                    "can't air recon from {}: {e:?}",
+                    sim.0.buildings[b].template
+                );
+            }
         }
         return;
     }
