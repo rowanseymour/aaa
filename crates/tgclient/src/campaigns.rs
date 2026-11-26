@@ -1,6 +1,6 @@
 //! The campaigns: the screen that picks a campaign, a mission and a
 //! difficulty, playing missions one after another with no lobby, and the
-//! progress kept between runs. `spec/campaigns.toml` is what it's built to.
+//! progress kept between runs. `docs/spec/campaigns.toml` is what it's built to.
 //!
 //! Progress is kept in a TOML file of this project's own, beside the
 //! options file, rather than the original game's.

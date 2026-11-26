@@ -1,6 +1,6 @@
 //! Leaving a match for its debriefing, and putting the match away behind
-//! it so the menus, and another match, can follow. `spec/outcome.toml` and
-//! `spec/objectives.toml` say what the debriefing shows.
+//! it so the menus, and another match, can follow. `docs/spec/outcome.toml` and
+//! `docs/spec/objectives.toml` say what the debriefing shows.
 
 use std::collections::HashSet;
 

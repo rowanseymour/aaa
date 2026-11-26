@@ -1,7 +1,7 @@
 //! The message log at the top left of the screen: a line, behind its kind's
 //! icon, for each thing the player is told, fading a while after it's
 //! posted. Clicking a line's icon, or the key for it, looks at where it
-//! happened. `spec/messages.toml` is what it's built to.
+//! happened. `docs/spec/messages.toml` is what it's built to.
 
 mod draw;
 mod log;

@@ -1,6 +1,6 @@
 //! The Objectives window: the side's primary and secondary objectives,
 //! each behind a box showing how it stands, one of the [display
-//! panels](crate::displays). `spec/objectives.toml` is what it's built to.
+//! panels](crate::displays). `docs/spec/objectives.toml` is what it's built to.
 
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
