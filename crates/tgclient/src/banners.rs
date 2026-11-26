@@ -83,7 +83,11 @@ impl Badges {
         count: impl Fn(u32, Option<&str>) -> usize,
     ) {
         for hq in hqs {
-            let held = self.0.get_mut(&hq.id);
+            // A badge the map stores is kept only if its nation has that
+            // many; otherwise the HQ draws as a new one does.
+            let stored =
+                |h: &Held| h.side.is_some() || h.badge.is_none_or(|b| b < count(hq.id, None));
+            let held = self.0.get_mut(&hq.id).filter(|h| stored(h));
             let side = held.as_ref().and_then(|h| h.side);
             let moved = side.is_some_and(|s| s != hq.owner);
             if let Some(held) = held.filter(|_| !moved) {
@@ -780,6 +784,15 @@ mod tests {
         // Nothing changes while it stays.
         badges.settle(&[hq(10, 1), hq(11, 1)], nation, count);
         assert_eq!(held(&badges, 10), (Some(1), Some(2), None));
+        // One the map gives a badge beyond its nation's draws afresh.
+        let beyond = Held {
+            side: None,
+            badge: Some(25),
+            nation: None,
+        };
+        badges.0.insert(13, beyond);
+        badges.settle(&[hq(10, 1), hq(11, 1), hq(13, 1)], nation, count);
+        assert!(held(&badges, 13).1.is_some_and(|b| b < 20));
         // Taken by side 2, it picks from that side's nation, clear of the
         // one side 2's own HQ holds.
         badges.settle(&[hq(12, 2)], nation, count);

@@ -85,8 +85,8 @@ impl World {
     }
 
     /// Takes a building off the map for good, leaving it as `state`: its
-    /// ground free again, with nothing queued, aimed at or besieging it.
-    /// An HQ loses its organizations.
+    /// ground free again, with nothing queued, aimed at or besieging it,
+    /// and no supply zone. An HQ loses its organizations.
     pub(crate) fn remove(&mut self, building: usize, state: State) {
         if let Some(hq) = self.hq_of(building) {
             self.detach_all(hq);
@@ -95,6 +95,9 @@ impl World {
         b.state = state;
         b.besieged = None;
         b.target = None;
+        b.aimed.clear();
+        b.supply.zone = None;
+        b.supply.laid = None;
         if let Some(o) = b.obstacle.take() {
             self.pathing.unblock(&o);
         }

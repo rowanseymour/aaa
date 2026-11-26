@@ -496,6 +496,7 @@ mod tests {
             deploy: None,
             organization: None,
             awake: false,
+            stockpile: 0.0,
         }]);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)

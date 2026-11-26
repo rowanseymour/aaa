@@ -279,6 +279,9 @@ pub enum Does {
     Add(Damage),
     /// Morale taken from the organization of the unit it reaches.
     Morale(f32),
+    /// A property given what it reaches for `seconds`, as a saboteur's
+    /// sabotage is.
+    Give { property: Id, seconds: f32 },
 }
 
 impl WeaponHit {
@@ -692,7 +695,7 @@ pub(crate) fn fighter(
     // The weapon an ability is, if it does damage and has a range.
     let weapon_of = |a: &defs::Ability, d: &defs::AbilityDefinition, range: Option<f32>| {
         let hits = weapon_hits(&d.effect);
-        let damages = hits.iter().any(|h| !matches!(h.does, Does::Morale(_)));
+        let damages = (hits.iter()).any(|h| matches!(h.does, Does::Main(_) | Does::Add(_)));
         let range = range.filter(|_| damages)?;
         let turret_point = not_null(a.turret_ids.as_deref().map(Id::from));
         Some(Weapon {
@@ -807,11 +810,19 @@ fn choice(a: &defs::Ability, animations: &[defs::Animation]) -> Choice {
     }
 }
 
-/// What an ability's effects do as a weapon fires it, those that damage or
-/// take morale, in the order it lists them.
+/// What an ability's effects do as a weapon fires it, those that damage,
+/// take morale or give a property, in the order it lists them.
 fn weapon_hits(effects: &[defs::Effect]) -> Vec<WeaponHit> {
     let hit = |e: &defs::Effect| {
+        let given = e.enchantment_property.as_ref();
         let does = match () {
+            _ if given.is_some() => {
+                let p = given?;
+                Does::Give {
+                    property: p.ids.clone()?,
+                    seconds: p.duration.unwrap_or(0.0),
+                }
+            }
             _ if is(&e.kind, "MAIN_DAMAGE") => Does::Main(Damage::of(e)?),
             _ if is(&e.kind, "ADD_DAMAGE") => Does::Add(Damage::of(e)?),
             _ if is(&e.kind, "MORALE_LOSS") => Does::Morale(e.amount?),
@@ -1030,6 +1041,77 @@ mod tests {
             [WeaponHit::main(damage("ap", 200.0)), on_self, morale]
         );
         assert_eq!(weapon.main_damage().count(), 1);
+    }
+
+    #[test]
+    fn a_weapon_gives_the_property_its_enchantment_effect_holds() {
+        let saboteur = read_fighter(
+            "[Thing]
+{
+    IDS = saboteur
+    [BodyComponent]
+    health = 200
+    [PerformerComponent]
+    {
+        [Ability]
+        {
+            [AbilityDefinition]
+            {
+                range = 0.25
+                [Effect]
+                {
+                    type = MAIN_DAMAGE
+                    damage_type_IDS = fire
+                    amount = 1000
+                }
+                [Effect]
+                {
+                    [EnchantmentProperty]
+                    {
+                        IDS = property_sabotage
+                        duration = 60
+                    }
+                }
+            }
+        }
+    }
+}
+",
+        );
+        let given = Does::Give {
+            property: Id::from("property_sabotage"),
+            seconds: 60.0,
+        };
+        assert_eq!(saboteur.weapons[0].hits[1].does, given);
+        // Giving a property alone doesn't make an ability a weapon.
+        let only = read_fighter(
+            "[Thing]
+{
+    IDS = agent
+    [BodyComponent]
+    health = 200
+    [PerformerComponent]
+    {
+        [Ability]
+        {
+            [AbilityDefinition]
+            {
+                range = 0.25
+                [Effect]
+                {
+                    [EnchantmentProperty]
+                    {
+                        IDS = property_sabotage
+                        duration = 60
+                    }
+                }
+            }
+        }
+    }
+}
+",
+        );
+        assert!(only.weapons.is_empty());
     }
 
     #[test]

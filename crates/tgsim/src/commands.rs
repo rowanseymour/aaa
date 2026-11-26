@@ -225,6 +225,8 @@ impl World {
             Command::Rally { building, at } => self.set_rally(player, building, at)?,
             Command::Attach { organization } => {
                 let hq = self.may_attach(player, organization)?;
+                let paid = self.stockpile(player) - self.attach_cost(organization);
+                self.set_stockpile(player, paid);
                 let left = self.organizations[organization].hq.replace(hq);
                 let left = left.map(|hq| Notice::Detached {
                     player,

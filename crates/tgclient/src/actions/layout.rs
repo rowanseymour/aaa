@@ -10,7 +10,7 @@ use tgsim::{Lacking, Researchable};
 use crate::control_groups;
 
 use super::looks::{Looks, look_of};
-use super::press::{sell_command, shown_hq};
+use super::press::{first_hq, sell_command};
 use super::{
     CANCEL, COMMAND_ALL, Entry, Face, Give, MENU_CANCEL, MOST_ALLIES, Menu, ONE_ALLY, ORDERS,
     Offer, Page, SLOTS, Shown, TEAM_CHAT, Target,
@@ -428,7 +428,15 @@ pub(crate) fn ready(
             (
                 Some(give @ (Give::Attach | Give::Detach | Give::Disband | Give::DetachHero)),
                 Some(player),
-            ) => selected.iter().any(|&r| can(sim, Some(player), give, r)),
+            ) => selected.iter().any(|&r| {
+                // What only money stands in the way of is pressed, and refused
+                // with word of what it costs.
+                let short = give == Give::Attach
+                    && give.command(r).is_some_and(|c| {
+                        sim.check(player, &c) == Err(tgsim::Refused::Unaffordable)
+                    });
+                short || can(sim, Some(player), give, r)
+            }),
             (give, _) => give.is_some(),
         },
         Entry::Research(i) => researches[i] == Researchable::Ready,
@@ -490,7 +498,7 @@ pub(crate) fn contents(
     behavior: Option<bool>,
     people: &[u32],
 ) -> Shown {
-    let hq = shown_hq(sim, selected, building);
+    let hq = first_hq(sim, selected, building);
     let menu = looks.menu(sim, building);
     let lacks: Vec<Lacking> = (menu.iter())
         .map(|r| match (building, &r.organization, local) {
@@ -654,6 +662,7 @@ mod tests {
             deploy: None,
             organization: None,
             awake: false,
+            stockpile: 0.0,
         }]);
         if researching {
             let research = tgdata::Research {

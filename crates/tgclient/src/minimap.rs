@@ -551,10 +551,12 @@ fn take_marks(
     marks.icons.sort_by_key(|&(picked, ..)| picked);
     let shown =
         |(u, unit): &(usize, &tgsim::Unit)| unit.alive() && (revealed || fog.shows_unit(*u));
-    for (_, unit) in sim.units.iter().enumerate().filter(shown) {
+    for (u, unit) in sim.units.iter().enumerate().filter(shown) {
         let organization = &sim.organizations[unit.organization];
         let own = mine(organization.owner);
-        let fighting = !organization.engaged.is_empty() || unit.besieged.is_some();
+        // Its regiment's engagement, or its own: engaged or under siege.
+        let fighting =
+            !organization.engaged.is_empty() || sim.unit_engaged(u) || unit.besieged.is_some();
         let picked = own && selected.0.contains(&unit.organization);
         let rgb = match picked {
             true => colours.selected,

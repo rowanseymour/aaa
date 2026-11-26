@@ -84,11 +84,29 @@ fn building_states(b: &tgsim::Building) -> Vec<&'static str> {
     states
 }
 
-/// The properties a unit holds while it lives.
+/// The properties a unit holds while it lives; a regiment's leader plays
+/// those its regiment holds, as the regiment's.
 pub(super) fn held(sim: &World, unit: usize) -> Vec<Id> {
-    match sim.units[unit].alive() {
-        true => sim.lasting(unit).cloned().collect(),
-        false => Vec::new(),
+    if !sim.units[unit].alive() {
+        return Vec::new();
+    }
+    let organization = &sim.organizations[sim.units[unit].organization];
+    let leads = organization.leader.map(|p| organization.units[p]) == Some(unit);
+    let regiments = (organization.properties.iter()).filter(|_| leads);
+    let mut out: Vec<Id> = Vec::new();
+    for p in sim.lasting(unit).chain(regiments.map(|h| &h.property)) {
+        if !out.contains(p) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
+/// The properties a building holds for a time while it stands.
+pub(super) fn building_held(b: &tgsim::Building) -> Vec<Id> {
+    match b.gone() {
+        true => Vec::new(),
+        false => b.properties.iter().map(|h| h.property.clone()).collect(),
     }
 }
 
@@ -224,7 +242,7 @@ pub(super) fn notice(
             target: b.target,
             finished: b.unpacking.is_none() && !b.constructing && !b.gone(),
             site: b.constructing && !b.gone(),
-            held: Vec::new(),
+            held: building_held(b),
         };
         let me = Target::Building(view.building);
         see(
@@ -281,5 +299,25 @@ pub(super) fn see(
             effects.witness(me, template, &mut seen, now, at);
             commands.entity(e).insert(seen);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_regiments_leader_plays_what_the_regiment_holds() {
+        let mut w = crate::orders::testing::fresh();
+        w.organizations[0].properties.push(tgsim::Held {
+            property: Id::from("resupplied"),
+            until: 100,
+            by: None,
+        });
+        w.organizations[0].leader = Some(0);
+        let leader = w.organizations[0].units[0];
+        assert_eq!(held(&w, leader), [Id::from("resupplied")]);
+        w.organizations[0].leader = None;
+        assert!(held(&w, leader).is_empty());
     }
 }

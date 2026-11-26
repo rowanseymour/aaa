@@ -82,12 +82,28 @@ impl Shown {
     }
 }
 
-/// Works out which idle buttons show, as the match changes.
-pub fn refresh(sim: Res<Sim>, local: Res<Local>, mut shown: ResMut<Shown>) {
+/// Works out which idle buttons show, as the match changes: Cycle
+/// Detached's about once a second of play, so it can lag a change by up
+/// to that.
+pub fn refresh(
+    sim: Res<Sim>,
+    local: Res<Local>,
+    mut shown: ResMut<Shown>,
+    mut looked: bevy::ecs::system::Local<Option<u64>>,
+) {
     if !sim.is_changed() && !local.is_changed() {
         return;
     }
-    let now = Shown(Idle::ALL.map(|idle| local.0.is_some_and(|p| idle.shows(&sim.0, p))));
+    let second = sim.0.ticks / (1.0 / tgsim::TICK).round() as u64;
+    let due = local.is_changed() || *looked != Some(second);
+    *looked = Some(second);
+    let mut now = *shown;
+    for idle in Idle::ALL {
+        if idle == Idle::Detached && !due {
+            continue;
+        }
+        now.0[idle.index()] = local.0.is_some_and(|p| idle.shows(&sim.0, p));
+    }
     shown.set_if_neq(now);
 }
 

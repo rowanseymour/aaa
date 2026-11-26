@@ -1,5 +1,6 @@
 //! Supply as the map shows it: a border along the edge of the ground the
-//! player's side is supplied over, and a tint on buildings going without.
+//! player's side is supplied over, and a tint on buildings going without,
+//! which a siege's tint takes over from.
 //! Its key shows and hides the border, as the options do.
 
 use bevy::image::CompressedImageFormatSupport;
@@ -16,6 +17,9 @@ use crate::{Loaded, Local, Screen, Sim};
 
 /// The tint a building out of supply is drawn in.
 const OUT_OF_SUPPLY: &str = "out_of_supply_vfx";
+
+/// The tint a building under siege is drawn in, over that one.
+const UNDER_SIEGE: &str = "under_siege_vfx";
 
 /// Whether the supply border is drawn.
 #[derive(Resource)]
@@ -115,45 +119,71 @@ pub fn show_border(
     ));
 }
 
-/// On a building out of supply: when it went out, in seconds of the wall
-/// clock, which its tint's pulse runs on.
-#[derive(Component)]
-pub struct OutOfSupply(f64);
+/// On a building tinted: when each of its tints began, in seconds of the
+/// wall clock, which their pulses run on; one a stronger tint hides keeps
+/// counting meanwhile.
+#[derive(Component, Default)]
+pub struct Tinted(Vec<(&'static str, f64)>);
 
 /// The steps a tint's strength moves in, so that a pulsing one recolours
 /// its materials a few times a second rather than every frame.
 pub(crate) const TINT_STEPS: f32 = 16.0;
 
-/// Tints the buildings that are out of supply, pulsing for as long as they
-/// are and plain again at once when they're not.
+/// Tints the buildings that are out of supply or under siege, pulsing for
+/// as long as they are and plain again at once when they're not. Only the
+/// tint with the highest priority shows, the siege's over the other.
 pub fn tint_buildings(
     mut commands: Commands,
     sim: Res<Sim>,
     effects: Option<Res<Effects>>,
     time: Res<Time<Real>>,
-    views: Query<(Entity, &BuildingView, Option<&OutOfSupply>, Option<&Tint>)>,
+    mut views: Query<(Entity, &BuildingView, Option<&mut Tinted>, Option<&Tint>)>,
 ) {
-    let Some(pulse) = effects.and_then(|e| e.tint(OUT_OF_SUPPLY)) else {
+    let Some(effects) = effects else {
         return;
     };
     let now = time.elapsed_secs_f64();
-    for (entity, view, since, tint) in &views {
+    for (entity, view, tinted, tint) in &mut views {
         let b = view.building;
-        let out = sim.0.out_of_supply(b) && !sim.0.buildings[b].gone();
-        let since = match (out, since) {
-            (true, Some(&OutOfSupply(since))) => since,
-            (true, None) => {
-                commands.entity(entity).insert(OutOfSupply(now));
-                now
+        let building = &sim.0.buildings[b];
+        let standing = !building.gone();
+        let active = [
+            (OUT_OF_SUPPLY, standing && sim.0.out_of_supply(b)),
+            (UNDER_SIEGE, standing && building.besieged.is_some()),
+        ];
+        let active: Vec<_> = (active.into_iter())
+            .filter(|&(_, on)| on)
+            .filter_map(|(id, _)| Some((id, effects.tint(id)?)))
+            .collect();
+        if active.is_empty() {
+            if tinted.is_some() {
+                commands.entity(entity).remove::<(Tinted, Tint)>();
             }
-            (false, Some(_)) => {
-                commands.entity(entity).remove::<(OutOfSupply, Tint)>();
-                continue;
-            }
-            (false, None) => continue,
+            continue;
+        }
+        let mut fresh = Vec::new();
+        let since = match tinted {
+            Some(t) => &mut t.into_inner().0,
+            None => &mut fresh,
         };
-        let level = (pulse.level((now - since) as f32) * TINT_STEPS).round() / TINT_STEPS;
+        since.retain(|(id, _)| active.iter().any(|(a, _)| a == id));
+        for (id, _) in &active {
+            if !since.iter().any(|(s, _)| s == id) {
+                since.push((id, now));
+            }
+        }
+        // The first held of the strongest.
+        let shown = (since.iter())
+            .filter_map(|&(id, at)| Some((at, active.iter().find(|(a, _)| *a == id)?.1)))
+            .reduce(|a, b| if b.1.priority > a.1.priority { b } else { a });
+        let Some((at, pulse)) = shown else {
+            continue;
+        };
+        let level = (pulse.level((now - at) as f32) * TINT_STEPS).round() / TINT_STEPS;
         let colour = Tint(pulse.colour(level));
+        if !fresh.is_empty() {
+            commands.entity(entity).insert(Tinted(fresh));
+        }
         if tint != Some(&colour) {
             commands.entity(entity).insert(colour);
         }

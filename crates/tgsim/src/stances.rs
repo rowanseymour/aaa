@@ -23,6 +23,12 @@ impl World {
             .collect()
     }
 
+    /// Whether the unit at `u` is attacking a target of its own, as
+    /// [`World::unit_states`] has it.
+    pub fn unit_engaged(&self, u: usize) -> bool {
+        self.in_state(u, ENGAGED)
+    }
+
     /// Whether the unit at `u` is in `state`, as [`World::unit_states`]
     /// has them; a dead one is in no other.
     fn in_state(&self, u: usize, state: &str) -> bool {

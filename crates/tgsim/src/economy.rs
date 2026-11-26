@@ -429,13 +429,39 @@ impl World {
     /// `recruiter` takes: its own cost and its members', times what the
     /// recruiter's properties make of what it charges.
     pub fn cost(&self, recruiter: usize, organization: &tgmap::Organization) -> f32 {
+        self.listed_cost(organization) * self.recruit_multiplier(recruiter)
+    }
+
+    /// What `organization`'s templates list as its cost in money: each
+    /// member's, and its own unless it's a lone unit.
+    fn listed_cost(&self, organization: &tgmap::Organization) -> f32 {
         let money = money(&self.rules.economy);
         let members = organization.members.iter().map(|m| &m.template);
         let own = (!organization.lone()).then_some(&organization.template);
-        let listed: f32 = (members.chain(own))
+        (members.chain(own))
             .map(|t| self.economy_of(t).cost.get(money))
-            .sum();
-        listed * self.recruit_multiplier(recruiter)
+            .sum()
+    }
+
+    /// What an order to attach the organization at `r` to an HQ costs:
+    /// a share of what recruiting it does, scaled by what it holds itself.
+    pub fn attach_cost(&self, r: usize) -> f32 {
+        let share = self.rules.supply_rules.attach_cost;
+        let organization = &self.organizations[r];
+        let Some(raised) = self.rules.raisable.get(&organization.template) else {
+            return 0.0;
+        };
+        if share == 0.0 {
+            return 0.0;
+        }
+        let listed = self.listed_cost(raised);
+        let on = [Thing::Organization(r)];
+        let held = &organization.properties;
+        let effects =
+            self.economy_effects(organization.owner, &organization.template, &[], held, &on);
+        let added: f32 = effects.iter().map(|e| e.recruit_cost).sum();
+        let multiplier = (1.0 + added).max(self.rules.supply_rules.multiply_floor);
+        listed * multiplier * share
     }
 
     /// What the building at `recruiter` charges for what it recruits is

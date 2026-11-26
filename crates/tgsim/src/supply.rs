@@ -39,9 +39,9 @@ pub struct Supplying {
     /// Whether it's been looked at since it was put down or changed hands.
     pub(crate) judged: bool,
     /// Whether it was unpacking or packing when last looked at.
-    busy: bool,
+    pub(crate) busy: bool,
     /// The tile its zone was laid around, and how far.
-    laid: Option<(Tile, f32)>,
+    pub(crate) laid: Option<(Tile, f32)>,
 }
 
 impl Supplying {
@@ -62,10 +62,22 @@ impl World {
     }
 
     /// Whether a building that passes supply on has none to pass: nothing
-    /// reaches it and its stockpile is spent.
+    /// reaches it and its stockpile is spent. One that needs supply but
+    /// gives none goes without off its side's ground.
     pub fn out_of_supply(&self, b: usize) -> bool {
         let s = &self.buildings[b].supply;
-        s.judged && !s.connected && s.stockpile <= 0.0 && self.supply_of(b).is_some_and(|p| p.relay)
+        let judged = match self.supply_of(b) {
+            Some(p) => p.relay,
+            None => self.needs_supply(b),
+        };
+        s.judged && !s.connected && s.stockpile <= 0.0 && judged
+    }
+
+    /// Whether the building at `b` needs supply but gives none of its own,
+    /// so is judged by the ground it stands on.
+    fn needs_supply(&self, b: usize) -> bool {
+        let building = &self.buildings[b];
+        self.supply_of(b).is_none() && self.economy_of(&building.template).supply_required
     }
 
     /// Whether `player`'s supply covers `at`: its own zones' and its
@@ -262,6 +274,13 @@ impl World {
     /// or lifting its zone to match, and on its beat filling or draining a
     /// relay's stockpile. Returns whether its zone came, went or changed.
     fn judge(&mut self, b: usize, beat: bool) -> bool {
+        if self.needs_supply(b) {
+            let covered = self.covered(b);
+            let busy = self.buildings[b].busy();
+            let s = &mut self.buildings[b].supply;
+            (s.connected, s.busy) = (covered, busy);
+            return false;
+        }
         let (Some(supply), Some(range)) = (self.supply_of(b), self.supply_range(b)) else {
             return false;
         };
@@ -288,6 +307,7 @@ impl World {
         let gives = sided
             && !busy
             && building.state == State::Standing
+            && (self.rules.supply_rules.under_siege || building.besieged.is_none())
             && range >= 0.0
             && (connected || stockpile > 0.0)
             && building.zone.is_none_or(|city| self.held_firmly(b, city));
@@ -398,22 +418,28 @@ impl World {
         (0..self.organizations.len())
             .any(|e| self.organizations[e].engaged.contains(&them) && !self.destroyed(e))
             || (self.buildings.iter()).any(|b| {
-                // A building counts only while it has one of them as its
-                // target, not for having noticed them.
-                let aimed =
-                    matches!(b.target, Some(Target::Unit(u)) if self.units[u].organization == r);
-                b.standing() && aimed
+                // A building counts only while one of its weapons has one
+                // of them as its target, not for having noticed them. One
+                // that defends itself fires on while disabled.
+                let aimed = (b.aimed.iter().flatten())
+                    .any(|&t| matches!(t, Target::Unit(u) if self.units[u].organization == r));
+                let firing = b.standing() || b.fighter.notice.is_some() && !b.gone();
+                firing && aimed
             })
     }
 
     /// Whether a shot `s` fires with `weapon` is bombardment. For what
-    /// picks its own shots the order decides, whatever the weapon; a
-    /// building defending itself or an aircraft on its attack run doesn't,
-    /// so there the weapon does.
+    /// picks its own shots the order decides, whatever the weapon, and only
+    /// while it's shelling: fighting an enemy that came near, it fires as
+    /// in any engagement. A building defending itself or an aircraft on
+    /// its attack run doesn't pick, so there the weapon does.
     pub(crate) fn bombards(&self, s: Target, weapon: &Weapon) -> bool {
         match s {
             Target::Unit(u) if self.units[u].aloft => weapon.bombard,
-            Target::Unit(u) => self.organizations[self.units[u].organization].bombarding,
+            Target::Unit(u) => {
+                let organization = &self.organizations[self.units[u].organization];
+                organization.bombarding && organization.engaged.is_empty()
+            }
             Target::Building(b) => weapon.bombard && self.buildings[b].fighter.notice.is_some(),
         }
     }
@@ -525,8 +551,7 @@ impl World {
             self.forget_bombarders(r);
             let organization = &self.organizations[r];
             let used = self.logistics_of(&organization.template);
-            // One still being dropped is with its aircraft, not in supply.
-            let present = !self.destroyed(r) && !organization.arriving;
+            let present = !self.destroyed(r);
             let Some(logistics) = used.filter(|l| l.supply_used && present) else {
                 self.organizations[r].in_supply = false;
                 continue;
@@ -541,7 +566,9 @@ impl World {
             let held = &organization.properties;
             let flagged =
                 (self.effects(owner, &organization.template, held, &on)).any(|e| e.supplied);
+            // One still being let go of is with its aircraft, not in supply.
             let in_supply = sided
+                && !self.with_transport(r)
                 && !self.engaged_by(r)
                 && organization.bombarded.is_empty()
                 && (organization.hq.is_some() || logistics.detached || flagged)
@@ -664,14 +691,14 @@ impl World {
     }
 
     /// The nearest building near the organization at `r` that recruits its
-    /// kind and could send it a member now.
+    /// kind and has a way for its recruits out, whatever it's doing.
     pub(crate) fn recruiter(&self, r: usize) -> Option<&Building> {
         let organization = &self.organizations[r];
         let at = self.leader_position(r);
         let recruits = |b: &&Building| {
             let list = self.rules.recruit_lists.get(&b.template);
             b.standing()
-                && !b.busy()
+                && b.deploy.is_some()
                 && self.shares_supply(organization.owner, b.owner)
                 && list.is_some_and(|l| l.contains(&organization.template))
                 && distance(at, b.position) < organization.control(&self.rules.guard_rules)
@@ -820,6 +847,54 @@ mod tests {
         run(&mut w, 3.0);
         assert!(w.buildings.iter().all(|b| b.supply.zone.is_some()));
         assert!(!w.out_of_supply(0));
+    }
+
+    #[test]
+    fn relays_a_map_places_start_with_the_stockpile_it_stores() {
+        let mut w = World::from_organizations(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+        (w.rules.supplies).insert(Id::from("depot"), supply(20.0, true, 4.0));
+        let mut depot = building(7, 1, [20.0, 20.0]);
+        depot.template = "depot".into();
+        depot.stockpile = 0.5;
+        w.add_buildings(&[depot]);
+        assert_eq!(w.buildings[0].supply.stockpile, 2.0);
+        // Cut off, it lives on what it has.
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].supply.zone.is_some());
+        run(&mut w, 2.0);
+        assert!(w.out_of_supply(0) && w.buildings[0].supply.zone.is_none());
+    }
+
+    #[test]
+    fn providers_under_siege_supply_only_if_the_game_says_so() {
+        let mut w = chain();
+        run(&mut w, 1.0);
+        w.buildings[2].besieged = Some(w.ticks + 100);
+        run(&mut w, 1.0);
+        assert!(w.buildings[2].supply.zone.is_some());
+        w.rules.supply_rules.under_siege = false;
+        run(&mut w, 1.0);
+        assert!(w.buildings[2].supply.zone.is_none());
+    }
+
+    #[test]
+    fn buildings_that_need_supply_but_give_none_go_by_their_ground() {
+        let mut w = chain();
+        let economy = tgmap::Economy {
+            supply_required: true,
+            ..tgmap::Economy::default()
+        };
+        w.rules.economies.insert(Id::from("works"), economy);
+        let works = |id, at| {
+            let mut works = building(id, 1, at);
+            works.template = "works".into();
+            works
+        };
+        w.add_buildings(&[works(8, [20.0, 80.0]), works(9, [20.0, 30.0])]);
+        let far = w.buildings.len() - 2;
+        run(&mut w, 1.0);
+        assert!(w.out_of_supply(far));
+        assert!(!w.out_of_supply(far + 1));
     }
 
     #[test]
@@ -1085,14 +1160,61 @@ mod tests {
     }
 
     #[test]
+    fn replacements_come_from_the_nearest_recruiter_with_a_way_out_whatever_its_doing() {
+        let mut w = division();
+        let mut near = building(70, 1, [26.0, 24.0]);
+        near.template = "depot".into();
+        let mut far = building(71, 1, [26.0, 32.0]);
+        far.template = "depot".into();
+        far.deploy = Some(DeployPoints {
+            creation: [0.0, 0.0],
+            deployment: [-6.0, 0.0],
+        });
+        w.add_buildings(&[near, far]);
+        let (near, far) = (w.buildings.len() - 2, w.buildings.len() - 1);
+        assert_eq!(w.buildings[near].deploy, None);
+        // The nearer has no way out, and the farther is busy unpacking.
+        w.buildings[far].unpacking = Some((w.ticks, w.ticks + 50));
+        assert_eq!(w.recruiter(1).map(|b| b.id), Some(71));
+        w.buildings[near].deploy = w.buildings[far].deploy;
+        assert_eq!(w.recruiter(1).map(|b| b.id), Some(70));
+    }
+
+    #[test]
     fn buildings_engage_only_what_their_weapons_target() {
         let mut w = division();
         w.buildings[0].owner = 2;
         w.buildings[0].noticed.push(Piece::Organization(1));
         assert!(!w.engaged_by(1));
         let member = w.organizations[1].units[0];
-        w.buildings[0].target = Some(Target::Unit(member));
+        // Any of its weapons, whatever the others aim at.
+        w.buildings[0].aimed = vec![None, Some(Target::Unit(member))];
         assert!(w.engaged_by(1));
+        // One that defends itself still fires while disabled.
+        w.buildings[0].state = State::Disabled;
+        assert!(!w.engaged_by(1));
+        w.buildings[0].fighter.notice = Some(10.0);
+        assert!(w.engaged_by(1));
+    }
+
+    #[test]
+    fn a_bunker_stops_engaging_a_regiment_that_leaves_its_reach() {
+        let mut bunker = building(20, 2, [10.0, 24.0]);
+        bunker.fighter.weapons = vec![rifle(12.0, 10.0)];
+        bunker.fighter.notice = Some(10.0);
+        let mut w = siege(&[bunker]);
+        w.units[0].fighter = Some(soldier(Vec::new()));
+        w.tick();
+        // Walking in wakes it.
+        w.units[0].position = [10.0, 16.0];
+        w.tick();
+        assert!(w.engaged_by(0));
+        // Nothing else in reach for it to pick, and it's still the one it
+        // last fired on.
+        w.units[0].position = [10.0, -20.0];
+        w.tick();
+        assert!(!w.engaged_by(0));
+        assert_eq!(w.buildings[0].target, Some(Target::Unit(0)));
     }
 
     #[test]
@@ -1169,6 +1291,21 @@ mod tests {
         w.apply(1, Command::Detach { organization: 1 }).unwrap();
         run(&mut w, 200.0);
         assert!(w.destroyed(1));
+    }
+
+    #[test]
+    fn organizations_still_arriving_wear_away_while_their_side_is_short() {
+        let mut w = division();
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[("money", 500.0)]);
+        w.set_stockpile(1, 0.0);
+        w.organizations[1].arriving = true;
+        run(&mut w, 3.0);
+        let a = w.organizations[1].units[0];
+        assert!(w.units[a].health < 100.0);
     }
 
     #[test]
@@ -1319,9 +1456,7 @@ mod tests {
         let (bombarded, engaged) = shelled(false);
         assert!(bombarded.is_empty());
         assert_eq!(engaged, [Piece::Building(1)]);
-        // A building that picks its own shots makes ordinary hits, and a
-        // organization ordered to bombard does so, with its bombarding
-        // weapons.
+        // A building that picks its own shots makes ordinary hits.
         let mut w = supplied_division();
         let mut gun = building(30, 2, [40.0, 14.0]);
         gun.fighter.weapons = vec![Weapon {
@@ -1331,17 +1466,6 @@ mod tests {
         w.add_buildings(&[gun]);
         w.tick();
         assert!(w.organizations[1].bombarded.is_empty());
-        let shell = Weapon {
-            bombard: true,
-            ..rifle(12.0, 30.0)
-        };
-        let mut w = battle(&[1, 2], vec![soldier(vec![shell]); 2], at_war());
-        w.organizations[0].bombarding = true;
-        // It engages, then fires.
-        w.tick();
-        w.tick();
-        assert_eq!(w.organizations[1].bombarded[0].by, Piece::Organization(0));
-        assert!(w.organizations[0].bombarded.is_empty());
     }
 
     #[test]
@@ -1558,9 +1682,10 @@ mod tests {
         // goes, and its zone with it.
         run(&mut w, 7.0);
         assert_eq!(w.buildings[b].health, 10.0);
-        w.tick();
-        assert!(matches!(w.buildings[b].state, State::Destroyed(_)));
-        run(&mut w, 1.0);
+        while !matches!(w.buildings[b].state, State::Destroyed(_)) {
+            assert!(w.supplied(1, [44.0, 64.0]));
+            w.tick();
+        }
         assert!(!w.supplied(1, [44.0, 64.0]));
     }
 

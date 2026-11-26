@@ -508,7 +508,18 @@ const RUN: usize = 4;
 fn guides(corners: &[Vec2]) -> Vec<Vec2> {
     let n = corners.len();
     let at = |i: usize| corners[i % n];
-    let mut guides = Vec::new();
+    let average =
+        |(from, to): (usize, usize)| (from..=to).map(at).sum::<Vec2>() / (to - from + 1) as f32;
+    runs(corners).into_iter().map(average).collect()
+}
+
+/// The runs [`guides`] takes `corners` in, each as the indices of its
+/// first and last corner, the last perhaps one past the end for the
+/// start again.
+fn runs(corners: &[Vec2]) -> Vec<(usize, usize)> {
+    let n = corners.len();
+    let at = |i: usize| corners[i % n];
+    let mut runs = Vec::new();
     let mut from = 0;
     while from < n {
         let heading = at(from + 1) - at(from);
@@ -517,24 +528,26 @@ fn guides(corners: &[Vec2]) -> Vec<Vec2> {
         while to < n && to - from < RUN && ahead(to) {
             to += 1;
         }
-        let run = (from..=to).map(at);
-        guides.push(run.sum::<Vec2>() / (to - from + 1) as f32);
+        runs.push((from, to));
         from = to;
     }
-    guides
+    runs
 }
 
 /// The closed uniform cubic B-spline with `guides` as its control points,
 /// as the straight pieces it's drawn in: for each guide point, the
 /// curve's joint by it and the point halfway along to the next joint.
-fn spline(guides: &[Vec2]) -> Vec<Vec2> {
+fn spline<T>(guides: &[T]) -> Vec<T>
+where
+    T: Copy + std::ops::Add<Output = T> + std::ops::Mul<f32, Output = T>,
+{
     let n = guides.len();
     let g = |i: usize| guides[i % n];
     (0..n)
         .flat_map(|i| {
             let (before, at, next, after) = (g(i + n - 1), g(i), g(i + 1), g(i + 2));
-            let joint = (before + 4.0 * at + next) / 6.0;
-            let halfway = (before + 23.0 * at + 23.0 * next + after) / 48.0;
+            let joint = (before + at * 4.0 + next) * (1.0 / 6.0);
+            let halfway = (before + at * 23.0 + next * 23.0 + after) * (1.0 / 48.0);
             [joint, halfway]
         })
         .collect()
@@ -546,11 +559,30 @@ fn curve(corners: &[[f32; 2]]) -> Vec<Vec2> {
     spline(&guides(&corners))
 }
 
+/// The line a border along the closed outline `corners` is drawn as, with
+/// its heights: each guide point's the average of its corners' on the
+/// `ground`, blended along the curve as its places are, so the line runs
+/// straight between its points whatever the ground does there.
+fn curve_over(ground: &Ground, corners: &[[f32; 2]]) -> Vec<Vec3> {
+    let n = corners.len();
+    let flat: Vec<Vec2> = corners.iter().map(|&p| Vec2::from(p)).collect();
+    let height = |i: usize| ground.height_at(corners[i % n]);
+    let heights: Vec<f32> = (runs(&flat).into_iter())
+        .map(|(from, to)| (from..=to).map(height).sum::<f32>() / (to - from + 1) as f32)
+        .collect();
+    let places = spline(&guides(&flat));
+    (places.into_iter().zip(spline(&heights)))
+        .map(|(p, h)| p.extend(h))
+        .collect()
+}
+
 /// Points along a closed path, about `step` apart all the way round, for
 /// what's drawn along it to bend with the ground between its own points.
-fn paced(path: &[Vec2], step: f32) -> Vec<Vec2> {
+fn paced(path: &[Vec3], step: f32) -> Vec<Vec3> {
     let next = |i: usize| path[(i + 1) % path.len()];
-    let round: f32 = (0..path.len()).map(|i| path[i].distance(next(i))).sum();
+    let round: f32 = (0..path.len())
+        .map(|i| path[i].truncate().distance(next(i).truncate()))
+        .sum();
     let count = (round / step).round().max(3.0) as usize;
     let step = round / count as f32;
     let mut points = Vec::with_capacity(count);
@@ -558,11 +590,16 @@ fn paced(path: &[Vec2], step: f32) -> Vec<Vec2> {
     let (mut side, mut before) = (0, 0.0);
     for n in 0..count {
         let along = n as f32 * step;
-        while side + 1 < path.len() && before + path[side].distance(next(side)) < along {
-            before += path[side].distance(next(side));
+        while side + 1 < path.len()
+            && before + path[side].truncate().distance(next(side).truncate()) < along
+        {
+            before += path[side].truncate().distance(next(side).truncate());
             side += 1;
         }
-        let length = path[side].distance(next(side)).max(f32::EPSILON);
+        let length = path[side]
+            .truncate()
+            .distance(next(side).truncate())
+            .max(f32::EPSILON);
         points.push(path[side].lerp(next(side), (along - before) / length));
     }
     points
@@ -601,11 +638,11 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
     let mut uvs = Vec::new();
     let mut indices = Vec::new();
     for path in loops.iter().filter(|l| l.len() > 2) {
-        let path = paced(&curve(path), STEP);
+        let path = paced(&curve_over(ground, path), STEP);
         let n = path.len();
         let inward = |i: usize| {
             let along = path[(i + 1) % n] - path[(i + n - 1) % n];
-            along.perp().normalize_or_zero()
+            along.truncate().perp().normalize_or_zero()
         };
         // Where a zone runs off the map there's no edge of it to mark.
         let on_map = |i: usize| {
@@ -619,8 +656,9 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
         for i in 0..=n {
             for a in 0..ACROSS {
                 let u = a as f32 / (ACROSS - 1) as f32;
-                let Vec2 { x, y } = path[i % n] + inward(i % n) * (u - 0.5) * width;
-                positions.push(world(x, y, ground.height_at([x, y]) + LIFT).to_array());
+                let at = path[i % n];
+                let Vec2 { x, y } = at.truncate() + inward(i % n) * (u - 0.5) * width;
+                positions.push(world(x, y, at.z + LIFT).to_array());
                 uvs.push([u, i as f32 / n as f32 * repeats]);
             }
         }
@@ -819,8 +857,17 @@ mod tests {
 
     #[test]
     fn borders_run_along_their_paths_on_the_ground() {
+        // Raised a tile outside the square, at none of its corners.
         let side = 33;
-        let heights = (0..side * side).map(|i| (i % 5) as f32).collect();
+        let heights = (0..side * side)
+            .map(|i| {
+                if i % side == 3 || i / side == 3 {
+                    5.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
         let ground = Ground::from_heights(heights);
         let mesh = border(&ground, &[square(8, 56)], 1.0);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
@@ -835,10 +882,11 @@ mod tests {
         };
         assert!(!positions.is_empty());
         // Half its width either side of the path, the image's left edge
-        // outside what the path bounds.
+        // outside what the path bounds, and as high as the corners' ground
+        // blended, whatever lies between them.
         for (p, [u, _]) in positions.iter().zip(uvs) {
             let [x, y] = crate::space::map_point(Vec3::from_array(*p));
-            assert!((p[1] - ground.height_at([x, y]) - LIFT).abs() < 1e-4);
+            assert!((p[1] - LIFT).abs() < 1e-4, "{p:?}");
             assert!((7.49..56.51).contains(&x) && (7.49..56.51).contains(&y));
             // Along the middle of the near side, clear of the corners.
             if (24.0..40.0).contains(&x) && y < 12.0 {

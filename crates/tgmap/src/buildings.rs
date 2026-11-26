@@ -34,6 +34,8 @@ pub struct Building {
     pub deploy: Option<DeployPoints>,
     /// For one that defends itself, whether it was saved woken.
     pub awake: bool,
+    /// For a relay, the stockpile the map stores, as a share of its most.
+    pub stockpile: f32,
     /// The organization it stands in, as a Division HQ's building does,
     /// without its members: packing puts the truck in the building's
     /// place there.
@@ -72,6 +74,7 @@ pub(crate) fn buildings(
                 fighter: fighter.clone(),
                 health: actor.body().map_or(1.0, |b| b.health),
                 awake: actor.defender().is_some_and(|d| d.id >= 0),
+                stockpile: actor.supply_stockpile().unwrap_or(0.0),
                 zone: zones.get(&template).copied(),
                 members: actor
                     .city()

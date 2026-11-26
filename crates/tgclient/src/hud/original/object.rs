@@ -1018,7 +1018,7 @@ impl<'a> shown::Parts<'a> for Draw<'a, '_> {
                         (n == 0).then_some(Fill::Progress(b)),
                     );
                 }
-                shown::Holding::Flown(picture, _) => {
+                shown::Holding::Flown(picture, ..) => {
                     self.show(&parts, "Button/ButtonDecal/Decal", picture);
                     fill(self, "HealthTransport", Some(Fill::Flight));
                 }

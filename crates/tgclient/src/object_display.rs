@@ -1174,8 +1174,9 @@ pub(crate) enum Holding {
         picture: Option<Handle<Image>>,
     },
     /// An organization on its way by air: its picture, and the aircraft
-    /// bringing it, by index into the sim's deliveries.
-    Flown(Option<Handle<Image>>, usize),
+    /// bringing it, by index into the sim's deliveries and as the
+    /// organization it's selected as.
+    Flown(Option<Handle<Image>>, usize, Option<usize>),
     /// Nothing, saying so.
     Empty(String),
 }
@@ -1203,8 +1204,11 @@ impl Holding {
                 card.insert((Button, id, Queued(place), says(of), Pickable::default()))
                     .observe(cancel);
             }
-            &Holding::Flown(_, d) => {
+            &Holding::Flown(_, d, plane) => {
                 card.insert((Button, id, says(Says::Delivery(d)), Pickable::default()));
+                if let Some(r) = plane {
+                    card.insert(Pick(r)).observe(pick);
+                }
                 centres(card, Says::Delivery(d));
             }
             Holding::Empty(said) => {
@@ -1364,7 +1368,9 @@ impl Shows<'_> {
             (Place::Flown(d), _) => {
                 let template = self.sim.deliveries[d].template.to_string();
                 let picture = self.picture(&template);
-                Holding::Flown(picture, d)
+                let plane = self.sim.deliveries[d].plane;
+                let plane = plane.map(|u| self.sim.units[u].organization);
+                Holding::Flown(picture, d, plane)
             }
             _ => Holding::Empty(self.looks.said(EMPTY_SLOT)),
         }
@@ -1999,12 +2005,16 @@ pub(crate) fn share(sim: &World, fill: Fill) -> f32 {
 /// progress out of 100, or supply. Nothing of nothing for what has no
 /// such measure.
 fn measure(sim: &World, fill: Fill) -> (f32, f32) {
+    // An empty position shows its replacement's progress as its health.
     let unit = |u: usize| {
         let unit = &sim.units[u];
         let full = sim.max_health(u);
+        let organization = &sim.organizations[unit.organization];
+        let place = organization.units.iter().position(|&m| m == u);
+        let replaced = place.and_then(|p| organization.replacing.get(p).copied());
         match unit.alive() {
             true => (unit.health, full),
-            false => (0.0, full),
+            false => (replaced.unwrap_or(0.0), full),
         }
     };
     match fill {
@@ -2939,6 +2949,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_empty_position_shows_its_replacements_progress_as_health() {
+        let mut w = crate::orders::testing::fresh();
+        w.units[0].died = Some(0);
+        w.organizations[0].replacing[0] = 0.25;
+        assert_eq!(measure(&w, Fill::Unit(0)).0, 0.25);
+    }
+
+    #[test]
     fn the_efficiency_marker_comes_from_its_bars_layout() {
         use tgdata::widgets::{ViewElement, Widget};
         let widget = |name: &str, parts, children| Widget {
@@ -3055,6 +3073,7 @@ mod tests {
             deploy: None,
             organization: None,
             awake: false,
+            stockpile: 0.0,
         };
         sim.add_buildings(&[hq]);
         sim

@@ -76,6 +76,8 @@ pub(crate) struct Hit {
     kind: Option<Id>,
     /// It's what the weapon's user did to itself.
     on_user: bool,
+    /// A property it gives what it lands on, for so many seconds.
+    gives: Option<(Id, f32)>,
 }
 
 impl Hit {
@@ -101,6 +103,7 @@ impl Hit {
             morale: 0.0,
             kind,
             on_user: false,
+            gives: None,
         }
     }
 }
@@ -215,6 +218,7 @@ fn effect_does(
         Does::Main(d) => (damage(d, f, ground, scale, blow), 0.0, Some(d.kind.clone())),
         Does::Add(d) => (added(d, f, ground), 0.0, Some(d.kind.clone())),
         Does::Morale(amount) => (0.0, amount * scale, None),
+        Does::Give { .. } => (0.0, 0.0, None),
     }
 }
 
@@ -456,6 +460,11 @@ impl World {
                     (b.fired_ago.clone(), b.target, b.shot, false)
                 }
             };
+            let mut aimed = match s {
+                Target::Building(b) => self.buildings[b].aimed.clone(),
+                Target::Unit(_) => Vec::new(),
+            };
+            aimed.resize(fighter.weapons.len(), None);
             // Only a weapon that's fired since its shooter last stood still
             // needs the rate: one that hasn't is ready at any.
             let mut rate = None;
@@ -472,6 +481,12 @@ impl World {
                 // The rate is read as the time is checked, so a change to it
                 // shortens or lengthens a recharge under way.
                 fired_ago[w] += TICK;
+                // A weapon drops what's left its reach.
+                if aimed[w]
+                    .is_some_and(|t| self.fighter(t).is_none() || !self.can_hit(s, weapon, t))
+                {
+                    aimed[w] = None;
+                }
                 if held || moving && !weapon.turret {
                     continue;
                 }
@@ -493,7 +508,15 @@ impl World {
                 {
                     continue;
                 }
-                let Some(t) = self.aim(s, weapon, target) else {
+                let last = match s {
+                    Target::Building(_) => aimed[w],
+                    Target::Unit(_) => target,
+                };
+                let picked = self.aim(s, weapon, last);
+                if let Target::Building(_) = s {
+                    aimed[w] = picked;
+                }
+                let Some(t) = picked else {
                     continue;
                 };
                 target = Some(t);
@@ -537,6 +560,7 @@ impl World {
                         }
                     }
                     (b.fired_ago, b.target, b.shot, b.turrets) = (fired_ago, target, shot, turrets);
+                    b.aimed = aimed;
                 }
             }
         }
@@ -805,12 +829,15 @@ impl World {
             if let Target::Unit(u) = hit.target {
                 let r = self.units[u].organization;
                 let alive = self.units[u].alive();
+                // Only what carries damage, its kind, is bombardment: an
+                // effect that only takes morale or gives a property isn't.
+                let damages = hit.kind.is_some();
                 match (hit.bombard, hit.from) {
                     // Bombardment keeps what it hurts out of supply rather
                     // than drawing its fire. A member away from its
                     // organization counts as itself, so not against it.
                     (Some(recharge), Some(from)) if alive => {
-                        if self.with_organization(u) {
+                        if damages && self.with_organization(u) {
                             self.shell(r, from, recharge);
                         }
                     }
@@ -819,6 +846,23 @@ impl World {
                 }
             }
             let target = hit.target;
+            // Only on what the hit itself lands on: a living unit, or a
+            // standing building not of the shooter's own side.
+            let takes = match target {
+                Target::Unit(u) => self.units[u].alive(),
+                Target::Building(b) => {
+                    let building = &self.buildings[b];
+                    building.standing() && !(building.owner == hit.by && hit.from.is_some())
+                }
+            };
+            if let Some((property, seconds)) = hit.gives.as_ref().filter(|_| takes) {
+                let kind = self.rules.enchantment_types.get(property).cloned();
+                let t = match target {
+                    Target::Unit(u) => crate::targets::Thing::Unit(u),
+                    Target::Building(b) => crate::targets::Thing::Building(b),
+                };
+                self.bestow(t, hit.by, property, *seconds, kind.as_ref());
+            }
             if self.strike_down(hit, follows)
                 && let Target::Unit(u) = target
             {
@@ -1257,6 +1301,7 @@ impl World {
                 morale,
                 kind,
                 on_user: true,
+                gives: None,
             });
         }
     }
@@ -1308,6 +1353,10 @@ impl World {
                 }
                 struck = true;
                 let (amount, morale, kind) = effect_does(h, f, &ground, scale, blow);
+                let gives = match &h.does {
+                    Does::Give { property, seconds } => Some((property.clone(), *seconds)),
+                    _ => None,
+                };
                 hits.push(Hit {
                     target,
                     amount,
@@ -1317,6 +1366,7 @@ impl World {
                     morale,
                     kind,
                     on_user: false,
+                    gives,
                 });
             }
             // Only on what the attack itself hits.
@@ -1330,6 +1380,7 @@ impl World {
                     morale: 0.0,
                     kind: Some(d.kind.clone()),
                     on_user: false,
+                    gives: None,
                 });
             }
         }
@@ -2184,6 +2235,7 @@ mod tests {
             morale: 0.75,
             kind: None,
             on_user: false,
+            gives: None,
         };
         // Player 3 is player 1's ally.
         w.land(hit(3));
@@ -2209,6 +2261,39 @@ mod tests {
     }
 
     #[test]
+    fn sabotage_takes_a_buildings_supply_for_a_minute_once_at_a_time() {
+        let mut w = siege(&[building(20, 2, [10.0, 24.0])]);
+        w.rules
+            .supplies
+            .insert(Id::from("house"), crate::testing::supply(20.0, false, 0.0));
+        (w.rules.supply_effects).insert(
+            Id::from("sabotage"),
+            crate::testing::effect(-100.0, 0.0, false, &[]),
+        );
+        let gives = Does::Give {
+            property: Id::from("sabotage"),
+            seconds: 60.0,
+        };
+        let rifle = &mut w.units[0].fighter.as_mut().unwrap().weapons[0];
+        rifle.hits.push(hit("", false, gives));
+        // It engages, then fires.
+        w.tick();
+        w.tick();
+        // Given as the last tick began, for 60 seconds.
+        let until = w.buildings[0].properties[0].until;
+        assert_eq!(until, w.ticks - 1 + 600);
+        assert_eq!(w.supply_range(0), Some(-80.0));
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].supply.zone.is_none());
+        // Sabotage while sabotaged neither adds nor starts the minute again.
+        let health = w.buildings[0].health;
+        run(&mut w, 10.0);
+        assert!(w.buildings[0].health < health - 30.0);
+        assert_eq!(w.buildings[0].properties.len(), 1);
+        assert_eq!(w.buildings[0].properties[0].until, until);
+    }
+
+    #[test]
     fn a_bombarder_under_orders_keeps_a_building_under_siege_longer() {
         let besieged = |ordered: bool| {
             let mut w = siege(&[building(20, 2, [10.0, 40.0])]);
@@ -2223,6 +2308,7 @@ mod tests {
                 morale: 0.0,
                 kind: None,
                 on_user: false,
+                gives: None,
             });
             w.buildings[0].besieged.unwrap() - w.ticks
         };

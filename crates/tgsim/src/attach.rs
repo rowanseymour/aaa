@@ -207,7 +207,11 @@ impl World {
         if !used.is_some_and(|l| l.supply_used) {
             return Err(Refused::Unable);
         }
-        self.attaches_to(r).ok_or(Refused::Unable)
+        let hq = self.attaches_to(r).ok_or(Refused::Unable)?;
+        if self.attach_cost(r) > self.stockpile(player) {
+            return Err(Refused::Unaffordable);
+        }
+        Ok(hq)
     }
 
     pub(crate) fn may_detach(&self, player: u32, r: usize) -> Result<(), Refused> {
@@ -227,10 +231,14 @@ impl World {
         }
     }
 
-    /// Detaches every organization attached to the HQ `hq`.
+    /// Detaches every organization attached to the HQ `hq`, and frees the
+    /// places aircraft hold there, so what they bring arrives unattached.
     pub(crate) fn detach_all(&mut self, hq: u32) {
         for organization in &mut self.organizations {
             organization.hq = organization.hq.filter(|&id| id != hq);
+        }
+        for delivery in &mut self.deliveries {
+            delivery.hq = delivery.hq.filter(|&id| id != hq);
         }
     }
 
@@ -253,6 +261,28 @@ mod tests {
     use tgmap::Id;
 
     use crate::{Command, Notice, Refused};
+
+    #[test]
+    fn attaching_costs_a_share_of_the_recruit_cost_and_is_refused_unpaid() {
+        let mut w = division();
+        let company = raised_company(&mut w, 1);
+        recruits(&mut w, "depot", company, 1.0);
+        let economy = tgmap::Economy {
+            cost: amounts(&[("money", 100.0)]),
+            ..Default::default()
+        };
+        w.rules.economies.insert(Id::from("company"), economy);
+        w.rules.supply_rules.attach_cost = 0.5;
+        assert_eq!(w.attach_cost(1), 50.0);
+        w.set_stockpile(1, 60.0);
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        assert_eq!(w.stockpile(1), 10.0);
+        // Short of it, nothing's taken and the regiment stays as it was.
+        w.apply(1, Command::Detach { organization: 1 }).unwrap();
+        let attach = w.apply(1, Command::Attach { organization: 1 });
+        assert_eq!(attach, Err(Refused::Unaffordable));
+        assert_eq!((w.stockpile(1), w.organizations[1].hq), (10.0, None));
+    }
 
     #[test]
     fn hqs_destroyed_packed_or_unpacked_detach_their_organizations_at_once() {

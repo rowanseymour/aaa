@@ -900,6 +900,16 @@ impl Thing {
     pub fn hq_badge(&self) -> Option<i32> {
         self.actor()?.hq_badge()
     }
+
+    /// A relay's stockpile as a share of its template's most.
+    pub fn supply_stockpile(&self) -> Option<f32> {
+        self.actor()?.supply_stockpile()
+    }
+
+    /// The ids of the organizations in this thing's places as an HQ.
+    pub fn hq_organizations(&self) -> Option<Vec<u32>> {
+        self.actor()?.hq_organizations()
+    }
 }
 
 impl Detail {

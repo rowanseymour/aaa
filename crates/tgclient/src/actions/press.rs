@@ -158,8 +158,13 @@ impl Presser<'_, '_> {
                 }
                 Some(give @ (Give::Rout | Give::Attach | Give::Detach | Give::DetachHero)) => {
                     let mut given = false;
+                    let mut short = Vec::new();
                     for &organization in &self.selected.0 {
                         if let Some(command) = give.command(organization) {
+                            let check = sim.check(player, &command);
+                            if give == Give::Attach && check == Err(tgsim::Refused::Unaffordable) {
+                                short.push(organization);
+                            }
                             given |= self.orders.give(sim, player, command).is_ok();
                         }
                     }
@@ -173,6 +178,9 @@ impl Presser<'_, '_> {
                             player,
                             selected,
                         );
+                    }
+                    for r in short {
+                        self.refuse_attach(r);
                     }
                 }
                 // A side with no heroes is refused without a word.
@@ -248,11 +256,17 @@ impl Presser<'_, '_> {
             }
             Entry::CommandAll => {
                 let building = self.chosen.0.filter(|_| self.selected.0.is_empty());
-                let attached: Vec<usize> = shown_hq(sim, &self.selected.0, building)
-                    .map_or(Vec::new(), |hq| sim.attached(hq).collect());
-                // As the game does, even where that leaves nothing selected.
-                self.selected.0 = attached;
-                self.chosen.0 = None;
+                // One thing alone: an HQ, or a regiment attached to one.
+                let one = match &self.selected.0[..] {
+                    &[r] => sim.organizations[r].hq,
+                    _ => None,
+                };
+                if let Some(hq) = shown_hq(sim, &self.selected.0, building).or(one) {
+                    // As the game does, even where that leaves nothing
+                    // selected.
+                    self.selected.0 = sim.attached(hq).collect();
+                    self.chosen.0 = None;
+                }
             }
             Entry::Sell => {
                 if let Some(b) = self.chosen.0 {
@@ -369,6 +383,30 @@ impl Presser<'_, '_> {
         });
     }
 
+    /// Tells the player their side can't afford to attach the organization
+    /// at `r`, pointing at the HQ it would go to.
+    fn refuse_attach(&mut self, r: usize) {
+        let sim = &self.sim.0;
+        let name = match self.log.as_deref() {
+            Some(log) => log.look.organization(sim, r),
+            None => sim.organizations[r].template.to_string(),
+        };
+        let cost = sim.attach_cost(r).ceil().to_string();
+        let text = fill(&self.looks.recruit.attach_affording, &[&name, &cost]);
+        let hq = sim.attaches_to(r);
+        let building = (0..sim.buildings.len())
+            .find(|&b| hq.is_some() && !sim.buildings[b].gone() && sim.hq_of(b) == hq);
+        let packed = (0..sim.organizations.len()).find(|&o| hq.is_some() && sim.packed_hq(o) == hq);
+        let about = building
+            .map(About::Building)
+            .or(packed.map(About::Organization));
+        self.failed.write(Failed {
+            text,
+            about,
+            at: None,
+        });
+    }
+
     /// Tells the player the selected building at `building` won't research
     /// the `i`th item it lists, and why.
     fn refuse_research(&mut self, building: usize, i: usize, refused: tgsim::Refused) {
@@ -475,6 +513,20 @@ pub(super) fn recruit_refused(
         }
     };
     looks.recruit.refused(refused, &recruit.look.name, cost, hq)
+}
+
+/// The HQ the selection begins with, by its id, which shows Command All:
+/// the selected building, or the first selected organization, packed.
+pub(crate) fn first_hq(
+    sim: &tgsim::World,
+    selected: &[usize],
+    building: Option<usize>,
+) -> Option<u32> {
+    match (selected, building) {
+        ([], Some(b)) => sim.hq_of(b),
+        ([r, ..], _) => sim.packed_hq(*r),
+        _ => None,
+    }
 }
 
 /// The HQ the selection is, by its id: the selected building, or the one

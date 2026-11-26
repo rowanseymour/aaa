@@ -18,6 +18,11 @@ pub struct SupplyRules {
     pub multiply_floor: f32,
     /// Morale a second a regiment regaining it gains more in supply.
     pub morale_bonus: f32,
+    /// Whether a provider under siege goes on giving supply.
+    pub under_siege: bool,
+    /// What attaching a regiment to an HQ costs, as a share of what
+    /// recruiting it does.
+    pub attach_cost: f32,
 }
 
 impl Default for SupplyRules {
@@ -27,6 +32,8 @@ impl Default for SupplyRules {
             bombard_timeout: 1.0,
             multiply_floor: 0.05,
             morale_bonus: 0.5,
+            under_siege: true,
+            attach_cost: 0.0,
         }
     }
 }
@@ -266,6 +273,9 @@ impl GameData {
                 default.multiply_floor,
             ),
             morale_bonus: of(|v| v.morale_supply_bonus, default.morale_bonus),
+            under_siege: (self.svar(|v| v.supply_provide_under_siege))
+                .unwrap_or(default.under_siege),
+            attach_cost: of(|v| v.hq_attach_cost_percentage, default.attach_cost),
         }
     }
 

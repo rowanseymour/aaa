@@ -95,6 +95,7 @@ const MIND: u32 = 4;
 const PROPERTIES: u32 = 6;
 const ORGANIZATION: u32 = 7;
 const ELEMENT: u32 = 8;
+const SUPPLY: u32 = 11;
 const CONSTRUCTION: u32 = 15;
 const EXPERIENCE: u32 = 17;
 const DEFENDER: u32 = 20;
@@ -1316,6 +1317,53 @@ impl Actor {
         cur.i32().ok()
     }
 
+    /// A relay's stockpile as a share of its template's most, if its record
+    /// holds one.
+    pub fn supply_stockpile(&self) -> Option<f32> {
+        let data = self.decoded()?.iter().find_map(|c| match c {
+            Component::Framed { bit: SUPPLY, data } => Some(data),
+            _ => None,
+        })?;
+        let mut cur = Cursor::new(data);
+        let version = cur.u32().ok()?;
+        if version < 2 {
+            return None;
+        }
+        Updatable::parse(&mut cur).ok()?;
+        cur.f32().ok()
+    }
+
+    /// The ids of the organizations in this HQ's places, if it's an HQ, in
+    /// place order. Places a transport or the recruit queue holds, and
+    /// empty ones, aren't among them.
+    pub fn hq_organizations(&self) -> Option<Vec<u32>> {
+        let data = self.decoded()?.iter().find_map(|c| match c {
+            Component::Framed { bit: HQ, data } => Some(data),
+            _ => None,
+        })?;
+        let mut cur = Cursor::new(data);
+        Updatable::parse(&mut cur).ok()?;
+        let version = cur.u32().ok()?;
+        cur.i32().ok()?;
+        let mut out = Vec::new();
+        // Earlier versions say nothing of what a place holds.
+        if version < 3 {
+            return Some(out);
+        }
+        for _ in 0..cur.u32().ok()? {
+            if cur.u8().ok()? == 0 {
+                continue;
+            }
+            let kind = cur.u32().ok()?;
+            let organization = cur.u32().ok()?;
+            cur.i32().ok()?;
+            if kind == 0 {
+                out.push(organization);
+            }
+        }
+        Some(out)
+    }
+
     /// The experience it's earned, if its record holds an experience
     /// component.
     pub fn experience(&self) -> Option<f32> {
@@ -1676,6 +1724,41 @@ mod tests {
         let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
         assert_eq!(parsed.hq_badge(), Some(7));
         assert_eq!(actor(0, vec![]).hq_badge(), None);
+    }
+
+    #[test]
+    fn reads_a_relays_stockpile() {
+        let mut supply = Writer::default();
+        supply.u32(2);
+        Updatable { version: 1, id: 20 }.write(&mut supply);
+        supply.f32(0.5);
+        supply.u32(0);
+        let w = hollow(1 << SUPPLY);
+        let bytes = [&w.0[..24], &supply.0, &w.0[24..]].concat();
+        let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
+        assert_eq!(parsed.supply_stockpile(), Some(0.5));
+        assert_eq!(actor(0, vec![]).supply_stockpile(), None);
+    }
+
+    #[test]
+    fn reads_the_organizations_in_an_hqs_places() {
+        let mut hq = Writer::default();
+        Updatable { version: 1, id: 20 }.write(&mut hq);
+        hq.u32(3);
+        hq.i32(-1);
+        // An organization, an empty place, a transport and another.
+        hq.u32(4);
+        for (kind, id) in [(0, 31), (3, 0), (1, 40), (0, 32)] {
+            hq.u8(1);
+            hq.u32(kind);
+            hq.u32(id);
+            hq.i32(-1);
+        }
+        let w = hollow(1 << HQ);
+        let bytes = [&w.0[..24], &hq.0, &w.0[24..]].concat();
+        let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
+        assert_eq!(parsed.hq_organizations(), Some(vec![31, 32]));
+        assert_eq!(actor(0, vec![]).hq_organizations(), None);
     }
 
     #[test]

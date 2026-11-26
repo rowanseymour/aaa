@@ -522,6 +522,42 @@ mod tests {
     }
 
     #[test]
+    fn only_shelling_that_does_damage_is_bombardment() {
+        let mut w = shelling(vec![Weapon {
+            hits: vec![tgmap::WeaponHit {
+                targets: tgmap::Targets::default(),
+                on_user: false,
+                does: tgmap::Does::Morale(2.0),
+            }],
+            ..mortar(30.0)
+        }]);
+        w.apply(1, bombard(ENEMY)).unwrap();
+        run(&mut w, 1.0);
+        assert!(w.units[0].shot.is_some());
+        assert!(w.organizations[1].bombarded.is_empty());
+    }
+
+    #[test]
+    fn fighting_off_an_enemy_that_comes_near_is_no_bombardment() {
+        let mut w = shelling(vec![mortar(30.0)]);
+        w.apply(1, bombard(ENEMY)).unwrap();
+        run(&mut w, 1.0);
+        assert!(!w.organizations[1].bombarded.is_empty());
+        // It comes near, and its shelling turns to an engagement.
+        let unit = &mut w.units[1];
+        (unit.position, unit.previous) = ([10.0, 16.0], [10.0, 16.0]);
+        w.organizations[1].position = [10.0, 16.0];
+        w.organizations[1].bombarded.clear();
+        while w.organizations[0].engaged.is_empty() {
+            w.tick();
+        }
+        let health = w.units[1].health;
+        run(&mut w, 3.0);
+        assert!(w.organizations[0].bombarding && w.units[1].health < health);
+        assert!(w.organizations[1].bombarded.is_empty());
+    }
+
+    #[test]
     fn units_out_of_reach_drive_towards_where_the_target_stood() {
         let mut w = shelling(vec![mortar(15.0)]);
         w.apply(1, bombard(ENEMY)).unwrap();
