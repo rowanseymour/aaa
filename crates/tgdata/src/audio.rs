@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{AnimationKind, GameData, Id, defs, logged, scoped};
+use crate::{AnimationKind, GameData, Id, defs, logged};
 
 /// An [`Audio`] an object plays when something happens.
 #[derive(Debug, Clone, PartialEq)]
@@ -193,19 +193,13 @@ pub struct AudioWho {
 }
 
 impl GameData {
-    /// The game's settings for how it looks and sounds, the game's own
-    /// before the engine's.
+    /// The game's settings for how it looks and sounds, the last read first.
     pub(crate) fn avars(&self) -> Arc<Vec<defs::AVars>> {
-        self.kept("avars", || {
-            // Not in the load lists.
-            let versions = self.versions("AVars.tgi");
-            let files = self.parse_named(versions.iter().map(String::as_str));
-            let files = scoped(&files);
-            files.iter().flat_map(|f| f.read("Vars")).collect()
-        })
+        self.kept("avars", || self.settings("AVars"))
     }
 
-    /// The first of the look and sound settings that `of` finds.
+    /// The look and sound setting that `of` finds, as the last file to set
+    /// it sets it.
     pub(crate) fn avar<T>(&self, of: impl Fn(&defs::AVars) -> Option<T>) -> Option<T> {
         self.avars().iter().find_map(of)
     }

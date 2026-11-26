@@ -482,7 +482,9 @@ impl GameData {
         names.into_iter().map(|(g, (_, name))| (g, name)).collect()
     }
 
-    /// The colours players can take, by id, e.g. `blue`.
+    /// The colours players can take, by id, e.g. `blue`. The only repeats
+    /// left, those read into a first without a name ([`crate::cut_short`]),
+    /// replace it.
     pub fn kingdom_colors(&self) -> HashMap<Id, [f32; 3]> {
         (self.read_all::<defs::KingdomColor>(|n| n == "game/kingdom_colors.tgi", "KingdomColor"))
             .into_iter()
