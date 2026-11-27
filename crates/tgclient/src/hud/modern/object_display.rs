@@ -2,10 +2,13 @@
 //! [`Showing`] says, laid out as the game's own but without its chrome. Its
 //! title names what's shown and its owner, and a line along the bottom says
 //! what it earns and takes to keep, and what it's doing. What the pointer's
-//! on says what it is in a box above the display.
+//! on says what it is in a box above the display. For the player's own
+//! organizations, the formation's icon on the title opens the formations
+//! to choose between.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::image::CompressedImageFormatSupport;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
@@ -17,7 +20,7 @@ use crate::displays::Icon;
 use crate::hud::original::Cards;
 use crate::object_display::*;
 use crate::ui::Blocks;
-use crate::ui::{self, Font, Gauge, Hint, Ink, Shade, Surface, framed, label, meter};
+use crate::ui::{self, Edge, Font, Gauge, Hint, Ink, Shade, Surface, framed, label, meter};
 use crate::{Loaded, Local, Sim};
 
 /// Our pixels to one of the game's interface units, in which its layout is
@@ -77,10 +80,27 @@ const OWNER_GAP: f32 = 6.0;
 const PROPERTY: f32 = 24.0;
 const PROPERTY_GAP: f32 = 2.0;
 
+/// A formation choice's side, and the margin round its icon and round the
+/// choices in their well.
+const FORMATION: f32 = 30.0;
+const FORMATION_IN: f32 = 3.0;
+const FORMATIONS_IN: f32 = 2.0;
+
 /// What holds the properties' icons, so that they change without the
 /// rest of the display being laid out again under the pointer.
 #[derive(Component)]
 pub struct PropertyRow;
+
+/// The button on the title showing the formation chosen, which opens the
+/// others to choose from, and its picture.
+#[derive(Component)]
+pub struct FormationPicker;
+#[derive(Component)]
+pub struct PickerIcon;
+
+/// The well the formation choices open in, under their picker.
+#[derive(Component)]
+pub struct FormationChoices;
 
 /// The object display, whose children show what [`Showing`] says.
 #[derive(Component)]
@@ -171,6 +191,110 @@ pub fn spawn(mut commands: Commands) {
         .add_children(&[said, display]);
 }
 
+/// Our icon for organizations in different formations.
+const MIXED: &str = "formation_mixed";
+
+/// Whether the formation choices are open under their picker.
+#[derive(Resource, Default)]
+pub struct ChoosingFormation(bool);
+
+/// Opens or closes the formation choices as their picker is clicked.
+fn toggle_formations(_: On<bevy::ui_widgets::Activate>, mut open: ResMut<ChoosingFormation>) {
+    open.0 = !open.0;
+}
+
+/// Closes the formation choices once one's clicked, even the one already
+/// chosen, which changes nothing else.
+fn chose_formation(_: On<bevy::ui_widgets::Activate>, mut open: ResMut<ChoosingFormation>) {
+    open.0 = false;
+}
+
+/// The choices' well, not the picker nor its picture.
+type FormationChoicesOnly = (
+    With<FormationChoices>,
+    Without<FormationPicker>,
+    Without<PickerIcon>,
+);
+
+type PickerOnly = (With<FormationPicker>, Without<PickerIcon>);
+
+type PickerParts<'a> = (
+    &'a Hovered,
+    &'a mut Visibility,
+    &'a mut Surface,
+    &'a mut Hint,
+);
+
+/// Shows the formation picker while there are formations to choose
+/// between, with the one chosen on it, and the choices under it while
+/// open: closed again once one's chosen, by a press anywhere but the
+/// picker, or by the selection changing.
+#[allow(clippy::too_many_arguments)]
+pub fn show_formations(
+    formations: Res<crate::formations::Formations>,
+    selected: Res<crate::Selected>,
+    sim: Res<Sim>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    loaded: Res<Loaded>,
+    looks: Res<Looks>,
+    mut open: ResMut<ChoosingFormation>,
+    mut cache: ResMut<ui::ImageCache>,
+    mut images: ResMut<Assets<Image>>,
+    mut pickers: Query<PickerParts, PickerOnly>,
+    mut icons: Query<(&mut ImageNode, &mut Visibility), With<PickerIcon>>,
+    mut choices: Query<&mut Visibility, FormationChoicesOnly>,
+    mut was: bevy::prelude::Local<Option<Id>>,
+) {
+    let offered = !formations.offered.is_empty();
+    let hovered = pickers.iter().any(|(h, ..)| h.get());
+    let chosen = *was != formations.lit;
+    was.clone_from(&formations.lit);
+    let away = mouse.just_pressed(MouseButton::Left) && !hovered;
+    if chosen || away || selected.is_changed() || !offered {
+        open.0 = false;
+    }
+    let look = (formations.lit.as_ref()).and_then(|f| looks.formation_looks.get(f));
+    let name = |f: &Id| (looks.formation_looks.get(f)).map_or(f.to_string(), |l| l.name.clone());
+    // What the lit choice's hint says, or for a mix the formations in it.
+    let said = match &formations.lit {
+        Some(f) => format!("{}{}", name(f), crate::formations::told(&looks, &sim.0, f)),
+        None => (formations.held.iter())
+            .map(name)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    for (hovered, mut shown, mut fill, mut hint) in &mut pickers {
+        shown.set_if_neq(ui::visible(offered));
+        fill.set_if_neq(match (open.0, hovered.get()) {
+            (true, _) => Surface::Chosen,
+            (false, true) => Surface::Hovered,
+            (false, false) => Surface::Button,
+        });
+        if hint.0 != said {
+            hint.0.clone_from(&said);
+        }
+    }
+    let game = &loaded.game;
+    // Organizations in different formations have none chosen, so it shows
+    // that rather than one they aren't all in.
+    let path = match look {
+        Some(look) => look.icon.as_ref().map(|path| game.modern_icon(path)),
+        None => Some(crate::displays::icon(MIXED)),
+    };
+    let icon = path.and_then(|path| cache.get(game, &mut images, &path));
+    for (mut image, mut shown) in &mut icons {
+        shown.set_if_neq(ui::visible(icon.is_some()));
+        if let Some(icon) = &icon
+            && image.image != *icon
+        {
+            image.image = icon.clone();
+        }
+    }
+    for mut well in &mut choices {
+        well.set_if_neq(ui::visible(open.0));
+    }
+}
+
 /// Puts the player's nation's emblem behind the display, or takes it away
 /// where the nation has none, as the player or the display changes.
 #[allow(clippy::too_many_arguments)]
@@ -230,6 +354,7 @@ pub fn lay_out(
     showing: Res<Showing>,
     mut from: ShowsFrom,
     cards: Option<Res<Cards>>,
+    formations: Res<crate::formations::Formations>,
     mut display: Single<(Entity, &mut Visibility), With<ObjectDisplay>>,
     row: Query<Entity, With<PropertyRow>>,
 ) {
@@ -253,6 +378,8 @@ pub fn lay_out(
         commands: &mut commands,
         root: *root,
         cards: cards.as_deref(),
+        choosing: !formations.offered.is_empty(),
+        strip: None,
         shows: from.shows(detail),
     };
     match row {
@@ -268,6 +395,11 @@ struct Ui<'a, 'w, 's> {
     root: Entity,
     /// The group display's cards, where the game's layouts have them.
     cards: Option<&'a Cards>,
+    /// Whether the formations are there to choose between, which then
+    /// stand in for the formation's own icon.
+    choosing: bool,
+    /// The title's strip, once drawn.
+    strip: Option<Entity>,
     shows: Shows<'a>,
 }
 
@@ -382,8 +514,88 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
         }
     }
 
-    /// Ours are beside the command grid instead.
-    fn formation_buttons(&mut self) {}
+    /// Ours open from a picker on the title's right.
+    fn formation_buttons(&mut self) {
+        let Some(strip) = self.strip else {
+            return;
+        };
+        let square = px(PROPERTY * SCALE);
+        let side = px(FORMATION * SCALE);
+        let picture = || {
+            (
+                Shade::Full,
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    ..default()
+                },
+            )
+        };
+        let picker = (
+            FormationPicker,
+            Button,
+            Hovered::default(),
+            Pickable::default(),
+            Hint(String::new()),
+            ui::called("formation.picker"),
+            ui::well(Node {
+                width: square,
+                height: square,
+                padding: UiRect::all(px(FORMATIONS_IN * SCALE)),
+                margin: UiRect::left(px(PROPERTY_GAP * SCALE)),
+                flex_shrink: 0.0,
+                ..default()
+            }),
+        );
+        // Drops down from the picker, centred under it.
+        let across = (FORMATION + 2.0 * FORMATIONS_IN) * SCALE + 2.0;
+        let choices = (
+            FormationChoices,
+            Visibility::Hidden,
+            GlobalZIndex(ui::layer::HUD_TOP),
+            ui::well(Node {
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                top: percent(100),
+                right: px((PROPERTY * SCALE - across) / 2.0 - 1.0),
+                margin: UiRect::top(px(FORMATIONS_IN * SCALE)),
+                row_gap: px(FORMATIONS_IN * SCALE),
+                padding: UiRect::all(px(FORMATIONS_IN * SCALE)),
+                ..default()
+            }),
+        );
+        self.commands
+            .spawn((picker, ChildOf(strip)))
+            .observe(toggle_formations)
+            .with_children(|picker| {
+                picker.spawn((
+                    PickerIcon,
+                    picture(),
+                    ImageNode::default(),
+                    Pickable::IGNORE,
+                ));
+                picker.spawn(choices).with_children(|well| {
+                    for n in 0..crate::formations::MOST {
+                        well.spawn((
+                            crate::formations::button_bundle(n),
+                            crate::formations::StandIns,
+                            Node {
+                                width: side,
+                                height: side,
+                                border: UiRect::all(px(1)),
+                                padding: UiRect::all(px(FORMATION_IN * SCALE)),
+                                border_radius: BorderRadius::all(px(ui::WELL_CORNER)),
+                                ..default()
+                            },
+                            Surface::Clear,
+                            Edge::Clear,
+                            children![(crate::formations::FormationIcon, picture())],
+                        ))
+                        .observe(chose_formation);
+                    }
+                });
+            });
+    }
 
     /// The strip across the top: the name over the owner, and, where it
     /// has `properties`, the icons for those that show on its right.
@@ -391,6 +603,7 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
         let owner = self.shows.owner(owner);
         let gem = self.shows.gem;
         let mut row = None;
+        let mut drawn = None;
         self.commands.entity(self.root).with_children(|display| {
             let strip = Node {
                 position_type: PositionType::Absolute,
@@ -403,54 +616,55 @@ impl<'a> Parts<'a> for Ui<'a, '_, '_> {
                 border_radius: BorderRadius::top(px(ui::CORNER)),
                 ..default()
             };
-            display
-                .spawn((strip, Surface::Slot, Pickable::IGNORE))
-                .with_children(|strip| {
-                    // Cut short rather than wrapped, which would outgrow the strip.
-                    let lines = Node {
-                        flex_direction: FlexDirection::Column,
-                        flex_grow: 1.0,
-                        min_width: px(0),
-                        overflow: Overflow::clip(),
-                        ..default()
-                    };
-                    let unwrapped = || TextLayout::new(Justify::Left, LineBreak::NoWrap);
-                    strip
-                        .spawn((lines, Pickable::IGNORE))
-                        .with_children(|lines| {
-                            lines.spawn((label(name, Font::HudTitle, Ink::Body), unwrapped()));
-                            let Some(owner) = owner else {
-                                return;
-                            };
-                            let line = Node {
-                                column_gap: px(OWNER_GAP * SCALE),
-                                ..default()
-                            };
-                            lines.spawn((line, Pickable::IGNORE)).with_children(|line| {
-                                if let Some(rgb) = owner.gem {
-                                    let size = px(ui::GEM * SCALE);
-                                    let mark = Node {
-                                        width: size,
-                                        height: size,
-                                        align_self: AlignSelf::Center,
-                                        ..default()
-                                    };
-                                    line.spawn(ui::side_mark(gem, rgb, mark));
-                                }
-                                let name = ui::coloured(owner.name, Font::Hud, owner.colour);
-                                line.spawn((name, unwrapped()));
-                            });
-                        });
-                    if properties {
-                        let icons = Node {
-                            column_gap: px(PROPERTY_GAP * SCALE),
-                            flex_shrink: 0.0,
+            let mut strip = display.spawn((strip, Surface::Slot, Pickable::IGNORE));
+            drawn = Some(strip.id());
+            strip.with_children(|strip| {
+                // Cut short rather than wrapped, which would outgrow the strip.
+                let lines = Node {
+                    flex_direction: FlexDirection::Column,
+                    flex_grow: 1.0,
+                    min_width: px(0),
+                    overflow: Overflow::clip(),
+                    ..default()
+                };
+                let unwrapped = || TextLayout::new(Justify::Left, LineBreak::NoWrap);
+                strip
+                    .spawn((lines, Pickable::IGNORE))
+                    .with_children(|lines| {
+                        lines.spawn((label(name, Font::HudTitle, Ink::Body), unwrapped()));
+                        let Some(owner) = owner else {
+                            return;
+                        };
+                        let line = Node {
+                            column_gap: px(OWNER_GAP * SCALE),
                             ..default()
                         };
-                        row = Some(strip.spawn((PropertyRow, icons, Pickable::IGNORE)).id());
-                    }
-                });
+                        lines.spawn((line, Pickable::IGNORE)).with_children(|line| {
+                            if let Some(rgb) = owner.gem {
+                                let size = px(ui::GEM * SCALE);
+                                let mark = Node {
+                                    width: size,
+                                    height: size,
+                                    align_self: AlignSelf::Center,
+                                    ..default()
+                                };
+                                line.spawn(ui::side_mark(gem, rgb, mark));
+                            }
+                            let name = ui::coloured(owner.name, Font::Hud, owner.colour);
+                            line.spawn((name, unwrapped()));
+                        });
+                    });
+                if properties {
+                    let icons = Node {
+                        column_gap: px(PROPERTY_GAP * SCALE),
+                        flex_shrink: 0.0,
+                        ..default()
+                    };
+                    row = Some(strip.spawn((PropertyRow, icons, Pickable::IGNORE)).id());
+                }
+            });
         });
+        self.strip = drawn;
         if let Some(row) = row {
             self.icons(row);
         }
@@ -748,10 +962,13 @@ impl Ui<'_, '_, '_> {
     /// An icon for each property that shows, and a marker listing any
     /// more than there are places for.
     fn icons(&mut self, row: Entity) {
-        let (tips, more) = self
-            .shows
-            .looks
-            .property_tips(&self.shows.detail.properties);
+        let formations = &self.shows.looks.formations;
+        let choosing = self.choosing;
+        let properties: Vec<_> = (self.shows.detail.properties.iter())
+            .filter(|(p, _)| !choosing || !formations.values().any(|f| f.contains(p)))
+            .cloned()
+            .collect();
+        let (tips, more) = self.shows.looks.property_tips(&properties);
         let seen = self.shows.detail.seen_as.map(WhileSeen);
         let square = || Node {
             width: px(PROPERTY * SCALE),

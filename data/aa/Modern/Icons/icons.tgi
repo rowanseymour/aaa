@@ -85,6 +85,25 @@
 	texture = formation_column.svg
 }
 
+;; The formation buttons, drawn as the formations' properties are.
+[IconStandIn]
+{
+	image = /Organizations/Formations/FormationIcons/FormationIconAssault.png
+	texture = formation_assault.svg
+}
+
+[IconStandIn]
+{
+	image = /Organizations/Formations/FormationIcons/FormationIconAggressive.png
+	texture = formation_defensive.svg
+}
+
+[IconStandIn]
+{
+	image = /Organizations/Formations/FormationIcons/FormationIconColumn.png
+	texture = formation_column.svg
+}
+
 [IconStandIn]
 {
 	image = /Properties/PropertyIcons/IconPropertyCity.png

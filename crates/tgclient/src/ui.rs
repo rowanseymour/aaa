@@ -165,6 +165,7 @@ impl Theme {
             Shade::Full => Color::WHITE,
             Shade::Dimmed => Color::srgb(0.35, 0.35, 0.35),
             Shade::Dark => Color::srgb(0.2, 0.2, 0.2),
+            Shade::Faint => Color::srgb(0.6, 0.6, 0.6),
         }
     }
 
@@ -268,6 +269,45 @@ impl Edge {
     }
 }
 
+/// How our interface draws a choice among a [`well`]'s others, by how far
+/// it's the current one and whether it's under the pointer: its fill, its
+/// frame and how brightly its picture shows. Every choice is clickable, so
+/// none is just shown; the current one is filled and framed as lit.
+pub fn choice(choice: Choice, hovered: bool) -> (Surface, Edge, Shade) {
+    match (choice, hovered) {
+        (Choice::Current, _) => (Surface::Chosen, Edge::Lit, Shade::Full),
+        (_, true) => (Surface::Hovered, Edge::Clear, Shade::Full),
+        (Choice::Partly, false) => (Surface::Clear, Edge::Card, Shade::Full),
+        (Choice::Other, false) => (Surface::Clear, Edge::Clear, Shade::Faint),
+    }
+}
+
+/// How far a [`choice`] is the current one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Choice {
+    Current,
+    /// The current one for some of what it's chosen for, but not all.
+    Partly,
+    Other,
+}
+
+/// The raised box our interface sets clickable [`choice`]s in, so they
+/// stand apart from what's only shown, laid out as `node`.
+pub fn well(node: Node) -> impl Bundle {
+    (
+        Node {
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(WELL_CORNER)),
+            ..node
+        },
+        Surface::Button,
+        Edge::Card,
+    )
+}
+
+/// The corners of a [`well`] and of the choices in it.
+pub const WELL_CORNER: f32 = 4.0;
+
 /// How brightly a picture is drawn.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 #[require(ImageNode)]
@@ -277,6 +317,8 @@ pub enum Shade {
     Dimmed,
     /// What's gone, such as a dead unit.
     Dark,
+    /// A choice that isn't the current one.
+    Faint,
 }
 
 /// A bar on a [`Surface::Track`], filled to a share of its width in a

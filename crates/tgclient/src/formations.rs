@@ -10,7 +10,7 @@ use tgmap::Id;
 
 use crate::intent::Intent;
 use crate::orders::Orders;
-use crate::ui::{Edge, Hint, Marked};
+use crate::ui::{Edge, Hint, Marked, Shade, Surface};
 use crate::{Loaded, Local, Selected, Sim};
 
 /// What the hotkey files call the buttons beside one organization's
@@ -102,6 +102,12 @@ pub fn let_go(
     }
 }
 
+/// On a [`FormationButton`], draws it as this project's own interface
+/// does: a [`choice`](crate::ui::choice), with the stand-ins it has for
+/// the game's pictures.
+#[derive(Component)]
+pub struct StandIns;
+
 /// The picture of the formation on a [`FormationButton`].
 #[derive(Component)]
 #[require(ImageNode, Pickable = Pickable::IGNORE)]
@@ -116,6 +122,8 @@ pub struct Formations {
     /// Whether they're offered to several organizations rather than one.
     pub several: bool,
     pub lit: Option<Id>,
+    /// The offered formations any of the counted organizations are in.
+    pub held: Vec<Id>,
     /// The formation the counted organizations were last all seen in,
     /// which lights its button only as they come to be in it.
     seen: Option<Id>,
@@ -176,13 +184,23 @@ pub fn offered(sim: &tgsim::World, player: Option<u32>, selected: &[usize]) -> V
     out
 }
 
-/// What formation the counted organizations of `selected` are in now.
-fn shared(sim: &tgsim::World, player: Option<u32>, selected: &[usize]) -> Shared {
-    let mut now = counted(sim, player, selected)
+/// The formation each of the counted organizations of `selected` is in,
+/// those that are in one.
+fn in_formation<'a>(
+    sim: &'a tgsim::World,
+    player: Option<u32>,
+    selected: &'a [usize],
+) -> impl Iterator<Item = Id> + 'a {
+    counted(sim, player, selected)
         .map(|r| &sim.organizations[r])
         .filter(|r| !r.broken())
         .filter_map(|r| r.formations.get(r.current_formation()))
-        .map(|f| Id::from(f.id.as_str()));
+        .map(|f| Id::from(f.id.as_str()))
+}
+
+/// What formation the counted organizations of `selected` are in now.
+fn shared(sim: &tgsim::World, player: Option<u32>, selected: &[usize]) -> Shared {
+    let mut now = in_formation(sim, player, selected);
     match now.next() {
         None => Shared::Broken,
         Some(first) => match now.all(|f| f == first) {
@@ -215,7 +233,15 @@ pub fn light(
     }
     state.several = selected.0.len() > 1;
     if state.offered.is_empty() {
+        state.held.clear();
         return;
+    }
+    let held: Vec<Id> = (state.offered.iter())
+        .filter(|f| in_formation(sim, local.0, &selected.0).any(|g| g == **f))
+        .cloned()
+        .collect();
+    if state.held != held {
+        state.held = held;
     }
     let now = shared(sim, local.0, &selected.0);
     let opened = state.was.is_none();
@@ -292,7 +318,11 @@ pub fn press(
 
 /// What a formation button's tooltip says under its name: whether the
 /// formation takes on what comes near, then what it changes.
-fn told(looks: &crate::object_display::Looks, sim: &tgsim::World, formation: &Id) -> String {
+pub(crate) fn told(
+    looks: &crate::object_display::Looks,
+    sim: &tgsim::World,
+    formation: &Id,
+) -> String {
     let said = |key: &str| looks.strings.get(key).cloned().unwrap_or_default();
     let aggressive = (sim.organizations.iter())
         .flat_map(|r| &r.formations)
@@ -323,7 +353,9 @@ type Parts<'a> = (
     &'a mut Marked,
     Option<&'a mut crate::hud::original::Pressable>,
     Option<&'a mut Edge>,
+    Option<&'a mut Surface>,
     &'a Children,
+    Has<StandIns>,
 );
 
 /// Shows each interface's formation buttons as [`Formations`] has them:
@@ -339,9 +371,20 @@ pub fn show(
     mut cache: ResMut<crate::ui::ImageCache>,
     mut images: ResMut<Assets<Image>>,
     mut buttons: Query<Parts>,
-    mut icons: Query<&mut ImageNode, With<FormationIcon>>,
+    mut icons: Query<(&mut ImageNode, Option<&mut Shade>), With<FormationIcon>>,
 ) {
-    for (place, hovered, mut shown, mut hint, mut marked, pressable, edge, children) in &mut buttons
+    for (
+        place,
+        hovered,
+        mut shown,
+        mut hint,
+        mut marked,
+        pressable,
+        edge,
+        surface,
+        children,
+        stand_ins,
+    ) in &mut buttons
     {
         let Some(formation) = formations.offered.get(place.0) else {
             shown.set_if_neq(Visibility::Hidden);
@@ -352,8 +395,24 @@ pub fn show(
         if let Some(mut pressable) = pressable {
             pressable.selected = lit;
         }
+        let choice = match (lit, formations.held.contains(formation)) {
+            (true, _) => crate::ui::Choice::Current,
+            (false, true) => crate::ui::Choice::Partly,
+            (false, false) => crate::ui::Choice::Other,
+        };
+        let (fill, frame, shade) = match stand_ins {
+            true => crate::ui::choice(choice, hovered.get()),
+            false => (
+                Surface::Clear,
+                Edge::lit(lit, hovered.get(), Edge::Clear),
+                Shade::Full,
+            ),
+        };
         if let Some(mut edge) = edge {
-            edge.set_if_neq(Edge::lit(lit, hovered.get(), Edge::Clear));
+            edge.set_if_neq(frame);
+        }
+        if let Some(mut surface) = surface {
+            surface.set_if_neq(fill);
         }
         let name = button(place.0, formations.several);
         let look = looks.formation_looks.get(formation);
@@ -366,10 +425,20 @@ pub fn show(
                 hint.0 = words;
             }
         }
-        let icon = icon.and_then(|path| cache.get(&loaded.game, &mut images, &path));
+        let game = &loaded.game;
+        let icon = icon.map(|path| match stand_ins {
+            true => game.modern_icon(&path),
+            false => path,
+        });
+        let icon = icon.and_then(|path| cache.get(game, &mut images, &path));
         for child in children {
-            if let Ok(mut image) = icons.get_mut(*child)
-                && let Some(icon) = &icon
+            let Ok((mut image, picture)) = icons.get_mut(*child) else {
+                continue;
+            };
+            if let Some(mut picture) = picture {
+                picture.set_if_neq(shade);
+            }
+            if let Some(icon) = &icon
                 && image.image != *icon
             {
                 image.image = icon.clone();

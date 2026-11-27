@@ -330,8 +330,8 @@ fn keys(mut intents: MessageReader<Intent>, mut toggling: Toggling) {
     }
 }
 
-/// The path of our interface's icon `name`, white on clear for a button to
-/// tint.
+/// The path of our interface's icon `name`, such as one white on clear for a
+/// button to tint.
 pub fn icon(name: &str) -> String {
     format!("UI/Modern/Icons/{name}.svg")
 }
