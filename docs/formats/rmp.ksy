@@ -1815,7 +1815,12 @@ types:
         type: u1
         doc: Used while checking who's inside; 0 when saved.
   camera:
-    doc: A camera position for cutscenes and scripted views.
+    doc: |
+      A camera position for cutscenes and scripted views. It looks at its
+      thing's `position`, from the way its `facing` points: x and y the
+      direction across the ground, z the rise for each unit of that, so the
+      tangent of its angle above the horizontal. The game's own view is
+      facing (0.707, -0.707, 0.839), at zoom 1.
     seq:
       - id: version
         type: u4
@@ -1824,7 +1829,9 @@ types:
         type: string
       - id: zoom
         type: f4
-        doc: The zoom it views at, as the editor's camera properties show it.
+        doc: |
+          How far it looks from, as a multiple of the game's own view's
+          distance; the editor's camera properties show it.
   reactive_scenery:
     doc: |
       Trees, grass, hedges and the like, with up to two parts that react to

@@ -57,6 +57,7 @@ impl World {
         world.triggers.names = map.named().map(|(n, id)| (n.to_string(), id)).collect();
         world.triggers.objectives = map.objectives.clone().into();
         world.triggers.areas = map.areas.clone().into();
+        world.triggers.cameras = map.cameras.clone().into();
         world.triggers.inside = vec![Vec::new(); map.areas.len()];
         world.triggers.organization_soft = std::sync::Arc::new(map.organization_soft.clone());
         for p in &map.players {

@@ -269,7 +269,10 @@ pub(crate) fn setup(
         letter_keys: false,
         ..cam
     };
-    camera::spawn(&mut commands, cam);
+    let camera = camera::spawn(&mut commands, cam);
+    commands
+        .entity(camera)
+        .insert(crate::scripted_camera::Scripted::default());
     commands.insert_resource(Viewed {
         units: sim.0.units.len(),
         buildings: sim.0.buildings.len(),
