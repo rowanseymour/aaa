@@ -7,12 +7,12 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use tgserver::{Choice, NotJoined, Refusal, Told};
 
-use crate::fields::{Entered, Field, field};
+use crate::fields::{Entered, Field, Focused, field};
 use crate::lan::{Hosting, Notice, Staged};
 use crate::loading::{HostedAt, Pending};
 use crate::lobby::Lobby;
 use crate::messages::filled;
-use crate::ui::{self, Font, Ink, Surface, button, called, label, panel, text};
+use crate::ui::{self, Chosen, Font, Ink, Surface, button, called, label, panel, text, toggle};
 use crate::{Data, Screen, confirm};
 
 /// The most lines the log keeps.
@@ -27,12 +27,13 @@ impl Plugin for StagingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Log>()
             .init_resource::<Reported>()
+            .init_resource::<Chatting>()
             .add_systems(OnEnter(Screen::Lobby), clear_log)
             .add_systems(
                 Update,
                 // Each checks for itself, since what runs between them, the
                 // console's clicks among it, can leave the game.
-                (launch_hosted, follow, show_controls, show_log)
+                (launch_hosted, follow, show_controls, show_log, show_people)
                     .chain()
                     .distributive_run_if(in_state(Screen::Lobby))
                     .distributive_run_if(resource_exists::<Staged>),
@@ -55,6 +56,10 @@ pub struct Words {
     side_refused: String,
     ready_refused: String,
     said: String,
+    team_said: String,
+    whispered: String,
+    whispering: String,
+    unsent: String,
     players: String,
     exit: String,
     lost: String,
@@ -88,6 +93,13 @@ impl Words {
             side_refused: said("set_player_side_failed", "Set Player Side Failed"),
             ready_refused: said("set_player_ready_failed", "Set Player Ready Failed"),
             said: said("public_chat|ss", "%s: %s"),
+            team_said: said("team_chat|ss", "%s: %s"),
+            whispered: said("private_chat|ss", "%s: %s"),
+            whispering: said("ui_lobby_whispering_to|ss", "Whispering to %s: %s"),
+            unsent: said(
+                "ui_lobby_whisper_msg_unsent_format|s",
+                "Message unsent.  Please select players to whisper to: %s",
+            ),
             players: said("staging_players_label|dd", "%d/%d Players"),
             exit: said("ui_staging_confirm_exit", "Exit Staging?"),
             lost: said("ui_lobby_connect_failed", "Connection to game failed"),
@@ -112,8 +124,44 @@ pub(crate) struct Controls;
 pub(crate) struct LogPanel;
 #[derive(Component)]
 struct LogLines;
+/// The box lines are typed in to say.
 #[derive(Component)]
-struct ChatBox;
+pub(crate) struct ChatBox;
+#[derive(Component)]
+struct People;
+
+/// Who what's typed goes to: everyone, the person's team, or those picked
+/// from the list of people, by what the host knows each as.
+#[derive(Resource, Default, Clone, PartialEq)]
+pub(crate) struct Chatting {
+    to: Talk,
+    picked: std::collections::BTreeSet<u32>,
+}
+
+#[derive(Component, Clone, Copy, Default, PartialEq, Debug)]
+enum Talk {
+    #[default]
+    All,
+    Whisper,
+    Team,
+}
+
+impl Talk {
+    const ALL: [Talk; 3] = [Talk::All, Talk::Whisper, Talk::Team];
+
+    fn name(self) -> &'static str {
+        match self {
+            Talk::All => "All",
+            Talk::Whisper => "Whisper",
+            Talk::Team => "Team",
+        }
+    }
+}
+
+/// A button in the list of people, picking the person at this client to
+/// whisper to or not.
+#[derive(Component)]
+struct Pick(u32);
 
 /// The host of a match launched here, waiting for the game's own end to
 /// hear that it has been.
@@ -124,9 +172,10 @@ struct Launched(Box<tgserver::Host<crate::orders::Line>>);
 #[derive(Resource, Default)]
 struct Reported(Option<String>);
 
-fn clear_log(mut log: ResMut<Log>, mut reported: ResMut<Reported>) {
+fn clear_log(mut log: ResMut<Log>, mut reported: ResMut<Reported>, mut chatting: ResMut<Chatting>) {
     log.0.clear();
     reported.0 = None;
+    *chatting = Chatting::default();
 }
 
 /// Lays out the log and the box to chat in, in `panel`.
@@ -148,6 +197,51 @@ pub(crate) fn spawn_log(commands: &mut Commands, parent: Entity) {
             ),
         ))
         .id();
+    // The log and the box to chat in, with the people beside them.
+    commands.entity(log).entry::<Node>().and_modify(|mut node| {
+        node.flex_direction = FlexDirection::Row;
+        node.column_gap = px(12);
+    });
+    let side = |grow: f32| Node {
+        flex_grow: grow,
+        flex_direction: FlexDirection::Column,
+        row_gap: px(6),
+        ..default()
+    };
+    let panel = log;
+    let log = commands.spawn((ChildOf(panel), side(1.0))).id();
+    let people = commands.spawn((ChildOf(panel), side(0.0))).id();
+    let talk = commands
+        .spawn((
+            ChildOf(people),
+            Node {
+                column_gap: px(4),
+                ..default()
+            },
+        ))
+        .id();
+    for to in Talk::ALL {
+        commands
+            .spawn((
+                ChildOf(talk),
+                toggle(to.name(), Font::Body),
+                called(format!("lobby.chat.{}", to.name().to_lowercase())),
+                to,
+            ))
+            .observe(move |_: On<Activate>, mut chatting: ResMut<Chatting>| {
+                chatting.to = to;
+            });
+    }
+    commands.spawn((
+        ChildOf(people),
+        People,
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(2),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+    ));
     commands.spawn((
         ChildOf(log),
         LogLines,
@@ -185,31 +279,156 @@ pub(crate) fn spawn_log(commands: &mut Commands, parent: Entity) {
         .observe(send_pressed);
 }
 
-fn send_entered(
-    entered: On<Entered>,
-    mut boxes: Query<&mut Field, With<ChatBox>>,
-    staged: ResMut<Staged>,
-) {
+/// What saying something needs besides the box it's typed in.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Saying<'w> {
+    staged: ResMut<'w, Staged>,
+    chatting: Res<'w, Chatting>,
+    log: ResMut<'w, Log>,
+    words: Res<'w, Words>,
+}
+
+fn send_entered(entered: On<Entered>, mut boxes: Query<&mut Field, With<ChatBox>>, saying: Saying) {
     if let Ok(mut field) = boxes.get_mut(entered.entity) {
-        say(&mut field, staged);
+        say(&mut field, saying);
     }
 }
 
-fn send_pressed(
-    _: On<Activate>,
-    mut boxes: Query<&mut Field, With<ChatBox>>,
-    staged: ResMut<Staged>,
-) {
+fn send_pressed(_: On<Activate>, mut boxes: Query<&mut Field, With<ChatBox>>, saying: Saying) {
     if let Some(mut field) = boxes.iter_mut().next() {
-        say(&mut field, staged);
+        say(&mut field, saying);
     }
 }
 
-fn say(field: &mut Field, mut staged: ResMut<Staged>) {
+/// Sends what's typed to those [`Chatting`] has it for. A whisper is shown
+/// here as it's sent, or, with nobody to whisper to, not sent.
+fn say(field: &mut Field, mut saying: Saying) {
     let words = std::mem::take(&mut field.text);
-    if !words.trim().is_empty() {
-        // A host that's gone is found so as the lobby next hears from it.
-        let _ = staged.entry.say(words);
+    if words.trim().is_empty() {
+        return;
+    }
+    let staging = saying.staged.entry.staging();
+    let me = saying.staged.entry.me();
+    let (to, line) = match addressed(&saying.chatting, &staging.guests, me, &words, &saying.words) {
+        Ok(addressed) => addressed,
+        Err(unsent) => {
+            saying.log.0.push(unsent);
+            return;
+        }
+    };
+    saying.log.0.extend(line);
+    // A host that's gone is found so as the lobby next hears from it.
+    let _ = saying.staged.entry.say_to(to, words);
+}
+
+/// Who `words` typed by the person at `me` go to, as `chatting` has it,
+/// with the line shown here as they're sent, if any; or the line saying
+/// they weren't, a whisper with none of `guests` picked to hear it.
+fn addressed(
+    chatting: &Chatting,
+    guests: &[tgserver::Guest],
+    me: u32,
+    words: &str,
+    said: &Words,
+) -> Result<(tgserver::Hearers, Option<String>), String> {
+    let picked: Vec<&tgserver::Guest> = (guests.iter())
+        .filter(|g| g.client != me && chatting.picked.contains(&g.client))
+        .collect();
+    match chatting.to {
+        Talk::All => Ok((tgserver::Hearers::All, None)),
+        Talk::Team => Ok((tgserver::Hearers::Team, None)),
+        Talk::Whisper if picked.is_empty() => Err(filled(&said.unsent, &[words])),
+        Talk::Whisper => {
+            let names: Vec<&str> = picked.iter().map(|g| g.name.as_str()).collect();
+            let line = filled(&said.whispering, &[&names.join(", "), words]);
+            let clients = picked.iter().map(|g| g.client).collect();
+            Ok((tgserver::Hearers::People(clients), Some(line)))
+        }
+    }
+}
+
+/// A button having the next line typed go to the person at this client
+/// alone.
+#[derive(Component)]
+pub(crate) struct WhisperTo(pub(crate) u32);
+
+/// Has the next line typed go to the person a [`WhisperTo`] names, ready
+/// to type it.
+pub(crate) fn whisper_to(
+    activate: On<Activate>,
+    buttons: Query<&WhisperTo>,
+    mut chatting: ResMut<Chatting>,
+    boxes: Query<Entity, With<ChatBox>>,
+    mut focused: ResMut<Focused>,
+) {
+    if let Ok(WhisperTo(client)) = buttons.get(activate.entity) {
+        chatting.to = Talk::Whisper;
+        chatting.picked = [*client].into();
+        focused.0 = boxes.iter().next();
+    }
+}
+
+/// Whether the person at `me`, on side `side`, hears `said`, as the
+/// lobby's team setup puts the sides in teams.
+fn hears(lobby: &Lobby, said: &tgserver::protocol::Said, me: u32, side: Option<u32>) -> bool {
+    match &said.to {
+        tgserver::Hearers::All => true,
+        tgserver::Hearers::Team => lobby.hears_team(said.from, side),
+        tgserver::Hearers::People(people) => people.contains(&me),
+    }
+}
+
+/// The people listed, by name and client, and who what's typed goes to.
+type PeopleShown = (Vec<(String, u32)>, Chatting);
+
+/// Lists the people in the game but the one here, by name, each to pick
+/// to whisper to, and marks who what's typed goes to.
+fn show_people(
+    mut commands: Commands,
+    staged: Res<Staged>,
+    chatting: Res<Chatting>,
+    list: Single<Entity, With<People>>,
+    mut talks: Query<(&Talk, &mut Chosen)>,
+    mut shown: Local<Option<PeopleShown>>,
+) {
+    let me = staged.entry.me();
+    let mut people: Vec<(String, u32)> = (staged.entry.staging().guests.iter())
+        .filter(|g| g.client != me)
+        .map(|g| (g.name.clone(), g.client))
+        .collect();
+    people.sort();
+    for (to, mut chosen) in &mut talks {
+        chosen.set_if_neq(Chosen(*to == chatting.to));
+    }
+    let now = Some((people, chatting.clone()));
+    if *shown == now {
+        return;
+    }
+    *shown = now;
+    let list = *list;
+    commands.entity(list).despawn_children();
+    let Some((people, _)) = shown.as_ref() else {
+        return;
+    };
+    for (name, client) in people {
+        commands
+            .spawn((
+                ChildOf(list),
+                toggle(name.clone(), Font::Body),
+                called(format!("lobby.chat.person.{}", ui::slug(name))),
+                Pick(*client),
+            ))
+            .insert(Chosen(chatting.picked.contains(client)))
+            .observe(pick);
+    }
+}
+
+/// Picks a person to whisper to, or unpicks them.
+fn pick(activate: On<Activate>, picks: Query<&Pick>, mut chatting: ResMut<Chatting>) {
+    if let Ok(Pick(client)) = picks.get(activate.entity)
+        && !chatting.picked.remove(client)
+    {
+        chatting.picked.insert(*client);
     }
 }
 
@@ -261,8 +480,17 @@ fn follow(
         };
         log.0.push(line);
     }
+    let side = staged.entry.staging().guest(me).and_then(|g| g.side);
     for said in staged.entry.take_said() {
-        log.0.push(filled(&words.said, &[&said.name, &said.words]));
+        if !hears(&lobby, &said, me, side) {
+            continue;
+        }
+        let format = match said.to {
+            tgserver::Hearers::All => &words.said,
+            tgserver::Hearers::Team => &words.team_said,
+            tgserver::Hearers::People(_) => &words.whispered,
+        };
+        log.0.push(filled(format, &[&said.name, &said.words]));
     }
     for gone in staged.entry.take_left() {
         let format = match gone.kicked {
@@ -536,5 +764,49 @@ pub(crate) fn marks(
             .observe(move |_: On<Activate>, mut staged: ResMut<Staged>| {
                 let _ = staged.entry.choose(Choice::Kick(client));
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn guest(client: u32, name: &str) -> tgserver::Guest {
+        tgserver::Guest {
+            client,
+            name: name.into(),
+            side: None,
+            ready: false,
+            host: false,
+            holds: false,
+            ping: None,
+        }
+    }
+
+    #[test]
+    fn a_whisper_goes_to_those_picked_still_here_or_not_at_all() {
+        let words = Words::default();
+        let guests = [guest(1, "Ann"), guest(2, "Bob"), guest(3, "Cy")];
+        let whisper = |picked: &[u32]| Chatting {
+            to: Talk::Whisper,
+            picked: picked.iter().copied().collect(),
+        };
+        // Not to the one typing, nor to one who has gone.
+        let (to, line) = addressed(&whisper(&[1, 2, 3, 9]), &guests, 1, "hi", &words).unwrap();
+        assert_eq!(to, tgserver::Hearers::People(vec![2, 3]));
+        assert_eq!(line.as_deref(), Some("Whispering to Bob, Cy: hi"));
+        let unsent = addressed(&whisper(&[1]), &guests, 1, "hi", &words);
+        assert_eq!(
+            unsent,
+            Err("Message unsent.  Please select players to whisper to: hi".into())
+        );
+        let team = Chatting {
+            to: Talk::Team,
+            ..whisper(&[])
+        };
+        assert_eq!(
+            addressed(&team, &guests, 1, "hi", &words),
+            Ok((tgserver::Hearers::Team, None))
+        );
     }
 }

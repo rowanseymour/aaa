@@ -10,8 +10,8 @@ use tgsim::{Action, ComputerPlayer, Outcome, Record, Schedule, World};
 
 use crate::pausing::{Pauses, Person};
 use crate::protocol::{
-    Bundle, Gone, Join, KickVote, PROTOCOL, Said, Seated, Standing, Status, ToClient, ToHost,
-    Welcome, decode, encode,
+    Bundle, Gone, Hearers, Join, KickVote, PROTOCOL, Said, Seated, Standing, Status, ToClient,
+    ToHost, Welcome, decode, encode,
 };
 use crate::{Clock, Link, Naming, Setup, majority, ping};
 
@@ -956,11 +956,17 @@ impl<L: Link> Host<L> {
                         if worth_saying(&words) {
                             let from = seat.players.first().copied();
                             let name = seat.name.clone();
-                            heard.said.push(Said { from, name, words });
+                            heard.said.push(Said {
+                                from,
+                                name,
+                                words,
+                                to: Hearers::All,
+                            });
                         }
                     }
-                    // Too late to change how the match is set up.
-                    Some(ToHost::Choose(_)) => {}
+                    // Too late to change how the match is set up, or to talk
+                    // as in one.
+                    Some(ToHost::Choose(_) | ToHost::Tell { .. }) => {}
                     Some(ToHost::Check { step, hash }) => {
                         // The host has played every tick a client has.
                         let stands = checks.binary_search(&(step, hash)).is_ok();
@@ -1793,6 +1799,7 @@ mod tests {
             from,
             name: name.into(),
             words: words.into(),
+            to: Hearers::All,
         };
         assert_eq!(
             clients[0].take_said(),

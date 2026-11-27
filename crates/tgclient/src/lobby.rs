@@ -372,6 +372,29 @@ impl Lobby {
         takes.then_some(Moved::Shift(from, to))
     }
 
+    /// The team side `player` is on in the lobby's team setup, by its
+    /// place there; none on no team.
+    fn team_of(&self, player: u32) -> Option<usize> {
+        let brief = self.brief.as_ref().ok()?;
+        match self.preset.arrange(&brief.players) {
+            Some(teams) => teams.iter().position(|t| t.contains(&player)),
+            None => brief.players.iter().find(|p| p.id == player)?.team,
+        }
+    }
+
+    /// Whether what's said for their team from side `from` reaches a person
+    /// on side `to`, none being one watching: those on a team reach its
+    /// sides, and those watching each other.
+    pub(crate) fn hears_team(&self, from: Option<u32>, to: Option<u32>) -> bool {
+        match (from, to) {
+            (None, None) => true,
+            (Some(from), Some(to)) => self
+                .team_of(from)
+                .is_some_and(|t| self.team_of(to) == Some(t)),
+            _ => false,
+        }
+    }
+
     /// The profile chosen for `player`'s side, while the computer plays it.
     fn profile<'a>(&self, sais: &'a Sais, player: u32) -> Option<&'a Sai> {
         let id = self.slots.computers.get(&player)?;
@@ -1321,6 +1344,7 @@ fn show_slots(
                 if let Some((staging, me)) = staging
                     && guest.client != me
                 {
+                    whisper(&mut commands, row, guest, &format!("{side}.whisper"));
                     offers(&mut commands, row, staging, me, guest, &side);
                 }
             } else if computer {
@@ -1422,12 +1446,29 @@ fn show_slots(
             for guest in s.guests.iter().filter(|g| g.side.is_none()) {
                 let row = row(&mut commands, guest.name.clone());
                 crate::staging::marks(&mut commands, row, guest, hosting, &look);
+                if staging.is_some_and(|(_, me)| guest.client != me) {
+                    let id = format!("lobby.observers.{}.whisper", slug(&guest.name));
+                    whisper(&mut commands, row, guest, &id);
+                }
             }
         }
         // Played alone, the one person.
         None if lobby.person.is_none() => _ = row(&mut commands, "Player".into()),
         None => {}
     }
+}
+
+/// The button in `row` that has the next line typed go to `guest` alone.
+fn whisper(commands: &mut Commands, row: Entity, guest: &tgserver::Guest, id: &str) {
+    commands
+        .spawn((
+            ChildOf(row),
+            button("Whisper", Font::Body),
+            called(id),
+            Hint("Whisper to player".into()),
+            crate::staging::WhisperTo(guest.client),
+        ))
+        .observe(crate::staging::whisper_to);
 }
 
 /// The mark and buttons for offers to trade sides between the person at
@@ -1775,7 +1816,10 @@ type Choice<'a> = (
     Option<&'a NationChoice>,
 );
 
-fn mark_chosen(lobby: Res<Lobby>, mut buttons: Query<Choice>) {
+/// Those [`mark_chosen`] marks, leaving others' buttons to them.
+type Choosers = Or<(With<SideChoice>, With<PresetChoice>, With<NationChoice>)>;
+
+fn mark_chosen(lobby: Res<Lobby>, mut buttons: Query<Choice, Choosers>) {
     for (mut chosen, side, preset, nation) in &mut buttons {
         let now = side.is_some_and(|s| s.0 == lobby.person)
             || preset.is_some_and(|p| p.0 == lobby.preset)
@@ -1999,6 +2043,28 @@ mod tests {
         assert_eq!(lobby.dropped(10, 11, true), None);
         assert_eq!(lobby.dropped(11, 13, true), None);
         assert_eq!(lobby.dropped(12, 12, true), None);
+    }
+
+    #[test]
+    fn team_chat_reaches_the_speakers_team_or_those_watching() {
+        // 10 and 12 on the map's first team, 13 on its second, 11 on none.
+        let mut players = players();
+        players[0].team = Some(0);
+        players[2].team = Some(0);
+        players[3].team = Some(1);
+        let mut lobby = field_lobby();
+        if let Ok(brief) = &mut lobby.brief {
+            brief.players = players;
+        }
+        assert!(lobby.hears_team(Some(10), Some(12)));
+        assert!(!lobby.hears_team(Some(12), Some(13)));
+        assert!(lobby.hears_team(None, None));
+        assert!(!lobby.hears_team(None, Some(12)) && !lobby.hears_team(Some(12), None));
+        // On no team, not even themselves.
+        assert!(!lobby.hears_team(Some(11), Some(11)));
+        // Each on their own in a free for all.
+        lobby.preset = Preset::FreeForAll(2);
+        assert!(!lobby.hears_team(Some(10), Some(12)));
     }
 
     /// A lobby for a map called Field with [`players`], the person on 12.

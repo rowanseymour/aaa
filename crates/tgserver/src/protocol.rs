@@ -50,6 +50,8 @@ pub enum ToHost {
     Kick { client: u32, vote: bool },
     /// Words for everyone, to pass on at once, outside the steps.
     Say(String),
+    /// Words in a game being set up for those `to` names.
+    Tell { to: Hearers, words: String },
     /// Asks for a change to what a game being set up has chosen.
     Choose(Choice),
 }
@@ -93,7 +95,7 @@ pub enum ToClient {
     Told(Told),
 }
 
-/// Words a client said for everyone.
+/// Words a client said, for everyone or those `to` names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Said {
     /// The side of the person who said them, or none for one watching.
@@ -101,6 +103,20 @@ pub struct Said {
     /// What that person goes by.
     pub name: String,
     pub words: String,
+    #[serde(default)]
+    pub to: Hearers,
+}
+
+/// Who words said in a game being set up are for. Everyone is told them,
+/// and each machine shows them only if they're for its person.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum Hearers {
+    #[default]
+    All,
+    /// The speaker's team, or from one watching, those watching.
+    Team,
+    /// These people alone, by what the host knows each as.
+    People(Vec<u32>),
 }
 
 /// How the match and its clients stand, as the host sees them.
@@ -292,6 +308,7 @@ mod tests {
             ToClient::Ended,
             ToClient::Alive,
             ToClient::Said(Said {
+                to: Hearers::People(vec![2]),
                 from: Some(1),
                 name: "Bob".into(),
                 words: "hi".into(),
