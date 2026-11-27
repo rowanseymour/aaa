@@ -450,7 +450,7 @@ text = '''A group's order is done when, at a timing pass, every one of its regim
 [[topic.rule]]
 id = "group-supply-zone-buffer"
 tags = ["code", "data"]
-text = '''When the group is heading for an enemy thing that has a supply zone, the regiments time their arrival at the zone's edge plus `GroupSupplyZoneBuffer` (5) plus how far ahead its place in the group is (the ahead part only, so a place behind the centre counts negative), taken off its route, rather than at the end of their routes (never less than 0). When the order carried a facing, the ahead part is instead the place's y coordinate once turned onto the map.'''
+text = '''When the group's order is on an enemy thing that has a guard zone ([morale](morale.toml#rout-destination); an HQ or an airfield, say), each regiment times its arrival not at the end of its route but that far short of it: the zone's radius plus `GroupSupplyZoneBuffer` (5) plus how far ahead its place in the group is (a place behind the centre counts negative), taken off its route's length, never below 0. So the group arrives together at the edge of the zone, front places first. On anything else, such as a city or an ordinary regiment, they time it to the end of their routes.'''
 
 [[topic.rule]]
 id = "group-speed-minimum"
@@ -465,7 +465,7 @@ Which regiments take part:
 - The group's zone is a circle round its centre (the average of its regiments' positions) whose radius is the largest control zone radius among its regiments (`control_range`), never less than `GroupZoneRangeMin` (18 in AA).
 - Each time the group gives a move, and each time it finds itself in a fight (below), it marks the regiments then inside its zone as taking part and the rest as not. A regiment joining the group starts out taking part. Until the next marking, a regiment left outside goes at its own speed and doesn't hold the others back.
 - Whether the group is in a fight is decided by the first member taking part, in the group's order, that is engaged or under siege; the rest aren't looked at. It's in a fight if that member is:
-  - engaged ([combat](combat.toml#engaged-and-under-siege)) with something other than what it was sent to attack. It counts unless it has an attack target and is engaging that target, or the regiment that target belongs to. Its attack target is the target of its attack order; while besieging a city, a defender of the city or the besieged target; failing those, while engaged, the first attack order in its queue whose target it can attack. So a group whose regiments are fighting what they were sent to attack goes on timing their arrival, while one drawn into fights on the way stops. A member fighting its own target ahead of one drawn into another fight keeps the group out of a fight;
+  - engaged ([combat](combat.toml#engaged-and-under-siege)) with something other than what it was sent to attack. It counts unless it has an attack target and is engaging that target, or the regiment that target belongs to. Its attack target is the target of its attack order (in Kohan II, while besieging a settlement, the first wall in its way, else the besieged target: [combat](combat.toml#city-siege)); failing that, while engaged, the first attack order in its queue whose target it can attack. So a group whose regiments are fighting what they were sent to attack goes on timing their arrival, while one drawn into fights on the way stops. A member fighting its own target ahead of one drawn into another fight keeps the group out of a fight;
   - or under siege. Only a lone unit in the group can be: a regiment as a whole never is.
 - The group looks for a fight once a second, at each timing pass and also while it has no order. When it finds one it marks again and goes into the fight, which it handles on the next tick and then once a second ([group-resends-order](#group-resends-order)); while in it, it times nothing and doesn't look for a fight again. The fight ends only as that rule says, whatever the regiments are fighting, and the group then goes back to its order and its timing.
 - A computer player gives every order that names two or more of its regiments as a group ([computer players](computer-players.toml#orders-as-person)), and in a mode where the group times every moving regiment, marked or not.
@@ -558,6 +558,24 @@ A regiment's move never does, whether to a spot or onto a thing: the regiment ar
 id = "arrival-by-outline"
 tags = ["code"]
 text = '''Going to another thing that blocks tiles (`blocking`, such as a building), a unit has also arrived once its outline comes within 0.1 of that thing's outline; for anything else only its position counts.'''
+
+[[topic.rule]]
+id = "stopping-in-range"
+tags = ["code", "data"]
+text = '''
+A man going to a thing to use an ability on it (the approach of his attack, the walk to a building he builds or repairs) stops as soon as he's within that ability's reach, wherever he is on his route:
+- His route is planned to the thing's own position, as for any move to a thing: the destination is made standable and a close one gets a straight leg, as above, and the arrival tests above still apply when his route runs out.
+- At every step of his drive, his soft shape's gap to the thing's soft shape ([objects](objects.toml#gap-between-two-shapes)) is tested against the ability's `range` less 0.0001 (or the distance he covers in that step, if that's more). Once it's within, the move ends there, mid-route or not, and he decides again what to do ([combat](combat.toml#rating-outcomes)), which is now to use the ability.
+- As each leg of his route ends, his centre's distance to the thing's centre is tested against the same reach as well.
+- It's the soft shapes that stop him, even for a thing whose template gives it a `target_shape` of its own (AA's battleships and carriers), though range itself is measured between target shapes ([combat](combat.toml#range-edge-to-edge)). For everything else in AA the two are the same.
+
+So an engineer (soft circle 0.5) walking to a bunker site (soft circle 2.1) with his range of 1 stops on the step that brings his centre within 3.6 of the site's, short of where his route ends, which lies nearer the site.
+'''
+
+[[topic.rule]]
+id = "out-of-range-after-move"
+tags = ["code", "guess"]
+text = '''If his move ends without bringing him within reach (it arrived, failed, or ran out of plans), he doesn't walk straight at the thing. He sets off again from where he stands when he's next given the work: for builders and repairers, the regiment hands it out again each time it looks at the building ([construction](construction.toml#closing-in)). That each such hand-out restarts his walk afresh, with its plan count reset, is a guess.'''
 
 [[topic.rule]]
 id = "replan-if-not-arrived"
@@ -998,5 +1016,10 @@ asked = 2026-11-22
 
 [[open]]
 q = '''Which formation does a retreating regiment take, when its layout names no retreat formation? The data's own description says the last organized one, which is Column in every stock layout.'''
+by = "analysis"
+asked = 2026-11-27
+
+[[open]]
+q = '''Does a man whose walk to a building he builds or repairs ended out of reach set off again when his regiment next hands out the work, or stand where he is (out-of-range-after-move)?'''
 by = "analysis"
 asked = 2026-11-27

@@ -219,7 +219,7 @@ tags = ["code", "game", "data"]
 text = '''
 When a regiment works on a building:
 - it closes in as on an attack order, until its centre is within `CAITargetInRangeZOCMultiplier` (0.6) times its control range of the building ([combat](combat.toml#attack-orders));
-- then every member with the regiment ([supply](supply.toml#member-with-regiment)) that can work on it does, each moving to within its ability's range and using it again as each use ends; members that can't (an engineer regiment's captain) move up to the building. The members are given their work afresh each time the regiment looks at the building, so an engineer that joins while it builds, or comes back from straying, walks to the building and joins in once it's with the regiment; one still away from it doesn't help;
+- then every member with the regiment ([supply](supply.toml#member-with-regiment)) that can work on it does, each moving until it's within its ability's range ([movement](movement.toml#stopping-in-range)) and using it again as each use ends; members that can't (an engineer regiment's captain) move up to the building. The members are given their work afresh each time the regiment looks at the building, so an engineer that joins while it builds, or comes back from straying, walks to the building and joins in once it's with the regiment; one still away from it doesn't help;
 - stacking is plain addition: every member of every regiment on the building heals it; the captain doesn't. An engineer regiment has six engineers (its layout's first slot, `front`, holds 3, then three more single slots) and its captain, so it adds 30 health a second, 48 with Construction Battalions: a bunker takes about 42 seconds from 1 health, or 26.
 '''
 
