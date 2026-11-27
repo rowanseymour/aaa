@@ -1750,6 +1750,8 @@ pub struct AVars {
     pub audio_fade_volume: Option<f32>,
     pub audio_fade_time: Option<f32>,
     pub audio_recover_from_fade_time: Option<f32>,
+    /// Seconds audio asked for has to start in, or it's dropped.
+    pub audio_drop_timeout: Option<f32>,
     /// The match music of someone watching rather than playing.
     pub observer_game_music: Option<Id>,
     /// The glyph that marks a side, drawn in its colour, by [`Glyph`] id.

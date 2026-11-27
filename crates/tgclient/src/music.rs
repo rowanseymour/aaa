@@ -89,6 +89,12 @@ impl Music {
         };
     }
 
+    /// How far ducking has other sounds than the one ducking them, 1 for
+    /// not at all.
+    pub fn duck(&self) -> f32 {
+        self.duck
+    }
+
     /// How loud music at fade level `fade` plays, at `volume` of its own,
     /// with the options' music at `options`.
     fn loudness(&self, options: f32, volume: f32, fade: f32) -> f32 {
@@ -172,9 +178,13 @@ impl Plugin for MusicPlugin {
                 Update,
                 ask_for_match.run_if(resource_exists::<MatchMusicDue>),
             )
-            .add_systems(Update, play.after(ask_for_match));
+            .add_systems(Update, play.after(ask_for_match).in_set(Ducked));
     }
 }
+
+/// Where music works out how far ducking has other sounds this frame.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Ducked;
 
 fn ask_for_menu(mut music: ResMut<Music>) {
     if let Some(menu) = music.settings.menu.clone() {

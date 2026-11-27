@@ -80,7 +80,9 @@ mod scripted_camera;
 mod selection;
 mod sound;
 mod special_ops;
+mod speech;
 mod staging;
+mod subtitles;
 mod sunlight;
 mod supply;
 mod technologies;
@@ -508,6 +510,8 @@ pub fn run(program: Program) -> ExitCode {
         .add_plugins(music::MusicPlugin)
         .add_plugins(effects::EffectsPlugin)
         .add_plugins(curtains::CurtainsPlugin)
+        .add_plugins(speech::SpeechPlugin)
+        .add_plugins(subtitles::SubtitlesPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .insert_resource(ui::Theme::of(&modern))

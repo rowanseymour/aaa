@@ -53,8 +53,8 @@ mod world_rules;
 
 pub use airfields::{AirGroup, AirJob, Aircraft, Airfield, Runway};
 pub use audio::{
-    AnimationAudio, Audio, AudioCategory, AudioControl, AudioPriority, AudioWho, AudioWorld, Cue,
-    MusicSettings, ObjectAudio, SoundSwitches, Volumes,
+    AnimationAudio, Audio, AudioCategory, AudioControl, AudioPriority, AudioSubtitle, AudioWho,
+    AudioWorld, Cue, MusicSettings, ObjectAudio, SoundSwitches, Volumes,
 };
 pub use campaigns::{Campaign, Mission, MissionKind};
 pub use combat::{

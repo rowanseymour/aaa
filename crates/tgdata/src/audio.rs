@@ -132,8 +132,17 @@ pub struct Audio {
     pub delay: [f32; 2],
     /// Seconds to fade in and out.
     pub fade: [f32; 2],
-    /// The localisation key of the text shown while it plays.
-    pub subtitle: Option<String>,
+    /// The text shown while it plays.
+    pub subtitle: Option<AudioSubtitle>,
+}
+
+/// The text shown while an [`Audio`] plays.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioSubtitle {
+    /// A localisation key, e.g. `#sounds_speech_tutorial_Subtitle_text`.
+    pub text: String,
+    /// Seconds it shows for, 0 for as long as the audio's file plays.
+    pub duration: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +235,17 @@ impl GameData {
             duck_time: var(|v| v.audio_fade_time, 1.0),
             recover_after: var(|v| v.audio_recover_from_fade_time, 2.0),
         }
+    }
+
+    /// How many seconds the sound file at `path` plays for, where it's an
+    /// MP3 or WAV file whose length can be read.
+    pub fn audio_seconds(&self, path: &str) -> Option<f32> {
+        seconds(&self.read(path)?)
+    }
+
+    /// Seconds audio asked for has to start in, or it's dropped.
+    pub fn audio_drop_timeout(&self) -> f32 {
+        self.avar(|v| v.audio_drop_timeout).unwrap_or(5.0)
     }
 
     /// The options' volumes, as they start.
@@ -443,7 +463,12 @@ fn audio(
         pitch_adjust: a.pitch_adjust.unwrap_or([0.0; 2]),
         delay: a.delay_ms.unwrap_or_default().map(|ms| ms / 1000.0),
         fade: a.fade_time_s.unwrap_or_default(),
-        subtitle: a.subtitle.as_ref().and_then(|s| s.text.clone()),
+        subtitle: a.subtitle.as_ref().and_then(|s| {
+            Some(AudioSubtitle {
+                text: s.text.clone()?,
+                duration: s.duration.unwrap_or(0.0),
+            })
+        }),
     })
 }
 
@@ -467,8 +492,139 @@ fn flags(list: &Option<String>) -> Vec<String> {
         .collect()
 }
 
+/// How many seconds a sound file plays for, as a WAV file's header says or
+/// by counting an MP3 file's frames.
+fn seconds(bytes: &[u8]) -> Option<f32> {
+    match bytes.starts_with(b"RIFF") {
+        true => wav_seconds(bytes),
+        false => mp3_seconds(bytes),
+    }
+}
+
+/// A WAV file's length: its data's size over its bytes a second.
+fn wav_seconds(bytes: &[u8]) -> Option<f32> {
+    let u32_at = |at: usize| Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    let mut at = 12;
+    let mut rate = None;
+    while at + 8 <= bytes.len() {
+        let size = u32_at(at + 4)? as usize;
+        match &bytes[at..at + 4] {
+            b"fmt " => rate = u32_at(at + 16),
+            b"data" => return Some(size as f32 / rate.filter(|r| *r > 0)? as f32),
+            _ => {}
+        }
+        at += 8 + size + size % 2;
+    }
+    None
+}
+
+/// An MP3 file's length: its frames' samples over their rate, past any
+/// ID3 tag before them.
+fn mp3_seconds(bytes: &[u8]) -> Option<f32> {
+    let mut at = match bytes.starts_with(b"ID3") && bytes.len() >= 10 {
+        // The tag's size is 28 bits, seven to a byte.
+        true => {
+            10 + bytes[6..10]
+                .iter()
+                .fold(0, |n, b| (n << 7) | usize::from(b & 0x7f))
+        }
+        false => 0,
+    };
+    let mut seconds = 0.0;
+    let mut frames = 0;
+    while at + 4 <= bytes.len() {
+        let Some((length, samples, rate)) = mp3_frame(&bytes[at..at + 4]) else {
+            at += 1;
+            continue;
+        };
+        seconds += samples as f32 / rate as f32;
+        frames += 1;
+        at += length;
+    }
+    (frames > 0).then_some(seconds)
+}
+
+/// An MP3 frame's length in bytes, its samples and their rate, from its
+/// four-byte header, if it is one.
+fn mp3_frame(header: &[u8]) -> Option<(usize, u32, u32)> {
+    let [a, b, c, _] = header.try_into().ok()?;
+    if a != 0xff || b & 0xe0 != 0xe0 {
+        return None;
+    }
+    // 3 is MPEG 1, 2 MPEG 2, 0 MPEG 2.5; layer 3 is layer I, 1 layer III.
+    let (version, layer) = ((b >> 3) & 3, (b >> 1) & 3);
+    let (bitrate, rate_index, padding) = (c >> 4, (c >> 2) & 3, u32::from((c >> 1) & 1));
+    if version == 1 || layer == 0 || bitrate == 0 || bitrate == 15 || rate_index == 3 {
+        return None;
+    }
+    let mpeg1 = version == 3;
+    const KBPS: [[u32; 15]; 5] = [
+        [
+            0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448,
+        ],
+        [
+            0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384,
+        ],
+        [
+            0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+        ],
+        [
+            0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256,
+        ],
+        [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+    ];
+    let table = match (mpeg1, layer) {
+        (true, 3) => 0,
+        (true, 2) => 1,
+        (true, _) => 2,
+        (false, 3) => 3,
+        (false, _) => 4,
+    };
+    let kbps = KBPS[table][usize::from(bitrate)] * 1000;
+    let rate = [44100, 48000, 32000][usize::from(rate_index)]
+        >> match version {
+            3 => 0,
+            2 => 1,
+            _ => 2,
+        };
+    let (samples, length) = match layer {
+        3 => (384, (12 * kbps / rate + padding) * 4),
+        2 => (1152, 144 * kbps / rate + padding),
+        _ if mpeg1 => (1152, 144 * kbps / rate + padding),
+        _ => (576, 72 * kbps / rate + padding),
+    };
+    Some((length as usize, samples, rate))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_sound_files_length_is_read_from_its_frames_or_header() {
+        // MPEG 1 layer III, 128 kbps at 44.1 kHz: 417 bytes and 1152
+        // samples a frame, one in three padded to 418 is ignored here.
+        let frame = |n: usize| {
+            let mut f = vec![0u8; 417];
+            f[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x00]);
+            f.repeat(n)
+        };
+        let mut tagged = b"ID3\x03\x00\x00\x00\x00\x00\x02".to_vec();
+        tagged.extend([0, 0]);
+        tagged.extend(frame(100));
+        let expected = 100.0 * 1152.0 / 44100.0;
+        assert!((seconds(&tagged).unwrap() - expected).abs() < 1e-4);
+        assert_eq!(seconds(b"nothing"), None);
+
+        let mut wav = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+        wav.extend(16u32.to_le_bytes());
+        wav.extend([1, 0, 1, 0]);
+        wav.extend(22050u32.to_le_bytes());
+        wav.extend(44100u32.to_le_bytes());
+        wav.extend([2, 0, 16, 0]);
+        wav.extend(b"data");
+        wav.extend(88200u32.to_le_bytes());
+        assert_eq!(seconds(&wav), Some(2.0));
+    }
+
     use super::*;
     use crate::combat::fighter;
 
@@ -541,7 +697,11 @@ mod tests {
         assert_eq!(quiet.control, AudioControl::default());
         assert_eq!((quiet.falloff, quiet.range, quiet.limit), (4.0, 64.0, 2));
         assert_eq!(quiet.volume, 0.8);
-        assert_eq!(quiet.subtitle.as_deref(), Some("#quiet_text"));
+        let subtitle = quiet
+            .subtitle
+            .as_ref()
+            .map(|s| (s.text.as_str(), s.duration));
+        assert_eq!(subtitle, Some(("#quiet_text", 0.0)));
     }
 
     #[test]

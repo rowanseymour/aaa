@@ -51,6 +51,8 @@ struct Drawn {
 #[derive(Clone)]
 struct Read {
     face: Handle<Face>,
+    /// Its file, for measuring text in it.
+    bytes: std::sync::Arc<[u8]>,
     /// Its height above and below the baseline, in ems, as Windows takes it.
     ascent: f32,
     descent: f32,
@@ -70,10 +72,24 @@ impl Read {
             (f32::from(up) / em, -f32::from(down) / em)
         };
         Some(Read {
+            bytes: bytes.clone().into(),
             face: faces.add(Face::from_bytes(bytes)),
             ascent,
             descent,
         })
+    }
+
+    /// How wide `text` is set at `px` pixels, by its characters' advances.
+    fn width(&self, text: &str, px: f32) -> f32 {
+        let Ok(parsed) = ttf_parser::Face::parse(&self.bytes, 0) else {
+            return 0.0;
+        };
+        let em = f32::from(parsed.units_per_em());
+        let advance = |c: char| {
+            let glyph = parsed.glyph_index(c);
+            glyph.and_then(|g| parsed.glyph_hor_advance(g)).unwrap_or(0)
+        };
+        text.chars().map(|c| f32::from(advance(c))).sum::<f32>() * px / em
     }
 
     /// How far apart its lines are at `px` pixels, each part rounded up to
@@ -344,6 +360,13 @@ impl Letters {
         self.lettering(ids).own.face.map(|r| r.face)
     }
 
+    /// How wide `words` are in the font `ids` names, and how far apart its
+    /// lines are, in the layouts' pixels.
+    pub fn measure(&self, ids: &str, words: &str) -> (f32, f32) {
+        let own = self.lettering(ids).own;
+        (own.face.as_ref()).map_or((0.0, own.px), |r| (r.width(words, own.px), r.line(own.px)))
+    }
+
     /// The font `ids` names, as read, at its size on the layouts' screen.
     pub fn font(&self, ids: &str) -> TextFont {
         let own = self.lettering(ids).own;
@@ -408,6 +431,7 @@ mod tests {
     fn a_font_scaled_below_its_threshold_is_drawn_in_its_backup() {
         let read = |face| Read {
             face,
+            bytes: Default::default(),
             ascent: 0.75,
             descent: 0.25,
         };
@@ -463,6 +487,7 @@ mod tests {
     fn lines_are_as_far_apart_as_a_faces_rounded_height() {
         let read = Read {
             face: Handle::default(),
+            bytes: Default::default(),
             ascent: 0.846,
             descent: 0.25,
         };
@@ -480,6 +505,7 @@ mod tests {
             own: Drawn {
                 face: Some(Read {
                     face: face.clone(),
+                    bytes: Default::default(),
                     ascent: 1.0,
                     descent: 0.0,
                 }),
