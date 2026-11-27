@@ -470,7 +470,7 @@ impl World {
 mod tests {
     use crate::testing::*;
 
-    use tgmap::{Id, Repair, Targets};
+    use tgmap::{Id, Repair, Targets, Tile};
 
     use crate::{Build, Command, Notice, Piece, Refused, State};
 
@@ -694,6 +694,27 @@ mod tests {
         w.apply(1, build([10.0, 20.0])).unwrap();
         run_until(&mut w, 10.0, |w| !w.buildings.is_empty());
         run_until(&mut w, 10.0, |w| w.units[0].mended.is_some());
+    }
+
+    #[test]
+    fn engineers_cut_off_from_a_site_keep_off_the_ground_between() {
+        let mut w = engineers();
+        w.apply(1, build([10.0, 20.0])).unwrap();
+        run_until(&mut w, 10.0, |w| !w.buildings.is_empty());
+        let side = w.pathing.side as i32;
+        for x in 0..side {
+            for y in 12..14 {
+                w.pathing.set_blocked(Tile::new(x, y));
+            }
+        }
+        w.units[0].position = [10.0, 29.0];
+        w.organizations[0].position = [10.0, 29.0];
+        w.units[0].halt();
+        for _ in 0..(5.0 / crate::TICK) as usize {
+            w.tick();
+            let at = Tile::at(w.units[0].position);
+            assert!(w.pathing.passable(at, tgmap::Domain::Land), "{at:?}");
+        }
     }
 
     #[test]
