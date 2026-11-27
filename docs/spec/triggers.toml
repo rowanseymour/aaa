@@ -706,8 +706,31 @@ text = '''A `play_speech` whose id names no `[Audio]` entry is reported as an er
 
 [[topic.rule]]
 id = "banner-text"
-tags = ["code", "data", "guess"]
-text = '''`display_banner_text_fade` (`ma_localized_string`, `ma_value` seconds): shows the map's string (its id, such as `trigger_63_element_2`, names a string the map carries) in the banner panel (`UI/Shared/display_banner.tgi`: yellow text on a backdrop, lower left of centre) for the seconds, then it fades. The seconds are counted in real time. A new banner replaces the one showing.'''
+tags = ["code", "data"]
+text = '''`display_banner_text_fade` (`ma_localized_string`, `ma_value` seconds): shows the map's string (its id, such as `trigger_63_element_2`, names a string the map carries) in the banner panel (`UI/Shared/display_banner.tgi`: yellow text on the `TextBackDrop.tga` backdrop, lower left of centre). It has no side: every player sees it, on every machine. It posts nothing to the message log. A string with no text takes away the banner showing and shows nothing.'''
+
+[[topic.rule]]
+id = "banner-fade"
+tags = ["code", "data"]
+text = '''
+The banner appears at once, fully opaque, with no fade in. It stays for the seconds, then text and backdrop fade out together, steadily, from opaque to clear over `BannerFadeDurationMS` (`AVars.tgi`, 1000: one second), and it's gone.
+- The seconds and the fade are counted in real time, so game speed doesn't change them, but both stand still while the game is paused and carry on from where they were when it's unpaused. A banner shown during a pause waits for the unpause before its time starts.
+- The seconds count to the thousandth, any finer part dropped. 0 shows the banner and starts the fade straight away. A negative value never runs out: the banner stays, unfaded, until another replaces it.
+- The time runs on while the letterbox hides the banner, so a banner whose time and fade are over by the time the letterbox goes isn't seen at all.
+'''
+
+[[topic.rule]]
+id = "banner-replaced"
+tags = ["code"]
+text = '''One banner shows at a time. A new one replaces the one showing at once, opaque again and with its own seconds, whether the old one was still waiting or already fading.'''
+
+[[topic.rule]]
+id = "banner-size"
+tags = ["code", "data"]
+text = '''
+The panel keeps its layout's left (68), top (420) and width (545, on the 1024 by 768 layout) and fits its height to the text: the text is wrapped over as many lines as it needs at the label's width (535, 5 pixels in from the left and top), and the panel, backdrop included, is made as tall as those lines plus 10 pixels. So a short banner is a one-line strip and a long one grows downwards; the layout's 65 is never used.
+- The label itself keeps its layout height (50), about two lines: a text longer than that probably draws past it, over the grown backdrop, rather than being cut off.
+'''
 
 [[topic.rule]]
 id = "display-message"
@@ -792,8 +815,23 @@ tags = ["code", "data"]
 text = '''
 A line that starts while the letterbox is off is subtitled in the same panel and, as well:
 - by one line in the message log with the whole text, posted once as the line starts: kind `TUTORIAL` (white, `IconGenericEvent.png`), with no speaker or other prefix and no location. It's posted like any other line, so it stays in the message log's history and fades from the screen as other lines do ([messages](messages.toml)); with the Tutorial message filter (`UIMessageFilterTutorial`) off it isn't posted at all.
-- by the banner panel (where `display_banner_text_fade` shows), which shows the same parts as the panel, in step with it, for as long as the letterbox stays off.
+- by the banner panel (where `display_banner_text_fade` shows), which shows the same text, opaque, a part at a time in step with the panel, for as long as the letterbox stays off. Its parts are cut to fit the banner's label (535 by 50), so they can be shorter and more than the panel's, each still shown for its share by characters, and the banner fits its height to each part as it does any text.
 '''
+
+[[topic.rule]]
+id = "subtitle-banner-end"
+tags = ["code", "data"]
+text = '''
+How the banner's copy of a subtitle ends:
+- When the subtitle ends, its last part goes from the banner at once, with no fade. If the panel's parts run out a moment (a few thousandths of a second) before the banner's, the banner shows out that moment and then fades over `BannerFadeDurationMS`, as a trigger's banner does.
+- A subtitle taken away early with nothing in its place (`ViewShowSubtitles` turned off) leaves its part in the banner for what remained of that part's time, then it fades the same way. One replaced by a new subtitle gives the banner straight to the new one's first part.
+- The letterbox coming on stops the banner's copy where it is: the part showing keeps what remained of its time and its fade, hidden by the letterbox, and the copy picks up again, at the subtitle's current part, if the letterbox goes while the subtitle still runs.
+'''
+
+[[topic.rule]]
+id = "subtitle-banner-and-trigger-banner"
+tags = ["code"]
+text = '''While a subtitle is in the banner it holds it: a trigger's `display_banner_text_fade` showing then is replaced by the subtitle's part on the next frame, so it isn't seen, and doesn't come back when the subtitle ends. A subtitle starting while a trigger's banner shows replaces that banner at once.'''
 
 [[topic.rule]]
 id = "subtitle-panel-under-control-panel"
@@ -803,7 +841,7 @@ text = '''Outside the letterbox the `Subtitles` panel lies where the control pan
 [[topic.rule]]
 id = "subtitles-option"
 tags = ["code", "data"]
-text = '''`ViewShowSubtitles` (`UVars.tgi`, true) isn't in the options window. It can be changed only as a user setting: `ViewShowSubtitles=false` on the command line, in `User/UVars.tgi`, or with the console's `set` or `ToggleUVar`. Off, no subtitle shows in any form (panel, banner or message log line), and turning it off while one shows takes it away at once.'''
+text = '''`ViewShowSubtitles` (`UVars.tgi`, true) isn't in the options window. It can be changed only as a user setting: `ViewShowSubtitles=false` on the command line, in `User/UVars.tgi`, or with the console's `set` or `ToggleUVar`. Off, no subtitle shows in any form (panel, banner or message log line). Turning it off while one shows takes it from the panel at once; its part in the banner stays out that part's time and fades ([above](#subtitle-banner-end)).'''
 
 [[topic]]
 title = "The camera"
@@ -1206,9 +1244,9 @@ by = "analysis"
 asked = 2026-11-22
 
 [[open]]
-q = '''How long the banner panel keeps a subtitle's last part on screen after the subtitle ends, outside the letterbox.'''
-by = "analysis"
-asked = 2026-11-26
+q = '''Does banner text taller than the banner's label (about two lines) draw in full over the grown backdrop, or is it cut off at the label's edge?'''
+by = "implementer"
+asked = 2026-11-27
 
 [[open]]
 q = '''Are the regiments' banners on the map hidden during scripted scenes (cutscene mode or letterbox), as health bars are in cutscene mode?'''
