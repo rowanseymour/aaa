@@ -132,11 +132,13 @@ mod tests {
             piece: Piece::Organization(1),
         };
         w.apply(1, onto).unwrap();
+        w.plan_pending();
         let towards = Command::Move {
             organization: 1,
             to: [10.0, 10.0],
         };
         w.apply(1, towards).unwrap();
+        w.plan_pending();
         run(&mut w, 6.0);
         // Within reach well short of where it set off for, it's stopped.
         assert!(distance(w.centre(0), w.centre(1)) <= 10.8);

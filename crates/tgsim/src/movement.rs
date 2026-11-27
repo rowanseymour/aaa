@@ -502,6 +502,40 @@ impl World {
         if self.flown(organization) {
             return;
         }
+        let r = &self.organizations[organization];
+        let far = !within(r.position, target, SETTING_OFF);
+        // A standing regiment plans at its next look, and until then stays
+        // as it was, entrenchment and all.
+        if far && r.route_end.is_none() && !self.lone(organization) {
+            let to = target;
+            self.organizations[organization].pending = Some(crate::Pending {
+                to,
+                facing,
+                ordered,
+            });
+            return;
+        }
+        self.start_off(organization, target, facing, ordered);
+    }
+
+    /// Sends the organization at `organization` to stand at `target` facing
+    /// `facing` as [`World::send`] does, but planning now rather than at
+    /// its next look, as a fight stops it at once.
+    pub(crate) fn send_now(&mut self, organization: usize, target: [f32; 2], facing: [f32; 2]) {
+        if !self.flown(organization) {
+            self.start_off(organization, target, facing, true);
+        }
+    }
+
+    /// As [`World::set_off`], planning now.
+    fn start_off(
+        &mut self,
+        organization: usize,
+        target: [f32; 2],
+        facing: [f32; 2],
+        ordered: bool,
+    ) {
+        self.organizations[organization].pending = None;
         let far = !within(
             self.organizations[organization].position,
             target,
@@ -539,6 +573,7 @@ impl World {
         organization.route.clear();
         organization.heading = None;
         organization.hand_out = false;
+        organization.pending = None;
     }
 
     /// Has the organization at `organization`, whose move found no route
@@ -775,6 +810,10 @@ impl World {
         self.follow_leaders();
         for r in 0..self.organizations.len() {
             if !(self.ticks + r as u64).is_multiple_of(u64::from(LOOK)) {
+                continue;
+            }
+            if let Some(p) = self.organizations[r].pending {
+                self.start_off(r, p.to, p.facing, p.ordered);
                 continue;
             }
             if self.organizations[r].route_end.is_none() {
@@ -1825,6 +1864,19 @@ impl World {
     }
 }
 
+#[cfg(test)]
+impl World {
+    /// Has each organization given a move while standing plan it now, as
+    /// it would at its next look, for tests about what comes after.
+    pub(crate) fn plan_pending(&mut self) {
+        for r in 0..self.organizations.len() {
+            if let Some(p) = self.organizations[r].pending {
+                self.start_off(r, p.to, p.facing, p.ordered);
+            }
+        }
+    }
+}
+
 impl Banner {
     /// One standing at `at`.
     pub(crate) fn at(at: [f32; 2]) -> Banner {
@@ -1881,6 +1933,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         run(&mut w, 1.0);
         assert!(near(w.units[0].position, [9.0, 12.0]));
         assert!(near(w.units[1].position, [11.0, 12.0]));
@@ -2008,6 +2061,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         // 0.2 a tick until it's at 2 a second after a second.
         run(&mut w, 1.0);
         assert!((w.units[0].speed - 2.0).abs() < 1e-4);
@@ -2032,6 +2086,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         w.tick();
         // A tenth of a radian toward +x, having gone 0.2 that way.
         let u = &w.units[0];
@@ -2069,6 +2124,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         w.tick();
         // Twice as fast, it turns twice as far, keeping its circle.
         let (sin, cos) = libm::sincosf(0.2);
@@ -2098,6 +2154,7 @@ mod tests {
                 },
             )
             .unwrap();
+            w.plan_pending();
             let mut ticks = 0;
             while w.units[0].moving() {
                 w.tick();
@@ -2130,6 +2187,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         w.tick();
         // The truck turns to +x at once and goes 0.2: the hitch swings out
         // behind it to 8.2,10 and the trailer swings round after it.
@@ -2180,6 +2238,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         w
     }
 
@@ -2460,6 +2519,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [9.0, 30.0]));
     }
@@ -2493,6 +2553,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [9.0, 30.0]));
         assert!(w.units[1].position[1] < 12.0);
@@ -2599,6 +2660,7 @@ mod tests {
         }
         let mut w = world(pathing);
         move_to(&mut w, [10.0, 30.0]);
+        w.plan_pending();
         let r = &w.organizations[0];
         let leader = &w.units[0];
         let next = *leader.path.last().unwrap();
@@ -2645,6 +2707,7 @@ mod tests {
     fn a_regiment_arrives_once_its_own_position_is_where_it_was_sent() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         move_to(&mut w, [10.0, 20.0]);
+        w.plan_pending();
         while w.units[0].moving() {
             w.tick();
         }
@@ -3103,6 +3166,7 @@ mod tests {
         let mut w = world(pathing);
         let before: Vec<[f32; 2]> = w.units.iter().map(|u| u.position).collect();
         moved(&mut w, [10.0, 30.0]);
+        w.plan_pending();
         // It's set off, but nobody moves.
         assert!(w.organizations[0].travelling);
         run(&mut w, 3.0);
@@ -3338,6 +3402,9 @@ mod tests {
         let position = w.organizations[0].position;
         w.advance(7, 0, [10.0, 30.0], crate::Order::Attack, None)
             .unwrap();
+        // Planned at its look, the move fails.
+        assert_eq!(w.organizations[0].order, crate::Order::Attack);
+        w.plan_pending();
         let r = &w.organizations[0];
         assert_eq!(r.order, crate::Order::Move);
         assert!(!r.travelling && r.position == position);
@@ -3354,6 +3421,7 @@ mod tests {
         pathing.set_blocked(Tile::new(5, 10));
         let mut w = world(pathing);
         moved(&mut w, [10.0, 20.0]);
+        w.plan_pending();
         while w.organizations[0].route_end.is_some() {
             w.tick();
         }
@@ -3444,6 +3512,7 @@ mod tests {
         let mut w = world(round_a_lake());
         let to = [10.0, 70.0];
         moved(&mut w, to);
+        w.plan_pending();
         assert!(w.organizations[0].stage);
         let mut stages = 0;
         let mut was = w.units[0].stage_area;
@@ -3470,5 +3539,44 @@ mod tests {
         w.units[0].stand_at([75.0, 20.0], [0.0, 1.0]);
         moved(&mut w, [75.0, 60.0]);
         assert_eq!(w.units[0].stage_area, None);
+    }
+
+    #[test]
+    fn a_standing_regiment_plans_its_move_at_its_first_look() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        run(&mut w, 0.3);
+        let before: Vec<[f32; 2]> = w.units.iter().map(|u| u.position).collect();
+        let position = w.organizations[0].position;
+        w.apply(
+            7,
+            Command::Move {
+                organization: 0,
+                to: [10.0, 30.0],
+            },
+        )
+        .unwrap();
+        // Underway, but nobody moves and it's where it was until it looks,
+        // within a look of the order.
+        assert!(w.underway(0) && w.destination(0) == [10.0, 30.0]);
+        let mut waited = 0;
+        while w.organizations[0].pending.is_some() {
+            let now: Vec<[f32; 2]> = w.units.iter().map(|u| u.position).collect();
+            assert_eq!(
+                (now, w.organizations[0].position),
+                (before.clone(), position)
+            );
+            w.tick();
+            waited += 1;
+        }
+        assert!(waited > 1 && waited <= crate::LOOK, "{waited}");
+        run(&mut w, 0.5);
+        assert!(w.units.iter().all(Unit::moving));
+    }
+
+    #[test]
+    fn a_unit_on_its_own_plans_its_move_at_once() {
+        let mut w = lone_vehicle();
+        moved(&mut w, [10.0, 30.0]);
+        assert!(w.organizations[0].pending.is_none() && w.units[0].moving());
     }
 }

@@ -3199,10 +3199,12 @@ mod tests {
             )
         };
         assert!(w.carry_out(&moves(1)));
+        w.plan_pending();
         assert_eq!(w.organizations[0].position, [30.0, 30.0]);
         assert_eq!(w.organizations[1].position, [10.0, 12.0]);
         // Nobody of the side there is still success.
         assert!(w.carry_out(&moves(3)));
+        w.plan_pending();
         let nowhere = element(
             "kingdom_actors_in_area_move_to_location",
             vec![kingdom(1), area(8), place([30.0, 30.0])],

@@ -305,6 +305,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         run(&mut w, 1.0);
         assert!(!w.organizations[0].guarding());
         run(&mut w, 14.0);
@@ -352,8 +353,9 @@ mod tests {
         w.organizations[2].engaged.push(Piece::Organization(1));
         w.tick();
         assert_eq!(w.organizations[0].order, Order::Pursue(2));
-        // As far as it can get by 3s, then back.
-        run(&mut w, 5.0);
+        // As far as it can get by 3s, then back, each move planned at the
+        // next look.
+        run(&mut w, 6.5);
         assert_eq!(w.organizations[0].order, Order::Move);
         assert!(w.organizations[2].engaged.contains(&Piece::Organization(1)));
         // Back beside it, on the side that left it.
