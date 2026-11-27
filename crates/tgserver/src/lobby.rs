@@ -13,7 +13,7 @@ use tgdata::{Id, RuleValues};
 use crate::client::{ask_in, first_answer};
 use crate::host::{LONGEST_HEARD, greet, joining, worth_saying};
 use crate::presets::Preset;
-use crate::protocol::{Gone, Said, ToClient, ToHost, Welcome, decode, encode};
+use crate::protocol::{Gone, Hearers, Said, ToClient, ToHost, Welcome, decode, encode};
 use crate::slots::Slots;
 use crate::{Clock, Host, Link, Lost, Naming, NotJoined, Refusal, Setup, ping, refuse};
 
@@ -561,10 +561,10 @@ impl<L: Link> Lobby<L> {
                         changed |= self.choose(client, choice, &mut gone);
                     }
                     Some(ToHost::Say(words)) if worth_saying(&words) => {
-                        let guest = self.staging.guest(client);
-                        let name = guest.map(|g| g.name.clone()).unwrap_or_default();
-                        let from = guest.and_then(|g| g.side);
-                        self.tell(&ToClient::Said(Said { from, name, words }));
+                        self.pass_on(client, Hearers::All, words);
+                    }
+                    Some(ToHost::Tell { to, words }) if worth_saying(&words) => {
+                        self.pass_on(client, to, words);
                     }
                     Some(ToHost::Leave) | None => {
                         gone.push((client, false));
@@ -646,6 +646,20 @@ impl<L: Link> Lobby<L> {
                 true
             }
         }
+    }
+
+    /// Tells everyone what the person at `client` said for those `to`
+    /// names.
+    fn pass_on(&mut self, client: u32, to: Hearers, words: String) {
+        let guest = self.staging.guest(client);
+        let name = guest.map(|g| g.name.clone()).unwrap_or_default();
+        let from = guest.and_then(|g| g.side);
+        self.tell(&ToClient::Said(Said {
+            from,
+            name,
+            words,
+            to,
+        }));
     }
 
     /// Stops the launch counting down, or launching once it has, telling
@@ -840,6 +854,11 @@ impl<L: Link> Entry<L> {
     /// Says `words` to everyone in the game.
     pub fn say(&mut self, words: String) -> Result<(), Lost> {
         self.send(ToHost::Say(words))
+    }
+
+    /// Says `words` for those `to` names.
+    pub fn say_to(&mut self, to: Hearers, words: String) -> Result<(), Lost> {
+        self.send(ToHost::Tell { to, words })
     }
 
     /// Leaves the game.
@@ -1429,6 +1448,9 @@ mod tests {
         let mut bob = ask(&mut lobby, "Bob", "sesame").unwrap();
         let carol = ask(&mut lobby, "Carol", "sesame").unwrap();
         bob.say("hi".into()).unwrap();
+        // Everyone is told what's for some, saying who it's for.
+        bob.say_to(Hearers::People(vec![1]), "psst".into()).unwrap();
+        bob.say_to(Hearers::Team, " ".into()).unwrap();
         carol.leave();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let said = host.take_said();
@@ -1436,6 +1458,12 @@ mod tests {
             (said[0].name.as_str(), said[0].words.as_str()),
             ("Bob", "hi")
         );
+        assert_eq!(said.len(), 2);
+        assert_eq!(
+            (said[1].words.as_str(), &said[1].to),
+            ("psst", &Hearers::People(vec![1]))
+        );
+        assert_eq!(bob.take_said().len(), 2);
         let left = host.take_left();
         assert_eq!((left[0].name.as_str(), left[0].kicked), ("Carol", false));
         // Not whoever runs the host, nor by anyone else.

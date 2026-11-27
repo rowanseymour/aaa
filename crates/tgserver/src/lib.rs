@@ -37,6 +37,7 @@ use link::ping;
 pub use link::{Link, Local, Lost, pair};
 pub use lobby::{COUNTDOWN, Choice, Entry, Guest, Lobby, Staging, Told, enter_lobby};
 pub use names::{NAME_LONGEST, NUMBERED, Naming, TAKEN_OVER, default_name, name, unique};
+pub use protocol::Hearers;
 pub use slots::Slots;
 
 /// What a match is played on and by, as its lobby leaves it: all that

@@ -232,6 +232,7 @@ mod tests {
             from,
             name: "Bob".into(),
             words: "wait".into(),
+            to: tgserver::Hearers::All,
         };
         let line = said_line(&look, said(Some(1)));
         assert_eq!(line.text, "Bob: wait");
