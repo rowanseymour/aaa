@@ -167,10 +167,10 @@ struct Browser {
     ended: Option<Instant>,
 }
 
-/// What the person last made a game as, and joined directly, while the
-/// game runs.
+/// What the person last made a game as, and joined directly, kept with
+/// the options.
 #[derive(Resource)]
-struct Made {
+pub(crate) struct Made {
     /// The name, unless it's the default, which follows the nickname.
     name: Option<String>,
     password: String,
@@ -189,6 +189,48 @@ impl Default for Made {
             observers: true,
             address: String::new(),
             port: PORT.to_string(),
+        }
+    }
+}
+
+impl Made {
+    /// As the options keep it: a name left as the default is kept empty,
+    /// so that one kept before is let go.
+    pub(crate) fn kept(&self) -> crate::saved::Lan {
+        crate::saved::Lan {
+            game_name: Some(self.name.clone().unwrap_or_default()),
+            password: Some(self.password.clone()),
+            most_players: Some(self.most),
+            observers: Some(self.observers),
+            join_address: Some(self.address.clone()),
+            join_port: Some(self.port.clone()),
+        }
+    }
+
+    /// Starts as `kept` has it, passing over what no longer makes sense.
+    pub(crate) fn take(&mut self, kept: &crate::saved::Lan) {
+        let text = |s: &String| s.chars().take(LONGEST).collect::<String>();
+        if let Some(name) = &kept.game_name {
+            self.name = Some(text(name)).filter(|n| !n.trim().is_empty());
+        }
+        if let Some(password) = &kept.password {
+            self.password = text(password);
+        }
+        if let Some(most) = kept.most_players {
+            self.most = most.clamp(FEWEST, MOST);
+        }
+        if let Some(on) = kept.observers {
+            self.observers = on;
+        }
+        if let Some(address) = &kept.join_address {
+            self.address = text(address);
+        }
+        let digits = |p: &String| p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit());
+        if let Some(port) = &kept.join_port
+            && digits(port)
+            && port.parse::<u16>().is_ok_and(|p| p > 0)
+        {
+            self.port.clone_from(port);
         }
     }
 }
@@ -1124,4 +1166,51 @@ fn host(mut hosting: ResMut<Hosting>) {
         None => advertiser.playing(),
     }
     advertiser.answer();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::saved::Lan;
+
+    #[test]
+    fn the_boxes_start_as_kept_passing_over_what_makes_no_sense() {
+        let mut made = Made::default();
+        made.take(&Lan {
+            game_name: Some("Tank Rush".into()),
+            password: Some("sesame".into()),
+            most_players: Some(40),
+            observers: Some(false),
+            join_address: Some("192.168.1.9".into()),
+            join_port: Some("7291".into()),
+        });
+        assert_eq!(made.name.as_deref(), Some("Tank Rush"));
+        assert_eq!((made.password.as_str(), made.most), ("sesame", MOST));
+        assert!(!made.observers);
+        assert_eq!(
+            (made.address.as_str(), made.port.as_str()),
+            ("192.168.1.9", "7291")
+        );
+        // A port that's no port leaves the one before.
+        for port in ["99999", "+7292", "0", "port"] {
+            made.take(&Lan {
+                join_port: Some(port.into()),
+                ..Lan::default()
+            });
+            assert_eq!(made.port, "7291");
+        }
+    }
+
+    #[test]
+    fn a_default_name_is_kept_empty_and_follows_the_nickname() {
+        let made = Made::default();
+        assert_eq!(made.kept().game_name.as_deref(), Some(""));
+        let mut again = Made {
+            name: Some("Old".into()),
+            ..Made::default()
+        };
+        again.take(&made.kept());
+        assert_eq!(again.name, None);
+        assert_eq!(again.port, PORT.to_string());
+    }
 }
