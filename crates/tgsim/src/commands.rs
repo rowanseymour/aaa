@@ -35,7 +35,7 @@ impl World {
         self.heeded(command)?;
         match *command {
             // Taken if any of them is.
-            Command::Group { ref orders } => {
+            Command::Group { ref orders, .. } => {
                 if orders.iter().any(|o| matches!(o, Command::Group { .. })) {
                     return Err(Refused::Unable);
                 }
@@ -286,7 +286,7 @@ impl World {
             }
             Command::AirRecon { building, at } => self.order_air_recon(player, building, at)?,
             Command::Escort { building, on } => self.set_escort(player, building, on)?,
-            Command::Group { orders } => self.order_group(player, orders)?,
+            Command::Group { orders, selection } => self.order_group(player, orders, selection)?,
             Command::Queued { command } => self.order_queued(player, *command)?,
             Command::Heard { command } => self.hear(&command)?,
             Command::Ability {

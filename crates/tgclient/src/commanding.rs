@@ -258,7 +258,7 @@ pub(crate) fn command(
     orders.queue(queuing(&keys));
     // With Group Behavior on, what each is told goes as one group.
     if groups.grouping(&selected.0) {
-        orders.gather(player);
+        orders.gather(player, groups.selection(&selected.0));
     }
     let mut moving = selected.0.clone();
     if let Some(e) = enemy_organization(&sim.0, player, *focus) {

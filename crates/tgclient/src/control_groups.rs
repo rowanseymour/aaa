@@ -103,6 +103,12 @@ impl ControlGroups {
         })
     }
 
+    /// The number of the saved group that's exactly `selected`, if any;
+    /// otherwise its group is the stand-in.
+    pub fn selection(&self, selected: &[usize]) -> Option<u8> {
+        (self.saved.iter().position(|g| g.is(selected))).and_then(|n| u8::try_from(n).ok())
+    }
+
     /// Whether orders to `selected` go to it as one group.
     pub fn grouping(&self, selected: &[usize]) -> bool {
         self.behavior(selected) == Some(true)
@@ -419,6 +425,9 @@ mod tests {
         assert!(groups.grouping(&[4, 3]));
         groups.toggle(&[3, 4]);
         assert!(!groups.grouping(&[3, 4]) && groups.grouping(&[5, 6]));
+        // Orders to it go to that saved group, and any other's to the stand-in.
+        assert_eq!(groups.selection(&[4, 3]), Some(0));
+        assert_eq!(groups.selection(&[3]), None);
     }
 
     #[test]

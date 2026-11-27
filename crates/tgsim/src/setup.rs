@@ -149,6 +149,7 @@ impl World {
             landings: Vec::new(),
             groups: Vec::new(),
             next_group: 0,
+            last_groups: BTreeMap::new(),
             technologies: BTreeMap::new(),
             lost: Vec::new(),
             objectives: BTreeMap::new(),

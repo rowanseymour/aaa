@@ -251,7 +251,7 @@ pub fn aim(
     orders.queue(crate::commanding::queuing(&keys));
     // With Group Behavior on, what each is told goes as one group.
     if groups.grouping(&given) {
-        orders.gather(player);
+        orders.gather(player, groups.selection(&given));
     }
     if aim == Aim::Repair {
         *page = Page::Orders;

@@ -265,6 +265,9 @@ pub struct World {
     pub groups: Vec<Group>,
     /// The id the next group is given.
     next_group: u32,
+    /// The group last made for each player's selection group, by player
+    /// and [`Command::Group`]'s selection.
+    last_groups: BTreeMap<(u32, Option<u8>), u32>,
     /// The last number each side has given a numbered template, by side
     /// and template.
     numbers: BTreeMap<(u32, Id), u32>,
@@ -1155,7 +1158,15 @@ pub enum Command {
     Disband { organization: usize },
     /// Gives these orders to the regiments they're to as one group, with
     /// Group Behavior on: a fresh group of them, timed to arrive together.
-    Group { orders: Vec<Command> },
+    /// `selection` is the player's selection group they're given to: a
+    /// saved group by number, or none for the one that stands in for any
+    /// selection not saved. A fresh group faces as the last one made for
+    /// the same selection group does, while that's still there.
+    Group {
+        orders: Vec<Command>,
+        #[serde(default)]
+        selection: Option<u8>,
+    },
     /// Puts `command` on the end of its regiment's queue, to be carried
     /// out once the regiment has nothing else to do, or at once if it's
     /// idle with nothing queued already. A group's orders to every
@@ -1516,7 +1527,7 @@ impl Sides {
 
 digest!(World {
     organizations, units, buildings, props, deliveries, sorties, next_wave, cleared, technologies, lost, objectives, fates, over,
-    groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, told, landings, numbers, next_id,
+    groups, next_group, last_groups, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, told, landings, numbers, next_id,
     next_commission, rng, sides, badges,
 } skip {
     // Fixed by the map and the game's data.

@@ -640,7 +640,10 @@ impl<'p, 'w> Board<'p, 'w> {
             ordered.sort_unstable();
             ordered.dedup();
             if ordered.len() >= 2 {
-                given = vec![Command::Group { orders: given }];
+                given = vec![Command::Group {
+                    orders: given,
+                    selection: None,
+                }];
             }
             log::debug!(
                 "{}: {} {:?} at {:.0}, costing {:.0}, units {:?}, {} orders",

@@ -547,7 +547,14 @@ mod tests {
         let orders = [(0, [30.0, 30.0]), (1, [40.0, 30.0])]
             .map(|(organization, to)| Command::Explore { organization, to })
             .to_vec();
-        w.apply(7, Command::Group { orders }).unwrap();
+        w.apply(
+            7,
+            Command::Group {
+                orders,
+                selection: None,
+            },
+        )
+        .unwrap();
         run(&mut w, 20.0);
         let heading = |r: usize| w.organizations[r].explore.unwrap().heading;
         assert!(heading(0).is_some());
@@ -558,7 +565,14 @@ mod tests {
         let orders = [(0, points[0]), (1, points[1])]
             .map(|(organization, to)| Command::Explore { organization, to })
             .to_vec();
-        w.apply(7, Command::Group { orders }).unwrap();
+        w.apply(
+            7,
+            Command::Group {
+                orders,
+                selection: None,
+            },
+        )
+        .unwrap();
     }
 
     #[test]

@@ -4,9 +4,9 @@
 use tgmap::Tile;
 use tgmap::pathing::CELL_SIZE;
 
-use crate::Piece;
 use crate::supply::BEAT;
 use crate::{Command, Refused, World, distance, within};
+use crate::{Piece, Shelled};
 
 /// The least radius of a group's zone, which the regiments taking part in
 /// its timing are inside.
@@ -44,6 +44,10 @@ pub struct Group {
     /// Each regiment's place from its centre, in its order: sideways,
     /// then ahead.
     pub places: Vec<[f32; 2]>,
+    /// Where each regiment, in its order, was last sent in place of its
+    /// order's own point or thing: its place round it; none while it
+    /// heads for that itself.
+    pub aims: Vec<Option<[f32; 2]>>,
     /// Where it was put when it last finished an order.
     pub at: Option<[f32; 2]>,
     /// Whether its regiments were all in one formation when it last
@@ -65,6 +69,7 @@ crate::digest!(Group {
     orders,
     facing,
     places,
+    aims,
     at,
     shared,
     fight,
@@ -123,10 +128,16 @@ fn order_piece(command: &Command) -> Option<Piece> {
 impl World {
     /// Gives `orders` to the regiments they're to as one group: a fresh
     /// group of the two or more that take them, each leaving any it was
-    /// in, timed together from now on. Fewer than two take them each on
+    /// in, timed together from now on, facing as the group last made for
+    /// the player's `selection` group does if that's still there. Fewer than two take them each on
     /// their own. Refused only if every order is, or one is itself a
     /// group's.
-    pub(crate) fn order_group(&mut self, player: u32, orders: Vec<Command>) -> Result<(), Refused> {
+    pub(crate) fn order_group(
+        &mut self,
+        player: u32,
+        orders: Vec<Command>,
+        selection: Option<u8>,
+    ) -> Result<(), Refused> {
         if orders.iter().any(|o| matches!(o, Command::Group { .. })) {
             return Err(Refused::Unable);
         }
@@ -139,11 +150,15 @@ impl World {
         if ordered.len() < 2 {
             return self.each_alone(player, orders);
         }
+        let facing = (self.last_groups.get(&(player, selection)))
+            .and_then(|&id| self.groups.iter().find(|g| g.id == id))
+            .map_or(FACING, |g| g.facing);
         for &r in &ordered {
             self.leave_group(r);
         }
         let id = self.next_group;
         self.next_group += 1;
+        self.last_groups.insert((player, selection), id);
         for &r in &ordered {
             self.organizations[r].group = Some(id);
             self.organizations[r].taking_part = true;
@@ -154,11 +169,12 @@ impl World {
             id,
             owner: player,
             places: vec![[0.0, 0.0]; ordered.len()],
+            aims: vec![None; ordered.len()],
             organizations: ordered,
             heading_for: None,
             queue: Vec::new(),
             orders: Vec::new(),
-            facing: FACING,
+            facing,
             at: None,
             shared,
             fight: None,
@@ -213,7 +229,11 @@ impl World {
         let mut taken = Vec::new();
         for order in orders {
             let r = crate::commands::ordered(&order);
-            let given = self.aim_for(id, &order).unwrap_or_else(|| order.clone());
+            let aim = self.place_aim(id, &order);
+            if let Some(r) = r {
+                self.set_aim(id, r, aim);
+            }
+            let given = self.aimed_order(&order, aim);
             match self.give_order(player, given, true) {
                 Ok(()) => {
                     done = Ok(());
@@ -247,12 +267,84 @@ impl World {
             .expect("a group")
     }
 
-    /// `order` to one of the group `id`'s regiments, sent for its place
-    /// round the order's point instead, if it's on a place.
-    fn aim_for(&self, id: u32, order: &Command) -> Option<Command> {
+    /// Where the regiment `order` is to heads in place of the order's own
+    /// point or thing, as one of the group `id`: its place round it, for
+    /// an order on a place other than a bombard or a move onto what it
+    /// can't attack; for an attack, guard or bombard, only while it stands
+    /// outside the circle of the group's zone round its target.
+    fn place_aim(&self, id: u32, order: &Command) -> Option<[f32; 2]> {
         let r = crate::commands::ordered(order)?;
-        let (point, _) = order_point(self, order)?;
-        aimed(order, self.place_round(id, r, point)?)
+        let (point, always) = match *order {
+            Command::Move { to, .. }
+            | Command::Guard { to, .. }
+            | Command::Run { to, .. }
+            | Command::Attack { to, .. } => (to, true),
+            Command::MoveOnto { piece, .. } => (self.middle(piece), !self.hostile(r, piece)),
+            Command::GuardPiece { piece, .. } => (self.middle(piece), false),
+            Command::Pursue { enemy, .. } => (self.middle(Piece::Organization(enemy)), false),
+            Command::Bombard { target, .. } => match target {
+                Shelled::Thing(p) => (self.middle(p), false),
+                Shelled::Place(at) => (at, false),
+            },
+            _ => return None,
+        };
+        let reach = self.zone_radius(&self.group(id).organizations);
+        (always || !within(self.centre(r), point, reach))
+            .then(|| self.place_round(id, r, point))
+            .flatten()
+    }
+
+    /// `order` as a group hands it to a regiment heading for `aim` in
+    /// place of its point or thing: an order on a place sent on to there,
+    /// a move onto what it can't attack kept (it makes for its aim, as
+    /// [`World::group_aim`] has it), anything else a move there.
+    fn aimed_order(&self, order: &Command, aim: Option<[f32; 2]>) -> Command {
+        let (Some(to), Some(organization)) = (aim, crate::commands::ordered(order)) else {
+            return order.clone();
+        };
+        match order {
+            Command::MoveOnto { piece, .. } if !self.hostile(organization, *piece) => order.clone(),
+            _ => aimed(order, to).unwrap_or(Command::Move { organization, to }),
+        }
+    }
+
+    /// Notes `aim` as where the regiment at `r` of the group `id` heads.
+    fn set_aim(&mut self, id: u32, r: usize, aim: Option<[f32; 2]>) {
+        let g = self.group_mut(id);
+        if let Some(i) = g.organizations.iter().position(|&o| o == r) {
+            g.aims[i] = aim;
+        }
+    }
+
+    /// Where the organization at `r` heads for its group in place of its
+    /// order's own point or thing, if anywhere.
+    pub(crate) fn group_aim(&self, r: usize) -> Option<[f32; 2]> {
+        let id = self.organizations[r].group?;
+        let g = self.groups.iter().find(|g| g.id == id)?;
+        let i = g.organizations.iter().position(|&o| o == r)?;
+        *g.aims.get(i)?
+    }
+
+    /// Sends afresh each of the group `id`'s regiments whose aim for its
+    /// order has changed since it was last sent; those it sent.
+    fn reaim(&mut self, id: u32) -> Vec<usize> {
+        let g = self.group(id).clone();
+        let mut sent = Vec::new();
+        for order in &g.orders {
+            let Some(r) = crate::commands::ordered(order).filter(|r| g.organizations.contains(r))
+            else {
+                continue;
+            };
+            let aim = self.place_aim(id, order);
+            if aim == self.group_aim(r) {
+                continue;
+            }
+            self.set_aim(id, r, aim);
+            let given = self.aimed_order(order, aim);
+            self.hand(g.owner, r, given);
+            sent.push(r);
+        }
+        sent
     }
 
     /// Where the regiment at `r` of the group `id` stands round `point`:
@@ -324,7 +416,9 @@ impl World {
             else {
                 continue;
             };
-            let given = self.aim_for(id, &order).unwrap_or(order);
+            let aim = self.place_aim(id, &order);
+            self.set_aim(id, r, aim);
+            let given = self.aimed_order(&order, aim);
             self.hand(g.owner, r, given);
         }
         self.mark_taking_part(id);
@@ -356,6 +450,7 @@ impl World {
         let stopped = g.orders.iter().any(|o| matches!(o, Command::Stop { .. }));
         let g = self.group_mut(id);
         g.orders = Vec::new();
+        g.aims.fill(None);
         g.at = Some(at);
         let (owner, members, queued) = (g.owner, g.organizations.clone(), !g.queue.is_empty());
         if stopped || queued {
@@ -489,6 +584,9 @@ impl World {
             if i < g.places.len() {
                 g.places.remove(i);
             }
+            if i < g.aims.len() {
+                g.aims.remove(i);
+            }
         }
         self.groups.retain(|g| !g.organizations.is_empty());
     }
@@ -569,17 +667,26 @@ impl World {
                 for r in self.group(id).organizations.clone() {
                     self.organizations[r].group_speed = None;
                 }
-                self.group_mut(id).fight = Some(ticks + 1);
+                let g = self.group_mut(id);
+                g.fight = Some(ticks + 1);
+                g.aims.fill(None);
                 continue;
             }
             if self.group(id).orders.is_empty() {
                 continue;
             }
+            let gone = (self.group(id).orders.iter())
+                .find_map(order_piece)
+                .is_some_and(|p| self.piece_gone(p));
+            let sent = match gone {
+                true => Vec::new(),
+                false => self.reaim(id),
+            };
             if let Some(point) = self.order_done(id) {
                 self.finish_order(id, point);
                 continue;
             }
-            self.time_group(id);
+            self.time_group(id, &sent);
         }
     }
 
@@ -642,14 +749,21 @@ impl World {
     }
 
     /// What the organization at `r` was sent to attack: the enemy it's
-    /// pursuing or was moved onto, or failing those while it's engaged,
-    /// the first of its queued orders on an enemy.
+    /// pursuing or was moved onto, itself or by its group on the way
+    /// there, or failing those while it's engaged, the first of its queued
+    /// orders on an enemy.
     fn attack_target(&self, r: usize) -> Option<Piece> {
         let o = &self.organizations[r];
         let enemy = |p: Piece| self.hostile(r, p).then_some(p);
         let ordered = match o.order {
             crate::Order::Pursue(t) => Some(Piece::Organization(t)),
             _ => o.follow.and_then(enemy),
+        };
+        let grouped = || {
+            let g = self.groups.iter().find(|g| Some(g.id) == o.group)?;
+            (g.orders.iter())
+                .filter(|c| crate::commands::ordered(c) == Some(r))
+                .find_map(|c| queued_target(c).and_then(enemy))
         };
         let queued = || {
             (!o.engaged.is_empty())
@@ -660,7 +774,7 @@ impl World {
                 })
                 .flatten()
         };
-        ordered.or_else(queued)
+        ordered.or_else(grouped).or_else(queued)
     }
 
     /// Hands each of the group `id`'s regiments taking part and moving the
@@ -668,7 +782,7 @@ impl World {
     /// its time over the longest. Heading for an enemy thing with a supply
     /// zone, each times its arrival at the zone's edge, a little out, less
     /// how far ahead of the group's centre it is.
-    fn time_group(&mut self, id: u32) {
+    fn time_group(&mut self, id: u32, sent: &[usize]) {
         let g = self
             .groups
             .iter()
@@ -682,7 +796,9 @@ impl World {
         });
         let times: Vec<(usize, f32, f32)> = (g.organizations.iter().enumerate())
             .filter(|&(_, &r)| {
-                (g.times_all || self.organizations[r].taking_part) && self.underway(r)
+                (g.times_all || self.organizations[r].taking_part)
+                    && self.underway(r)
+                    && !sent.contains(&r)
             })
             .filter_map(|(i, &r)| {
                 let speed = self.unhurried_speed(r);
@@ -797,6 +913,7 @@ mod tests {
                     to: to[1],
                 },
             ],
+            selection: None,
         }
     }
 
@@ -847,12 +964,14 @@ mod tests {
                 organization: 1,
                 to: [11.0, 40.0],
             }],
+            selection: None,
         };
         w.apply(7, alone).unwrap();
         assert_eq!(w.organizations[1].group, None);
         // Nor does a group's order nest another's.
         let nested = Command::Group {
             orders: vec![moves([[9.0, 50.0], [11.0, 30.0]])],
+            selection: None,
         };
         assert!(w.apply(7, nested).is_err());
     }
@@ -868,6 +987,7 @@ mod tests {
             7,
             Command::Group {
                 orders: vec![detach(0), detach(1)],
+                selection: None,
             },
         )
         .unwrap();
@@ -1047,15 +1167,121 @@ mod tests {
             w.destination(0)
         );
         assert!(near(w.destination(1), [16.0, 50.0]));
-        // An attack leaves it facing as it was.
-        let attack = |organization| Command::Attack {
-            organization,
-            to: [50.0, 10.0],
+    }
+
+    #[test]
+    fn a_fresh_group_faces_as_the_last_made_for_its_selection_group() {
+        let mut w = in_line();
+        w.apply(7, moves([[10.0, 50.0], [10.0, 50.0]])).unwrap();
+        let attack = |selection| Command::Group {
+            orders: (0..2)
+                .map(|organization| Command::Attack {
+                    organization,
+                    to: [50.0, 10.0],
+                })
+                .collect(),
+            selection,
         };
-        let orders = vec![attack(0), attack(1)];
-        w.apply(7, Command::Group { orders }).unwrap();
+        // An attack leaves the way it faces as the group it replaces had it.
+        w.apply(7, attack(None)).unwrap();
         let id = w.organizations[0].group.unwrap();
-        assert!(near(w.group(id).facing, [0.0, -1.0]), "a fresh group's");
+        assert!(
+            near(w.group(id).facing, [0.0, 1.0]),
+            "{:?}",
+            w.group(id).facing
+        );
+        // A saved group's last is none, so it starts facing as any fresh
+        // group.
+        w.apply(7, attack(Some(3))).unwrap();
+        let id = w.organizations[0].group.unwrap();
+        assert!(near(w.group(id).facing, [0.0, -1.0]));
+        // Once the stand-in's last group is gone, so is its facing.
+        w.apply(7, moves([[10.0, 50.0], [10.0, 50.0]])).unwrap();
+        for r in [0, 1] {
+            w.leave_group(r);
+        }
+        w.apply(7, attack(None)).unwrap();
+        let id = w.organizations[0].group.unwrap();
+        assert!(near(w.group(id).facing, [0.0, -1.0]));
+    }
+
+    /// Player 1's regiments 0 and 1 at 20,10 and 40,10, side by side, and
+    /// a third regiment, `owner`'s, at 30,40 ahead of them.
+    fn before(owner: u32, weapons: Vec<crate::Weapon>) -> crate::World {
+        let fighters = vec![
+            soldier(weapons.clone()),
+            soldier(weapons),
+            soldier(Vec::new()),
+        ];
+        let mut w = battle(&[1, 1, owner], fighters, at_war());
+        for (r, at) in [(0, [20.0, 10.0]), (1, [40.0, 10.0]), (2, [30.0, 40.0])] {
+            w.units[r].position = at;
+            w.organizations[r].position = at;
+        }
+        w
+    }
+
+    /// Both of regiments 0 and 1 given `order` as a group.
+    fn both(order: impl Fn(usize) -> Command) -> Command {
+        Command::Group {
+            orders: vec![order(0), order(1)],
+            selection: None,
+        }
+    }
+
+    #[test]
+    fn a_group_moved_onto_a_thing_heads_for_its_places_round_it_and_follows_it() {
+        let mut w = before(1, Vec::new());
+        let onto = |organization| Command::MoveOnto {
+            organization,
+            piece: crate::Piece::Organization(2),
+        };
+        w.apply(1, both(onto)).unwrap();
+        // Each heads for where it stands from the group's centre, round
+        // the thing, rather than the thing.
+        assert!(
+            near(w.destination(0), [20.0, 40.0]),
+            "{:?}",
+            w.destination(0)
+        );
+        assert!(near(w.destination(1), [40.0, 40.0]));
+        let away = Command::Move {
+            organization: 2,
+            to: [30.0, 70.0],
+        };
+        w.apply(1, away).unwrap();
+        run(&mut w, 40.0);
+        // Re-aimed as it moves, they follow it each to its own side.
+        let (left, right) = (w.centre(0), w.centre(1));
+        assert!(left[0] < 23.0 && right[0] > 37.0, "{left:?} {right:?}");
+        assert!(left[1] > 58.0 && right[1] > 58.0, "{left:?} {right:?}");
+    }
+
+    #[test]
+    fn a_group_sent_after_an_enemy_heads_for_its_places_round_it_then_for_the_enemy() {
+        let mut w = before(2, vec![rifle(10.0, 1.0)]);
+        let pursue = |organization| Command::Pursue {
+            organization,
+            enemy: 2,
+        };
+        w.apply(1, both(pursue)).unwrap();
+        // Outside the group's zone round the enemy, each moves for its
+        // place round it, the enemy still what it's after.
+        assert_eq!(w.organizations[0].order, crate::Order::Move);
+        assert!(
+            near(w.destination(0), [20.0, 40.0]),
+            "{:?}",
+            w.destination(0)
+        );
+        assert_eq!(w.attack_target(0), Some(crate::Piece::Organization(2)));
+        // Once inside, it goes for the enemy itself.
+        let mut seconds = 0;
+        while w.organizations[0].order != crate::Order::Pursue(2) && seconds < 20 {
+            run(&mut w, 1.0);
+            seconds += 1;
+        }
+        assert_eq!(w.organizations[0].order, crate::Order::Pursue(2));
+        assert!(crate::distance(w.centre(0), w.centre(2)) <= 18.5);
     }
 
     #[test]
@@ -1128,7 +1354,7 @@ mod tests {
         let id = w.organizations[0].group.unwrap();
         assert!(w.group(id).times_all);
         w.organizations[1].taking_part = false;
-        w.time_group(id);
+        w.time_group(id, &[]);
         assert!(w.organizations[1].group_speed.is_some());
     }
 }

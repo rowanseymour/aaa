@@ -118,7 +118,7 @@ impl World {
     pub(crate) fn order_queued(&mut self, player: u32, command: Command) -> Result<(), Refused> {
         match command {
             Command::Queued { .. } => Err(Refused::Unable),
-            Command::Group { orders } if self.group_ordered(player, &orders).is_some() => {
+            Command::Group { orders, .. } if self.group_ordered(player, &orders).is_some() => {
                 let id = self.group_ordered(player, &orders).expect("just found");
                 let g = self.groups.iter().position(|g| g.id == id).expect("found");
                 let idle = self.groups[g]
@@ -134,7 +134,7 @@ impl World {
                     }
                 }
             }
-            Command::Group { orders } => {
+            Command::Group { orders, .. } => {
                 let done: Vec<_> = (orders.into_iter())
                     .map(|o| self.order_queued(player, o))
                     .collect();
@@ -323,7 +323,12 @@ mod tests {
         assert!(reaches(&mut w, [30.0, 10.0]));
         // A group's orders to regiments that aren't one group are queued
         // each for its own regiment.
-        let group = |orders| queued(Command::Group { orders });
+        let group = |orders| {
+            queued(Command::Group {
+                orders,
+                selection: None,
+            })
+        };
         assert!(w.check(7, &queued(queued(to([1.0, 1.0])))).is_err());
         w.apply(7, to([10.0, 30.0])).unwrap();
         w.apply(7, group(vec![to([30.0, 30.0])])).unwrap();
@@ -343,6 +348,7 @@ mod tests {
             1,
             Command::Group {
                 orders: vec![move_to(0, [10.0, 15.0]), move_to(1, [30.0, 30.0])],
+                selection: None,
             },
         )
         .unwrap();
@@ -351,6 +357,7 @@ mod tests {
             1,
             queued(Command::Group {
                 orders: both([20.0, 5.0]),
+                selection: None,
             }),
         )
         .unwrap();
@@ -391,6 +398,7 @@ mod tests {
             1,
             Command::Group {
                 orders: both([30.0, 10.0]),
+                selection: None,
             },
         )
         .unwrap();
@@ -398,6 +406,7 @@ mod tests {
             1,
             queued(Command::Group {
                 orders: both([10.0, 10.0]),
+                selection: None,
             }),
         )
         .unwrap();
