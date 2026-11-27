@@ -99,7 +99,7 @@ pub(crate) fn fit_ui(
 /// `setting`, shrunk as [`fit_ui`] says for a window `size` across, and
 /// for the `top` row as wide as that, if there is one.
 pub(crate) fn fitted(setting: f32, size: Vec2, top: Option<f32>) -> f32 {
-    let side = MARGIN + modern::minimap::DISC.max(modern::actions::WIDTH) + MARGIN;
+    let side = MARGIN + modern::minimap::DISC.max(modern::actions::SIZE.x) + MARGIN;
     let wide = size.x / (2.0 * side + modern::object_display::SIZE.x);
     let wide = top.map_or(wide, |top| wide.min(size.x / top));
     let tallest = modern::minimap::DISC
@@ -145,12 +145,12 @@ mod tests {
 
     #[test]
     fn the_interface_shrinks_for_whichever_row_is_wider() {
-        let size = Vec2::new(1024.0, 768.0);
+        let size = Vec2::new(800.0, 600.0);
         let bottom = fitted(1.0, size, None);
         assert!(bottom < 1.0);
         // A top row narrower than the bottom changes nothing.
-        assert_eq!(fitted(1.0, size, Some(800.0)), bottom);
-        assert_eq!(fitted(1.0, size, Some(1280.0)), 0.8);
+        assert_eq!(fitted(1.0, size, Some(700.0)), bottom);
+        assert_eq!(fitted(1.0, size, Some(1250.0)), 0.64);
         // Nor does either where there's room for both.
         assert_eq!(fitted(1.0, Vec2::new(1920.0, 1080.0), Some(1280.0)), 1.0);
     }

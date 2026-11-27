@@ -47,6 +47,7 @@ impl Plugin for HudPlugin {
                 (
                     LayOut
                         .after(crate::object_display::choose)
+                        .after(crate::formations::light)
                         .before(crate::object_display::refresh),
                     Draw.after(crate::clock::disable_buttons)
                         .after(crate::displays::Keys)

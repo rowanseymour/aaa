@@ -22,6 +22,10 @@ differences in what you can see or do are.
   [special_ops.rs](../crates/tgclient/src/hud/modern/special_ops.rs).
 - **Formation keys.** Alt with a digit puts the selection in that formation. The digits
   alone save and select control groups, as in the original.
+- **Formation picker.** Ours shows the selection's formation as one icon on the object
+  display's title, which opens the formations to choose from. Where the selection is in
+  different formations, it marks the ones they're in rather than lighting none. See
+  [object_display.rs](../crates/tgclient/src/hud/modern/object_display.rs).
 - **Group strip.** Ours is always open, with no button to close it, and an empty
   group's slot shows the key that selects it. See
   [groups.rs](../crates/tgclient/src/hud/modern/groups.rs).

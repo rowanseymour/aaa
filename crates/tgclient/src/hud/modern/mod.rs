@@ -27,6 +27,7 @@ pub struct ModernHudPlugin;
 
 impl Plugin for ModernHudPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<object_display::ChoosingFormation>();
         app.add_systems(
             OnEnter(DRAWN),
             (
@@ -83,7 +84,7 @@ impl Plugin for ModernHudPlugin {
                     chat::light_button,
                     displays::light_buttons,
                     actions::show,
-                    actions::show_formation_tab,
+                    object_display::show_formations,
                     // For the buttons on the cards it borrows from the original's.
                     crate::hud::original::show_pressables,
                     resource_bar::show,
