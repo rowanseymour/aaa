@@ -122,6 +122,10 @@ talk is our own, so this project and the original can't join each other's matche
 - **Recorded matches (films).** A match can be recorded and played again, as in the
   original, which calls a recording a film. Ours are kept in a format of our own, and
   the original's aren't read. See [film.rs](../crates/tgserver/src/film.rs).
+- **No Internet games.** The original found and joined Internet games through an
+  online service that no longer runs, and there are no plans to support them.
+  The Multiplayer menu keeps its Internet button, greyed out. See
+  [menu.rs](../crates/tgclient/src/menu.rs).
 - **A server with no window.** `tgserver` hosts a match without playing in it;
   the original's host is always one of the players.
 - **Nickname.** Set in the Gameplay tab rather than a Network tab of its own, or
