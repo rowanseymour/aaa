@@ -17,8 +17,8 @@ use crate::menu::{MenuPage, open};
 use crate::presets::Preset;
 use crate::ui::GLYPH_DIR;
 use crate::ui::{
-    Card, Chosen, Dropdown, Font, Hint, Ink, Shown, Surface, button, called, card, clickable,
-    disabled, dropdown, inert, label, opener, padded, panel, slug, switch, text,
+    Chosen, Dropdown, Font, Hint, Ink, Shown, Surface, button, called, clickable, disabled,
+    dropdown, inert, label, opener, padded, panel, slug, text,
 };
 use crate::{Data, Screen, Seed, Side, confirm};
 
@@ -1340,6 +1340,18 @@ fn show_slots(
                         let _ = staged.entry.choose(tgserver::Choice::Open(id));
                     });
             }
+            // The person stops playing to watch, where watching is allowed.
+            if lobby.person == Some(id) && staging.is_none_or(|(s, _)| s.observers) {
+                commands
+                    .spawn((
+                        ChildOf(row),
+                        button("Observer", Font::Body),
+                        called(format!("{side}.observer")),
+                        Hint("Switch to observer".into()),
+                        SideChoice(None),
+                    ))
+                    .observe(choose_side);
+            }
             // The person can move to a side no other person takes,
             // trading places with their own computer player.
             if (lobby.mine(id) || empty) && movable(id) {
@@ -1359,48 +1371,63 @@ fn show_slots(
             }
         }
     }
-    // Those watching.
-    let watching = staging
-        .into_iter()
-        .flat_map(|(s, _)| s.guests.iter().filter(|g| g.side.is_none()));
-    for guest in watching {
-        let row = commands
+    // Those watching, under a header of their own whose Join Team takes
+    // the viewer off their side.
+    let header = commands
+        .spawn((
+            ChildOf(slots),
+            Node {
+                column_gap: px(SLOT_GAP),
+                align_items: AlignItems::Center,
+                margin: UiRect::top(px(8)),
+                ..default()
+            },
+            children![text("Observers", Font::Heading)],
+        ))
+        .id();
+    match lobby.person {
+        Some(_) => {
+            commands
+                .spawn((
+                    ChildOf(header),
+                    button("Join Team", Font::Body),
+                    called("lobby.join.observers"),
+                    Hint("Switch to this team".into()),
+                    SideChoice(None),
+                ))
+                .observe(choose_side);
+        }
+        None => _ = commands.spawn((ChildOf(header), disabled("Join Team", Font::Body))),
+    }
+    let row = |commands: &mut Commands, name: String| {
+        let who = Node {
+            width: px(WHO_WIDTH),
+            justify_content: JustifyContent::Start,
+            ..padded()
+        };
+        commands
             .spawn((
                 ChildOf(slots),
                 Node {
-                    column_gap: px(12),
+                    column_gap: px(SLOT_GAP),
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                children![label(
-                    format!("Observer: {}", guest.name),
-                    Font::Body,
-                    Ink::Muted
-                )],
+                children![(inert(who), children![text(name, Font::Body)])],
             ))
-            .id();
-        crate::staging::marks(&mut commands, row, guest, hosting, &look);
+            .id()
+    };
+    match staging {
+        Some((s, _)) => {
+            for guest in s.guests.iter().filter(|g| g.side.is_none()) {
+                let row = row(&mut commands, guest.name.clone());
+                crate::staging::marks(&mut commands, row, guest, hosting, &look);
+            }
+        }
+        // Played alone, the one person.
+        None if lobby.person.is_none() => _ = row(&mut commands, "Player".into()),
+        None => {}
     }
-    let label = match (lobby.person, &staging) {
-        (_, Some(_)) => "Observer",
-        (None, None) => "Observer: Player",
-        (Some(_), None) => "Observer",
-    };
-    let watch = Node {
-        margin: UiRect::top(px(8)),
-        justify_content: JustifyContent::Start,
-        ..padded()
-    };
-    commands
-        .spawn((
-            ChildOf(slots),
-            switch(card(watch)),
-            Card,
-            called("lobby.observer"),
-            SideChoice(None),
-            children![text(label, Font::Body)],
-        ))
-        .observe(choose_side);
 }
 
 /// The mark and buttons for offers to trade sides between the person at
