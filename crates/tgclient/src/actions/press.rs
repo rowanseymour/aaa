@@ -160,6 +160,9 @@ impl Presser<'_, '_> {
                 Some(give @ (Give::Rout | Give::Attach | Give::Detach | Give::DetachHero)) => {
                     let mut given = false;
                     let mut short = Vec::new();
+                    if self.groups.grouping(&self.selected.0) {
+                        self.orders.gather(player);
+                    }
                     for &organization in &self.selected.0 {
                         if let Some(command) = give.command(organization) {
                             let check = sim.check(player, &command);

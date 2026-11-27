@@ -419,7 +419,7 @@ pub(crate) fn spread(
 
 /// Gives organizations an order at a point, each keeping its place relative to
 /// the rest within a map `size` across, unless they all go `together` to
-/// the point itself. Returns those that went, each with where to.
+/// the point itself, as a group's do. Returns those that went, each with where to.
 pub(crate) fn send(
     sim: &World,
     orders: &mut Orders,
@@ -429,7 +429,9 @@ pub(crate) fn send(
     (aim, together): (actions::Aim, bool),
     size: f32,
 ) -> Vec<(usize, [f32; 2])> {
-    let targets = match together {
+    // A group's regiments are sent to the one point, each to take its
+    // place in the group round it.
+    let targets = match together || orders.gathering() {
         true => vec![[px, py]; organizations.len()],
         false => spread(sim, organizations, [px, py], size),
     };

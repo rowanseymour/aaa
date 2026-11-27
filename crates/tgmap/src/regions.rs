@@ -146,6 +146,14 @@ impl Regions {
         (r != NONE).then_some(r as usize)
     }
 
+    /// The tiles in `region`.
+    pub fn tiles(&self, region: usize) -> impl Iterator<Item = Tile> + '_ {
+        let side = self.side;
+        (self.tiles.iter().enumerate())
+            .filter(move |&(_, &r)| r as usize == region && r != NONE)
+            .map(move |(i, _)| Tile::new((i % side) as i32, (i / side) as i32))
+    }
+
     /// The regions of the largest land mass.
     pub fn main_island(&self) -> &[usize] {
         self.islands.first().map_or(&[], Vec::as_slice)

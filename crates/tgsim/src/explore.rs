@@ -10,7 +10,7 @@ use crate::{Refused, Seen, World, distance, normalised, within};
 
 /// How near the point an organization's sent to explore some member must
 /// be able to stand for it to head there first, and how near any place it
-/// weighs.
+/// weighs, each then moved to the nearest spot where one could.
 const STANDING: f32 = 2.0;
 
 /// An organization's order to explore, kept until it's given another.
@@ -20,8 +20,8 @@ pub struct Explore {
     pub point: [f32; 2],
     /// Where it's headed now.
     pub heading: Option<[f32; 2]>,
-    /// Whether it's fought since it chose where to head, so chooses
-    /// afresh once done.
+    /// Whether it's fought since it was last sent, so is sent on again
+    /// once done.
     fought: bool,
 }
 
@@ -60,8 +60,9 @@ impl World {
         }
     }
 
-    /// Has an organization explore around `point`, heading there first
-    /// if it could stand near it.
+    /// Has an organization explore around `point`, heading first for the
+    /// nearest spot to it where it could stand; or, one its group's leader
+    /// explores for, for where the leader's headed.
     pub(crate) fn order_explore(
         &mut self,
         player: u32,
@@ -71,9 +72,11 @@ impl World {
         self.may_explore(player, organization)?;
         let size = self.pathing.size();
         let point = point.map(|c| c.clamp(1.0, size.next_down()));
-        let first = self
-            .could_stand(organization, point, STANDING)
-            .then_some(point);
+        let leader = self.led(organization);
+        let first = match leader {
+            Some(leader) => self.organizations[leader].explore.and_then(|e| e.heading),
+            None => self.standing_spot(organization, point, STANDING),
+        };
         let r = &mut self.organizations[organization];
         r.take_order(crate::Order::Move);
         r.explore = Some(Explore {
@@ -83,6 +86,7 @@ impl World {
         });
         match (first, r.engaged.is_empty()) {
             (Some(to), true) => self.send_along(organization, to),
+            (None, true) if leader.is_some() => self.stand_exploring(organization),
             (None, true) => self.explore_on(organization),
             // It chooses once done fighting.
             (_, false) => {}
@@ -91,9 +95,10 @@ impl World {
     }
 
     /// Has each exploring organization that's done with where it was
-    /// headed choose where next: once it's no longer moving, has come
-    /// near enough, or has fought since. One its group's leader explores
-    /// for goes where the leader does.
+    /// headed choose where next: once it's no longer moving or has come
+    /// near enough. One that's fought since it was sent heads on for where
+    /// it was going. One its group's leader explores for goes where the
+    /// leader does.
     pub(crate) fn keep_exploring(&mut self) {
         let close = self.rules.explore_rules.close_enough;
         for r in 0..self.organizations.len() {
@@ -118,8 +123,10 @@ impl World {
             let near = explore
                 .heading
                 .is_some_and(|to| within(self.centre(r), to, close));
-            if explore.fought || near || !self.underway(r) {
-                self.explore_on(r);
+            match explore.heading {
+                Some(to) if explore.fought && !near => self.head_on(r, to),
+                _ if explore.fought || near || !self.underway(r) => self.explore_on(r),
+                _ => {}
             }
         }
     }
@@ -131,6 +138,16 @@ impl World {
         let group = self.groups.iter().find(|g| g.id == id)?;
         let &leader = group.organizations.first()?;
         (leader != r && self.organizations[leader].explore.is_some()).then_some(leader)
+    }
+
+    /// Sends the organization at `r`, done fighting, on for `to`, where it
+    /// was headed before.
+    fn head_on(&mut self, r: usize, to: [f32; 2]) {
+        self.organizations[r].resume = None;
+        if let Some(e) = &mut self.organizations[r].explore {
+            e.fought = false;
+        }
+        self.send_along(r, to);
     }
 
     /// Sends the organization at `r`, done fighting, where its group's
@@ -161,21 +178,31 @@ impl World {
         };
         self.organizations[r].explore = Some(e);
         self.organizations[r].resume = None;
-        let Some(to) = next else {
-            return;
-        };
-        self.send_along(r, to);
+        if let Some(to) = next {
+            self.send_along(r, to);
+        }
         let followers: Vec<usize> = (0..self.organizations.len())
             .filter(|&o| self.led(o) == Some(r))
             .collect();
         for o in followers {
             if self.organizations[o].engaged.is_empty() {
                 if let Some(e) = &mut self.organizations[o].explore {
-                    e.heading = Some(to);
+                    e.heading = next;
                 }
-                self.send_along(o, to);
+                match next {
+                    Some(to) => self.send_along(o, to),
+                    None => self.stand_exploring(o),
+                }
             }
         }
+    }
+
+    /// Has the organization at `r` stand where it is, still exploring.
+    fn stand_exploring(&mut self, r: usize) {
+        let here = self.standing_point(r);
+        let facing = self.organizations[r].facing;
+        self.organizations[r].resume = None;
+        self.send(r, here, facing);
     }
 
     /// The best of the places the organization at `r` weighs: the less its
@@ -203,9 +230,12 @@ impl World {
         }
         let mut best: Option<Candidate> = None;
         for (at, base) in places {
-            if !self.on_the_map(at) || !self.could_stand(r, at, STANDING) {
+            if !self.on_the_map(at) {
                 continue;
             }
+            let Some(at) = self.standing_spot(r, at, STANDING) else {
+                continue;
+            };
             let seen = self.seen_with(&[owner], at);
             let same_way = match explore.heading {
                 Some(last) => {
@@ -264,16 +294,19 @@ impl World {
         Some(along(last))
     }
 
-    /// Whether the tile under `at` is one `owner` has never seen whose
-    /// neighbours on the map it has all seen.
+    /// Whether `at` is in a region whose neighbours on its island
+    /// `owner` has seen every tile of, as it has when there are none.
     fn finishes(&self, owner: u32, at: [f32; 2]) -> bool {
-        let tile = Tile::at(at);
-        let neighbours = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)));
-        neighbours
-            .filter(|&d| d != (0, 0))
-            .map(|(dx, dy)| tile.offset(dx, dy).centre())
-            .filter(|&c| self.on_the_map(c))
-            .all(|c| self.seen_with(&[owner], c) != Seen::Unexplored)
+        let regions = &self.regions;
+        let Some(region) = regions.at(at) else {
+            return false;
+        };
+        let island = regions.regions[region].island;
+        (regions.regions[region].neighbours.iter())
+            .filter(|&&(n, _)| regions.regions[n].island == island)
+            .all(|&(n, _)| {
+                (regions.tiles(n)).all(|t| self.seen_with(&[owner], t.centre()) != Seen::Unexplored)
+            })
     }
 
     fn on_the_map(&self, at: [f32; 2]) -> bool {
@@ -281,20 +314,34 @@ impl World {
         at.iter().all(|c| (0.0..size).contains(c))
     }
 
-    /// Whether some member of the organization at `r` could stand within
-    /// `reach` of `at`: a tile its kind of ground, clear, has its centre
-    /// that near, or `at` is on one.
-    fn could_stand(&self, r: usize, at: [f32; 2], reach: f32) -> bool {
+    /// The nearest spot to `at`, within `reach` of it, where some member
+    /// of the organization at `r` could stand: on a tile its kind of
+    /// ground and clear.
+    fn standing_spot(&self, r: usize, at: [f32; 2], reach: f32) -> Option<[f32; 2]> {
         let centre = Tile::at(at);
         let n = (reach / CELL_SIZE).ceil() as i32 + 1;
-        let tiles = (-n..=n).flat_map(|dy| (-n..=n).map(move |dx| centre.offset(dx, dy)));
-        let near: Vec<Tile> = tiles
-            .filter(|&t| t == centre || within(t.centre(), at, reach))
-            .collect();
-        (self.survivors(r)).any(|u| {
-            let domain = self.units[u].domain;
-            near.iter().any(|&t| self.pathing.passable(t, domain))
-        })
+        let domains: Vec<tgmap::Domain> =
+            (self.survivors(r)).map(|u| self.units[u].domain).collect();
+        // Kept a little inside the tile, off the edge it shares with one
+        // it may not be.
+        let inset = CELL_SIZE * 0.01;
+        let nearest = |t: Tile| {
+            let [cx, cy] = t.centre();
+            let half = CELL_SIZE / 2.0 - inset;
+            [
+                at[0].clamp(cx - half, cx + half),
+                at[1].clamp(cy - half, cy + half),
+            ]
+        };
+        (-n..=n)
+            .flat_map(|dy| (-n..=n).map(move |dx| centre.offset(dx, dy)))
+            .filter(|&t| domains.iter().any(|&d| self.pathing.passable(t, d)))
+            .map(|t| match t == centre {
+                true => at,
+                false => nearest(t),
+            })
+            .filter(|&spot| within(spot, at, reach))
+            .min_by(|&a, &b| distance(a, at).total_cmp(&distance(b, at)))
     }
 }
 
@@ -388,6 +435,60 @@ mod tests {
         assert!(heading.is_some_and(|h| h != point), "{heading:?}");
     }
 
+    /// Water over every tile from `x` on.
+    fn sea_from(w: &mut World, x: f32) {
+        let side = w.pathing.side() as i32;
+        for ty in 0..side {
+            for tx in Tile::at([x, 0.0]).x..side {
+                w.pathing.set(Tile::new(tx, ty), Domain::Naval);
+            }
+        }
+    }
+
+    #[test]
+    fn it_heads_first_for_the_nearest_spot_it_could_stand_on() {
+        let mut w = explorer(FogSetting::Full);
+        sea_from(&mut w, 30.0);
+        explore(&mut w, 0, [31.0, 31.0]).unwrap();
+        let [x, y] = w.organizations[0].explore.unwrap().heading.unwrap();
+        assert!((29.9..30.0).contains(&x) && y == 31.0, "{x},{y}");
+    }
+
+    #[test]
+    fn places_it_weighs_near_water_are_moved_onto_ground() {
+        let mut w = explorer(FogSetting::Full);
+        sea_from(&mut w, 31.0);
+        explore(&mut w, 0, [20.0, 20.0]).unwrap();
+        for _ in 0..50 {
+            let e = w.organizations[0].explore.unwrap();
+            let Some(next) = w.next_to_explore(0, e) else {
+                continue;
+            };
+            assert!(w.pathing.passable(Tile::at(next), Domain::Land), "{next:?}");
+        }
+    }
+
+    #[test]
+    fn after_a_fight_it_heads_on_for_where_it_was_going() {
+        let mut w = explorer(FogSetting::Full);
+        explore(&mut w, 0, [60.0, 60.0]).unwrap();
+        run(&mut w, 1.0);
+        let e = w.organizations[0].explore.as_mut().unwrap();
+        e.fought = true;
+        w.keep_exploring();
+        let e = w.organizations[0].explore.unwrap();
+        assert_eq!(e.heading, Some([60.0, 60.0]));
+        assert!(!e.fought && w.underway(0));
+        // Done fighting within reach of it, it chooses anew.
+        let here = w.centre(0);
+        let e = w.organizations[0].explore.as_mut().unwrap();
+        e.fought = true;
+        e.heading = Some(here);
+        w.keep_exploring();
+        let heading = w.organizations[0].explore.unwrap().heading;
+        assert_ne!(heading, Some(here));
+    }
+
     #[test]
     fn standing_with_nowhere_to_go_isnt_resting() {
         let mut w = explorer(FogSetting::Full);
@@ -411,8 +512,8 @@ mod tests {
         assert_ne!(w.activity(0), "mind_exploring");
     }
 
-    #[test]
-    fn a_group_goes_where_its_leader_chooses() {
+    /// `explorer`, with a second squad of player 7's at 20,10.
+    fn explorers() -> World {
         let mut w = explorer(FogSetting::Full);
         let second = tgmap::Organization {
             hq: None,
@@ -437,6 +538,12 @@ mod tests {
             unpacks: None,
         };
         w.add_organization(&second);
+        w
+    }
+
+    #[test]
+    fn a_group_goes_where_its_leader_chooses() {
+        let mut w = explorers();
         let orders = [(0, [30.0, 30.0]), (1, [40.0, 30.0])]
             .map(|(organization, to)| Command::Explore { organization, to })
             .to_vec();
@@ -445,5 +552,66 @@ mod tests {
         let heading = |r: usize| w.organizations[r].explore.unwrap().heading;
         assert!(heading(0).is_some());
         assert_eq!(heading(1), heading(0));
+    }
+
+    fn explore_together(w: &mut World, points: [[f32; 2]; 2]) {
+        let orders = [(0, points[0]), (1, points[1])]
+            .map(|(organization, to)| Command::Explore { organization, to })
+            .to_vec();
+        w.apply(7, Command::Group { orders }).unwrap();
+    }
+
+    #[test]
+    fn a_group_heads_at_once_for_where_its_leader_does() {
+        let mut w = explorers();
+        sea_from(&mut w, 50.0);
+        // The leader can't stand near its point, so chooses at once; the
+        // other's point is in the sea too.
+        explore_together(&mut w, [[60.0, 30.0], [70.0, 30.0]]);
+        let heading = |r: usize| w.organizations[r].explore.unwrap().heading;
+        assert!(heading(0).is_some());
+        assert_eq!(heading(1), heading(0));
+        assert!(w.underway(1));
+    }
+
+    #[test]
+    fn with_nowhere_for_its_leader_to_go_a_group_stands() {
+        let mut w = explorers();
+        explore_together(&mut w, [[30.0, 30.0], [40.0, 30.0]]);
+        run(&mut w, 2.0);
+        w.rules.explore_rules.around_itself = 0;
+        w.rules.explore_rules.around_point = 0;
+        let here = w.centre(0);
+        w.organizations[0].explore.as_mut().unwrap().heading = Some(here);
+        w.keep_exploring();
+        assert_eq!(w.organizations[1].explore.unwrap().heading, None);
+        run(&mut w, 2.0);
+        let at = w.centre(1);
+        run(&mut w, 3.0);
+        assert!(crate::distance(w.centre(1), at) < 0.5);
+        assert!(w.organizations[1].explore.is_some());
+    }
+
+    #[test]
+    fn the_finishing_bonus_goes_where_every_neighbouring_region_is_explored() {
+        let mut w = explorer(FogSetting::Full);
+        let side = w.pathing.side() as f32 * tgmap::pathing::CELL_SIZE;
+        let at = |x: f32, next: usize| tgmap::Region {
+            centre: [x, side / 2.0],
+            neighbours: vec![(next, side / 2.0)],
+            island: None,
+        };
+        let regions = vec![at(side / 4.0, 1), at(side * 3.0 / 4.0, 0)];
+        w.regions = std::sync::Arc::new(tgmap::Regions::laid_out(&w.pathing, regions));
+        let left = [10.0, 40.0];
+        assert!(!w.finishes(7, left));
+        // Seeing all of the right half, but not its own, finishes the left.
+        for y in (0..80).step_by(4) {
+            for x in (40..80).step_by(4) {
+                w.fog.see(7, [x as f32 + 2.0, y as f32 + 2.0], 3.0);
+            }
+        }
+        assert!(w.finishes(7, left));
+        assert_eq!(w.seen_with(&[7], left), Seen::Unexplored);
     }
 }

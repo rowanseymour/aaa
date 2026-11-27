@@ -389,6 +389,11 @@ impl Orders {
         self.gathered = Some((player, Vec::new()));
     }
 
+    /// Whether the orders given now are gathered for a group.
+    pub(crate) fn gathering(&self) -> bool {
+        self.gathered.is_some()
+    }
+
     /// Asks for the orders gathered as one group, or for one alone as it
     /// is.
     pub(crate) fn send_gathered(&mut self) {

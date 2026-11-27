@@ -1116,6 +1116,11 @@ impl World {
                 continue;
             }
             let r = unit.organization;
+            // One waiting for the rest of its group doesn't look until it
+            // goes on.
+            if self.waiting_for_group(r) {
+                continue;
+            }
             let organization = &self.organizations[r];
             let driving = (self.pacer(r)).is_some_and(|lp| {
                 let leader = &self.units[organization.units[lp]];
@@ -1135,12 +1140,11 @@ impl World {
     /// until it's tried enough; once done it faces as it was told to.
     /// Regiments' members keep their places on the way.
     pub(crate) fn travel(&mut self) {
-        // One waiting for the rest of its group stands.
+        let waiting: Vec<bool> = (0..self.organizations.len())
+            .map(|r| self.waiting_for_group(r))
+            .collect();
         let tops: Vec<f32> = (0..self.organizations.len())
-            .map(|r| match self.waiting_for_group(r) {
-                true => 0.0,
-                false => self.regiment_speed(r),
-            })
+            .map(|r| self.regiment_speed(r))
             .collect();
         let handed: Vec<f32> = (0..self.organizations.len())
             .map(|r| self.handed_down_speed(r))
@@ -1152,6 +1156,11 @@ impl World {
             let unit = &mut self.units[u];
             unit.previous = unit.position;
             if unit.in_air() {
+                continue;
+            }
+            // One waiting for the rest of its group stands, not turning.
+            if waiting[unit.organization] {
+                unit.speed = 0.0;
                 continue;
             }
             unit.drive(tops[unit.organization].min(limit), own);
