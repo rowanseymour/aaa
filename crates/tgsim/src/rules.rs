@@ -104,6 +104,8 @@ pub struct Rules {
     pub move_fail_seconds: f32,
     /// The states a regiment has no formation in, by id.
     pub formationless_states: HashSet<Id>,
+    /// How near the end of a leg a unit taking it up has to be to pass it.
+    pub leg_reach: f32,
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub recruit_search_step: f32,
@@ -283,6 +285,7 @@ impl Default for Rules {
             group_zone_range_min: 18.0,
             move_fail_seconds: 5.0,
             formationless_states: HashSet::new(),
+            leg_reach: 0.1,
             recruit_search_step: 0.5,
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),

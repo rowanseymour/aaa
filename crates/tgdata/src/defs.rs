@@ -1468,6 +1468,8 @@ pub struct ActorCommand {
     pub high_importance: bool,
     /// The cursor shown while the order waits for a place or target.
     pub cursor_ids: Option<Id>,
+    /// The cursor shown instead over a place or target it can't be given.
+    pub cursor_invalid_ids: Option<Id>,
     /// The [`Vfx`] marking where the order was given.
     pub command_vfx_ids_location: Option<Id>,
     /// The effect marking the target of an order it gives, while the
@@ -1507,6 +1509,9 @@ pub struct Glyph {
 pub struct SVars {
     #[serde(rename = "TAIUseRegionPathPlanner")]
     pub use_region_path_planner: Option<bool>,
+    /// How near the end of a leg a unit taking it up has to be to pass it.
+    #[serde(rename = "TAIReachedDestinationThreshold")]
+    pub reached_destination_threshold: Option<f32>,
     /// The experience a side with a faction gains each second.
     pub experience_faction_gain_periodic: Option<f32>,
     pub building_padding_meters: Option<f32>,

@@ -679,7 +679,7 @@ impl World {
                 // Straight out to the deployment point, then by a way
                 // found from there.
                 self.units[u].position = deployment;
-                let mut way = self.plan(u, place, false).unwrap_or_default();
+                let mut way = (self.plan(u, place, false, true)).map_or(Vec::new(), |r| r.points);
                 way.push(deployment);
                 let unit = &mut self.units[u];
                 unit.position = creation;

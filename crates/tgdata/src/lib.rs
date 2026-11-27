@@ -910,6 +910,12 @@ impl GameData {
         self.svar(|v| v.mover_catchup_speed)
     }
 
+    /// How near the end of a leg a unit taking it up has to be to pass
+    /// it, if the data says.
+    pub fn leg_reach(&self) -> Option<f32> {
+        self.svar(|v| v.reached_destination_threshold)
+    }
+
     /// The least a regiment's banner goes a second catching up with its
     /// leader, if the data says.
     pub fn banner_catchup_floor(&self) -> Option<f32> {

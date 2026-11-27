@@ -33,6 +33,9 @@ struct Frames {
 #[derive(Resource, Default)]
 pub struct Looks {
     cursors: HashMap<Aim, Frames>,
+    /// Those shown instead over where an order can't be given, for the
+    /// orders that have one.
+    invalid_cursors: HashMap<Aim, Frames>,
     rally_cursor: Option<Frames>,
     /// The archive path of each command's order marker's model, by the
     /// command's id.
@@ -102,8 +105,8 @@ pub fn load(
         rally: models.get(&Id::from(RALLY_MARKER)).cloned(),
         ..default()
     };
-    let mut frames_of = |c: &tgdata::Command| {
-        let cursor = c.cursor.as_ref().and_then(|c| cursors.get(c))?;
+    let mut frames_of = |cursor: Option<&Id>| {
+        let cursor = cursor.and_then(|c| cursors.get(c))?;
         let frames: Vec<Handle<Image>> = cursor
             .frames
             .iter()
@@ -123,7 +126,7 @@ pub fn load(
     };
     looks.rally_cursor = by_id
         .get(&Id::from(actions::RALLY))
-        .and_then(&mut frames_of);
+        .and_then(|c| frames_of(c.cursor.as_ref()));
     for aim in Aim::ALL {
         let Some(c) = by_id.get(&Id::from(command(aim))) else {
             continue;
@@ -131,8 +134,11 @@ pub fn load(
         if !c.group_offset {
             looks.together.push(aim);
         }
-        if let Some(frames) = frames_of(c) {
+        if let Some(frames) = frames_of(c.cursor.as_ref()) {
             looks.cursors.insert(aim, frames);
+        }
+        if let Some(frames) = frames_of(c.invalid_cursor.as_ref()) {
+            looks.invalid_cursors.insert(aim, frames);
         }
     }
     for (id, c) in &by_id {
@@ -145,7 +151,9 @@ pub fn load(
 
 /// Shows the aimed order's cursor over the map and the minimap's diamond,
 /// the attack cursor for an armed special operation, and the usual one
-/// elsewhere.
+/// elsewhere. Bombard shows its invalid cursor over a place none of those
+/// it's for can bombard; no cursor tests whether a place can be reached.
+#[allow(clippy::too_many_arguments)]
 pub fn cursor(
     mut commands: Commands,
     (page, armed): (Res<Page>, Res<crate::special_ops::Armed>),
@@ -153,10 +161,25 @@ pub fn cursor(
     time: Res<Time>,
     pointer: Pointer,
     loaded: Res<Loaded>,
+    (sim, selected, aimed_for): (Res<Sim>, Res<crate::Selected>, Res<actions::AimedFor>),
     window: Single<(Entity, Option<&CursorIcon>), With<PrimaryWindow>>,
 ) {
-    let over_map = pointer.at(&loaded.map.ground).is_some();
+    let pointed = pointer.at(&loaded.map.ground);
+    let over_map = pointed.is_some();
+    let out_of_range = |aim: Aim| {
+        let Some(at) = pointed.map(crate::pointing::Pointing::point) else {
+            return false;
+        };
+        let given = match aimed_for.0 {
+            Some(r) => vec![r],
+            None => selected.0.clone(),
+        };
+        aim == Aim::Bombard && !given.iter().any(|&r| sim.0.bombards_place(r, at))
+    };
     let frames = match *page {
+        Page::Aiming(aim) if over_map && out_of_range(aim) => {
+            (looks.invalid_cursors.get(&aim)).or_else(|| looks.cursors.get(&aim))
+        }
         Page::Aiming(aim) if over_map => looks.cursors.get(&aim),
         Page::Rally if over_map => looks.rally_cursor.as_ref(),
         Page::AirAttack if over_map => looks.cursors.get(&Aim::Attack),

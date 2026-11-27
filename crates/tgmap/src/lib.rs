@@ -481,7 +481,8 @@ fn roles<'a>(
     let organization_ids: HashSet<u32> = organizations.iter().map(|r| r.id).collect();
     let building_ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
     let trailers: HashSet<u32> = (organizations.iter().flat_map(|r| &r.members))
-        .filter_map(|m| Some(m.trailer.as_ref()?.placed?.0))
+        .flat_map(|m| std::iter::successors(m.trailer.as_ref(), |t| t.trailer.as_deref()))
+        .filter_map(|t| Some(t.placed?.0))
         .collect();
     things.iter().map(move |t| {
         let held = t.organization().map_or(&[][..], |o| &o.members[..]);

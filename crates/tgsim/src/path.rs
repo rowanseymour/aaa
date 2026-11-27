@@ -7,29 +7,48 @@ use std::collections::BinaryHeap;
 use tgmap::pathing::CELL_SIZE;
 use tgmap::{Domain, Pathing, Tile};
 
-/// Waypoints from `from` towards `to`, not including `from`. Where `to`
-/// can't be reached the way ends at the reachable tile nearest it.
-pub fn find(pathing: &Pathing, domain: Domain, from: [f32; 2], to: [f32; 2]) -> Vec<[f32; 2]> {
+/// The most tile steps a way takes, a diagonal one counting as one.
+pub const MOST_STEPS: u32 = 254;
+
+/// A way found across the tiles.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Way {
+    /// Waypoints from where it starts, not including that.
+    pub points: Vec<[f32; 2]>,
+    /// Whether it's only the first stage of a way longer than
+    /// [`MOST_STEPS`], ending at the tile reached nearest where it's going.
+    pub stage: bool,
+}
+
+/// The way from `from` towards `to`. Where `to` can't be reached the way
+/// ends at the reachable tile nearest it, as it does where the way would be
+/// longer than [`MOST_STEPS`]; `None` where that cuts it short at the tile
+/// `from` is in.
+pub fn find(pathing: &Pathing, domain: Domain, from: [f32; 2], to: [f32; 2]) -> Option<Way> {
     let start = Tile::at(from);
     let goal = Tile::at(to);
-    let tiles = search(pathing, domain, start, goal);
+    let (tiles, stage) = search(pathing, domain, start, goal);
     let Some(&end) = tiles.last() else {
-        return Vec::new();
+        return Some(Way::default());
     };
+    if stage && end == start {
+        return None;
+    }
     let mut points: Vec<[f32; 2]> = tiles[1..].iter().map(|t| t.centre()).collect();
     match points.last_mut() {
         Some(last) if end == goal => *last = to,
         None if end == goal => points.push(to),
         _ => {}
     }
-    smooth(pathing, domain, from, points)
+    let points = smooth(pathing, domain, from, points);
+    Some(Way { points, stage })
 }
 
 /// Whether a mover on `domain` can get from `from` to `to`.
 pub fn reaches(pathing: &Pathing, domain: Domain, from: [f32; 2], to: [f32; 2]) -> bool {
     let goal = Tile::at(to);
     pathing.passable(goal, domain)
-        && search(pathing, domain, Tile::at(from), goal).last() == Some(&goal)
+        && search(pathing, domain, Tile::at(from), goal).0.last() == Some(&goal)
 }
 
 #[derive(PartialEq)]
@@ -53,11 +72,12 @@ impl PartialOrd for Open {
 }
 
 /// The tiles from `start` to `goal`, or to the explored tile nearest `goal`
-/// if there's no way there. The start tile is left even if it's blocked.
-fn search(pathing: &Pathing, domain: Domain, start: Tile, goal: Tile) -> Vec<Tile> {
+/// if there's no way there or the search got [`MOST_STEPS`] out first, and
+/// whether it did. The start tile is left even if it's blocked.
+fn search(pathing: &Pathing, domain: Domain, start: Tile, goal: Tile) -> (Vec<Tile>, bool) {
     let side = pathing.side;
     let Some(s) = start.index(side) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let estimate = |t: Tile| {
         let (dx, dy) = ((t.x - goal.x).abs() as f32, (t.y - goal.y).abs() as f32);
@@ -66,6 +86,8 @@ fn search(pathing: &Pathing, domain: Domain, start: Tile, goal: Tile) -> Vec<Til
     let n = side * side;
     let mut cost = vec![f32::INFINITY; n];
     let mut came_from = vec![usize::MAX; n];
+    let mut steps = vec![0u32; n];
+    let mut cut = false;
     let mut open = BinaryHeap::new();
     cost[s] = 0.0;
     open.push(Open {
@@ -80,6 +102,9 @@ fn search(pathing: &Pathing, domain: Domain, start: Tile, goal: Tile) -> Vec<Til
             nearest = (left, i);
         }
         if at == goal {
+            break;
+        }
+        if cut {
             break;
         }
         for (dx, dy) in NEIGHBOURS {
@@ -101,7 +126,14 @@ fn search(pathing: &Pathing, domain: Domain, start: Tile, goal: Tile) -> Vec<Til
                 1.0
             };
             let c = cost[i] + step;
+            if c < cost[j] && steps[i] >= MOST_STEPS {
+                // One step further than a way goes: it settles for what
+                // it's reached.
+                cut = true;
+                continue;
+            }
             if c < cost[j] {
+                steps[j] = steps[i] + 1;
                 cost[j] = c;
                 came_from[j] = i;
                 open.push(Open {
@@ -118,7 +150,7 @@ fn search(pathing: &Pathing, domain: Domain, start: Tile, goal: Tile) -> Vec<Til
         out.push(Tile::of_index(i, side));
     }
     out.reverse();
-    out
+    (out, cut)
 }
 
 const NEIGHBOURS: [(i32, i32); 8] = [
@@ -198,7 +230,9 @@ mod tests {
     fn straight_across_open_ground() {
         let p = Pathing::uniform(10, Domain::Land);
         assert_eq!(
-            find(&p, Domain::Land, [1.0, 1.0], [15.0, 9.0]),
+            find(&p, Domain::Land, [1.0, 1.0], [15.0, 9.0])
+                .unwrap()
+                .points,
             [[15.0, 9.0]]
         );
     }
@@ -206,7 +240,9 @@ mod tests {
     #[test]
     fn around_a_wall() {
         let p = walled();
-        let way = find(&p, Domain::Land, [3.0, 3.0], [17.0, 3.0]);
+        let way = find(&p, Domain::Land, [3.0, 3.0], [17.0, 3.0])
+            .unwrap()
+            .points;
         assert_eq!(way.last(), Some(&[17.0, 3.0]));
         // It has to pass below the wall's end at row 7.
         assert!(way.len() >= 2);
@@ -224,13 +260,46 @@ mod tests {
         for y in 0..10 {
             p.set_blocked(Tile::new(5, y));
         }
-        let way = find(&p, Domain::Land, [3.0, 3.0], [17.0, 3.0]);
-        assert_eq!(way, [[9.0, 3.0]]);
+        let way = find(&p, Domain::Land, [3.0, 3.0], [17.0, 3.0]).unwrap();
+        assert_eq!(way.points, [[9.0, 3.0]]);
+        assert!(!way.stage);
     }
 
     #[test]
     fn nowhere_off_the_map() {
         let p = Pathing::uniform(10, Domain::Land);
-        assert!(find(&p, Domain::Land, [-5.0, 3.0], [3.0, 3.0]).is_empty());
+        assert!(
+            find(&p, Domain::Land, [-5.0, 3.0], [3.0, 3.0])
+                .unwrap()
+                .points
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_way_stops_at_254_tile_steps_for_the_tile_reached_nearest() {
+        let p = Pathing::uniform(300, Domain::Land);
+        // 280 tiles east: cut 254 steps out, the nearest reached.
+        let way = find(&p, Domain::Land, [1.0, 1.0], [561.0, 1.0]).unwrap();
+        assert!(way.stage);
+        assert_eq!(way.points, [Tile::new(254, 0).centre()]);
+        // 254 steps diagonally is just within it.
+        let way = find(&p, Domain::Land, [1.0, 1.0], [509.0, 509.0]).unwrap();
+        assert!(!way.stage);
+        assert_eq!(way.points, [[509.0, 509.0]]);
+    }
+
+    #[test]
+    fn a_way_cut_short_where_it_starts_is_none() {
+        // A winding corridor: east along row 0 then back west along row 2,
+        // so 254 steps out it's no nearer the end of row 2 than the start.
+        let mut p = Pathing::uniform(300, Domain::Land);
+        for x in 0..299 {
+            p.set_blocked(Tile::new(x, 1));
+        }
+        for x in 0..300 {
+            p.set_blocked(Tile::new(x, 3));
+        }
+        assert_eq!(find(&p, Domain::Land, [1.0, 1.0], [1.0, 5.0]), None);
     }
 }

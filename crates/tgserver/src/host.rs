@@ -1229,6 +1229,7 @@ mod tests {
                 acceleration: 0.0,
                 turn_rate: 0.0,
                 trailer: None,
+                ethereal: false,
                 fighter: None,
                 health: 1.0,
                 lost: None,

@@ -5,7 +5,7 @@ use tgmap::{Domain, Obstacle, Unpacks};
 
 use crate::{ARRIVAL_REACH, LOOK, Left, Notice, Order, State, TICK, World, normalised, within};
 
-/// Where a packed building sent to unpack at `at` stands: the nearest
+/// Where a packed building ordered to unpack at `at` is sent: the nearest
 /// whole units to it.
 pub fn unpack_site(at: [f32; 2]) -> [f32; 2] {
     at.map(f32::round)
@@ -16,6 +16,10 @@ pub fn unpack_site(at: [f32; 2]) -> [f32; 2] {
 pub(crate) fn unpack_facing(facing: [f32; 2]) -> [f32; 2] {
     normalised(facing).unwrap_or(tgmap::UNPACKED_FACING)
 }
+
+/// How many times an organization at the spot tells its truck to unpack
+/// before it gives up for want of room.
+const UNPACK_ASKS: u8 = 2;
 
 impl World {
     /// Whether what `unpacks` makes would fit standing at `at` facing
@@ -48,44 +52,61 @@ impl World {
             || (r.unpacked_into).is_some_and(|b| self.buildings[b].unpacking.is_some())
     }
 
-    /// Unpacks the packed buildings that have reached where they were sent
-    /// to unpack, each leaving the map for the building it makes, and
-    /// calls it off for those that can't get there or no longer have room.
+    /// Unpacks the packed buildings whose organizations have reached where
+    /// they were sent to unpack, each leaving the map for the building it
+    /// makes, and calls it off for those that can't get there or have no
+    /// room. An organization tells its truck at each of its looks, and is
+    /// refused twice for want of room before it gives up; a lone truck
+    /// unpacks or gives up at once.
     pub(crate) fn unpack(&mut self) {
         for r in 0..self.organizations.len() {
-            let Some((at, facing)) = self.organizations[r].unpack_at else {
+            let Some((_, facing)) = self.organizations[r].unpack_at else {
                 continue;
             };
             if self.destroyed(r) {
                 self.organizations[r].unpack_at = None;
                 continue;
             }
-            let again = self.organizations[r].unpack_again;
-            if self.underway(r) || again.is_some_and(|tick| self.ticks < tick) {
+            let lone = self.lone(r);
+            let look = (self.ticks + r as u64).is_multiple_of(u64::from(LOOK));
+            // Still on its way, its leader stopped short or not.
+            let on_way = self.organizations[r].route_end.is_some();
+            if self.underway(r) || on_way || !(lone || look) {
                 continue;
             }
-            // The truck is the organization's one survivor: the organization
-            // isn't destroyed and holds a single packed building.
-            let (Some(unpacks), Some(truck)) = (
-                self.organizations[r].unpacks.clone(),
-                self.survivors(r).next(),
-            ) else {
+            let organization = &self.organizations[r];
+            let truck = match lone {
+                true => organization.units.first(),
+                false => organization.primary.and_then(|p| organization.units.get(p)),
+            };
+            let truck = truck.copied().filter(|&u| self.units[u].alive());
+            // With no truck in its slot, nothing unpacks.
+            let (Some(unpacks), Some(truck)) = (organization.unpacks.clone(), truck) else {
                 self.organizations[r].unpack_at = None;
                 continue;
             };
-            // It unpacks where it's stopped, if that's where it was sent.
+            let Some((at, _)) = organization.unpack_at else {
+                continue;
+            };
+            // It unpacks where its truck has stopped, once it's where it
+            // was sent.
             let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
             let here = self.units[truck].position;
-            let at = unpack_site([here[0] - unpacks.offset[0], here[1] - unpacks.offset[1]]);
-            let there = within(here, stop, ARRIVAL_REACH);
-            if there && !self.room_to_unpack(&unpacks, at, facing) && again.is_none() {
-                self.organizations[r].unpack_again = Some(self.ticks + u64::from(LOOK));
+            let at = [here[0] - unpacks.offset[0], here[1] - unpacks.offset[1]];
+            let there = match lone {
+                true => within(here, stop, ARRIVAL_REACH),
+                false => within(organization.position, stop, ARRIVAL_REACH),
+            };
+            let room = there && self.room_to_unpack(&unpacks, at, facing);
+            let asked = organization.unpack_again.unwrap_or(0);
+            if there && !room && !lone && asked < UNPACK_ASKS {
+                self.organizations[r].unpack_again = Some(asked + 1);
                 continue;
             }
             let organization = &mut self.organizations[r];
             organization.unpack_at = None;
             organization.unpack_again = None;
-            if !there || !self.room_to_unpack(&unpacks, at, facing) {
+            if !room {
                 let player = self.organizations[r].owner;
                 let told = Notice::CannotUnpack {
                     player,
@@ -276,7 +297,7 @@ mod tests {
 
     use tgmap::{Domain, Id, Obstacle, Pathing, Shape, Tile};
 
-    use crate::{Command, Notice, Refused, State, World};
+    use crate::{Command, LOOK, Notice, Refused, State, World};
 
     /// An organization of one truck.
     fn convoy() -> tgmap::Organization {
@@ -381,38 +402,121 @@ mod tests {
             w.order_unpack(1, r, at, NORTH).unwrap();
             run(&mut w, 20.0);
             assert_eq!(w.buildings.len(), 1, "{at:?}: {:?}", w.units[0].position);
-            assert_eq!(w.buildings[0].position, at);
+            // Where it stopped, within a tenth of where it was sent.
+            assert!(crate::within(
+                w.buildings[0].position,
+                at,
+                crate::EXACT_REACH
+            ));
+            assert_eq!(w.buildings[0].position, w.units[0].position);
         }
     }
 
-    #[test]
-    fn trucks_left_no_room_ask_again_then_say_they_cant_unpack() {
+    /// A truck sent to unpack at 30,40 from 30,30, where something goes up
+    /// before it gets there; in a regiment of its own if `regiment`.
+    fn left_no_room(regiment: bool) -> (World, usize) {
         let mut w = headquarters();
         let mut t = truck();
         t.owner = 1;
+        if regiment {
+            t.template = "regiment_hq".into();
+        }
         t.renumber(9);
         t.place([30.0, 30.0], [0.0, 1.0]);
         let r = w.add_organization(&t);
         w.order_unpack(1, r, [30.0, 40.0], NORTH).unwrap();
-        // Something goes up there before it arrives.
         w.add_buildings(&[building(40, 1, [30.0, 40.0])]);
-        run(&mut w, 4.0);
-        assert!(w.organizations[r].unpack_at.is_some() && w.notices.is_empty());
-        // At its spot it takes no orders, nor can it be disbanded.
-        assert_eq!(
-            w.check(1, &Command::Stop { organization: r }),
-            Err(Refused::NotYours)
-        );
-        let disband = Command::Disband { organization: r };
-        assert_eq!(w.check(1, &disband), Err(Refused::NotYours));
-        run(&mut w, 1.5);
-        assert!(w.organizations[r].unpack_at.is_none() && w.units[0].alive());
-        assert!(w.commands(1, r));
+        (w, r)
+    }
+
+    #[test]
+    fn regiments_left_no_room_ask_twice_then_say_they_cant_unpack() {
+        let (mut w, r) = left_no_room(true);
+        assert!(!w.lone(r));
+        let mut stopped = None;
+        while w.organizations[r].unpack_at.is_some() {
+            w.tick();
+            if stopped.is_none() && !w.underway(r) && w.organizations[r].route_end.is_none() {
+                stopped = Some(w.ticks);
+            }
+            // At its spot it takes no orders, nor can it be disbanded.
+            if w.organizations[r].unpack_again.is_some() {
+                assert_eq!(
+                    w.check(1, &Command::Stop { organization: r }),
+                    Err(Refused::NotYours)
+                );
+                let disband = Command::Disband { organization: r };
+                assert_eq!(w.check(1, &disband), Err(Refused::NotYours));
+            }
+            assert!(w.ticks < 200);
+        }
+        // Told as it stops and again a look later, it says so at the look
+        // after that.
+        let waited = w.ticks - stopped.unwrap();
+        assert_eq!(waited, 2 * u64::from(LOOK));
+        assert!(w.units[0].alive() && w.commands(1, r));
         let told = Notice::CannotUnpack {
             player: 1,
             organization: r,
         };
         assert_eq!(w.notices, [told]);
+    }
+
+    #[test]
+    fn lone_trucks_left_no_room_say_they_cant_unpack_at_once() {
+        let (mut w, r) = left_no_room(false);
+        assert!(w.lone(r));
+        while w.organizations[r].unpack_at.is_some() {
+            // It isn't told twice.
+            assert!(w.organizations[r].unpack_again.is_none());
+            w.tick();
+            assert!(w.ticks < 200);
+        }
+        assert!(w.units[0].alive());
+        let told = Notice::CannotUnpack {
+            player: 1,
+            organization: r,
+        };
+        assert_eq!(w.notices, [told]);
+    }
+
+    #[test]
+    fn a_regiment_whose_move_to_unpack_fails_says_it_cannot_unpack() {
+        let mut w = headquarters();
+        // Water right across, between it and where it's sent.
+        for x in 0..40 {
+            w.pathing.set(Tile::new(x, 16), Domain::Naval);
+        }
+        w.rules.terrain_rules.areas = true;
+        let mut t = truck();
+        (t.owner, t.template) = (1, "regiment_hq".into());
+        t.renumber(9);
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_organization(&t);
+        w.order_unpack(1, r, [30.0, 40.0], NORTH).unwrap();
+        run(&mut w, 2.0);
+        assert!(w.organizations[r].unpack_at.is_none());
+        assert_eq!(w.buildings.len(), 1);
+        let told = Notice::CannotUnpack {
+            player: 1,
+            organization: r,
+        };
+        assert_eq!(w.notices, [told]);
+    }
+
+    #[test]
+    fn a_regiment_with_its_primary_slot_empty_unpacks_nothing() {
+        let mut w = headquarters();
+        let mut t = truck();
+        (t.owner, t.template, t.primary) = (1, "regiment_hq".into(), None);
+        t.renumber(9);
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_organization(&t);
+        w.order_unpack(1, r, [30.0, 34.0], NORTH).unwrap();
+        run(&mut w, 5.0);
+        assert!(w.organizations[r].unpack_at.is_none());
+        assert_eq!(w.buildings.len(), 1);
+        assert!(w.units[0].alive() && w.notices.is_empty());
     }
 
     #[test]
@@ -496,7 +600,7 @@ mod tests {
             },
         )
         .unwrap();
-        run(&mut w, 11.0);
+        run(&mut w, 13.0);
         let depot = w.organizations[r].unpacked_into.unwrap();
         assert_eq!(w.buildings[depot].id, 31);
         w.buildings[depot].health *= 0.8;

@@ -23,6 +23,8 @@ pub struct Command {
     pub high_importance: bool,
     /// The [`CursorLook`] shown while it waits for a place or target.
     pub cursor: Option<Id>,
+    /// The one shown instead over a place or target it can't be given.
+    pub invalid_cursor: Option<Id>,
     /// The effect marking an order's target, from [`GameData::vfx`].
     pub marker: Option<Id>,
     /// Whether each of a group goes to its own place, keeping its place
@@ -73,6 +75,7 @@ fn command(strings: &crate::Strings, c: defs::ActorCommand) -> Option<Command> {
         slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
         high_importance: c.high_importance,
         cursor: not_null(c.cursor_ids),
+        invalid_cursor: not_null(c.cursor_invalid_ids),
         marker: c.command_vfx_ids_actor,
         group_offset: c.apply_group_offset.unwrap_or(true),
         alone: c.non_group_command,

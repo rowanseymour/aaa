@@ -9,8 +9,8 @@ use tgmap::{Id, Obstacle, Shape, Tile};
 use crate::value::MULTIPLY_FLOOR;
 
 use crate::{
-    ARRIVAL_REACH, Banner, EXACT_REACH, LOOK, Leg, NotYours, TICK, Trailer, Unit, World,
-    normalised, path, within, within_strictly,
+    ARRIVAL_REACH, Banner, EXACT_REACH, LOOK, Leg, NotYours, Order, TICK, Trailer, Unit, World,
+    next_chance, normalised, path, within, within_strictly,
 };
 
 /// How near a unit's destination is for a move that has to end right there
@@ -25,8 +25,13 @@ pub(crate) const SETTING_OFF: f32 = 0.5;
 /// stopping there.
 const WAYS_TRIED: u8 = 3;
 
-/// How near a leg's end a unit taking it up has to be to skip it.
-const LEG_REACH: f32 = 0.1;
+/// How near the end of the leg it's driving a unit has to come for the leg
+/// to end there and then.
+const AT_AIM: f32 = 0.01;
+
+/// How near the point after a route's next one has to be for the corner
+/// there to be taken as the one after it.
+const SAME_POINT: f32 = 0.0002;
 
 /// The least speed a regiment hands its members that has them move.
 const REGIMENT_SPEED_MIN: f32 = 0.1;
@@ -34,7 +39,10 @@ const REGIMENT_SPEED_MIN: f32 = 0.1;
 /// How far to the side of its leg a unit gets before making for it again.
 const OFF_LINE: f32 = 1.0;
 
-const LOOK_SNAPPED: u32 = 5;
+/// The fewest and most ticks between a driving unit's looks at its move,
+/// and on a leg it's driving straight for a spot of its own.
+const LOOKS: [u32; 2] = [10, 13];
+const LOOKS_STRAIGHT: [u32; 2] = [3, 6];
 
 /// The pace, in world units a second, at or below which a member ahead of
 /// its place stands until it comes.
@@ -63,6 +71,8 @@ impl Trailer {
                 (tgmap::from_local(hitch, facing, [-x, -y]), facing)
             }
         };
+        let towed =
+            (trailer.trailer.as_deref()).map(|t| Box::new(Trailer::new(t, position, facing)));
         Trailer {
             template: trailer.template.clone(),
             position,
@@ -70,26 +80,34 @@ impl Trailer {
             facing,
             hitch: trailer.hitch,
             coupling: trailer.coupling,
+            trailer: towed,
         }
     }
 
-    /// Stands it straight behind its unit.
+    /// Stands it straight behind its unit, and what it tows behind it.
     pub(crate) fn behind(&mut self, position: [f32; 2], facing: [f32; 2]) {
         let hitch = tgmap::from_local(position, facing, self.hitch);
         let [x, y] = self.coupling;
         self.position = tgmap::from_local(hitch, facing, [-x, -y]);
         self.previous = self.position;
         self.facing = facing;
+        if let Some(t) = &mut self.trailer {
+            t.behind(self.position, facing);
+        }
     }
 
     /// Turns to point at its unit's hitch, and moves so that its coupling
-    /// meets it.
+    /// meets it, what it tows following it in turn.
     fn follow(&mut self, position: [f32; 2], facing: [f32; 2]) {
+        self.previous = self.position;
         let hitch = tgmap::from_local(position, facing, self.hitch);
         let to = [hitch[0] - self.position[0], hitch[1] - self.position[1]];
         self.facing = normalised(to).unwrap_or(self.facing);
         let [x, y] = self.coupling;
         self.position = tgmap::from_local(hitch, self.facing, [-x, -y]);
+        if let Some(t) = &mut self.trailer {
+            t.follow(self.position, self.facing);
+        }
     }
 
     /// Where to draw it, as [`Unit::drawn_at`].
@@ -161,11 +179,21 @@ impl Unit {
         self.leg = None;
         self.exact = exact;
         self.ways = 1;
-        self.look = LOOK;
+        self.look = 0;
         self.pace = 1.0;
         self.detour = false;
+        self.straight = false;
+        self.stage = false;
         self.sources.clear();
         self.returning = false;
+    }
+
+    /// Sets it off along `route` to stop at `goal`, which is where it's
+    /// judged to have got to, wherever the route ends.
+    fn take_route(&mut self, route: Route, goal: [f32; 2], exact: bool) {
+        self.take(route.points, exact);
+        self.goal = Some(goal);
+        (self.stage, self.straight) = (route.stage, route.straight);
     }
 
     /// Passes its next waypoint.
@@ -183,6 +211,8 @@ impl Unit {
         self.goal = None;
         self.pace = 1.0;
         self.detour = false;
+        self.straight = false;
+        self.stage = false;
         self.sources.clear();
     }
 
@@ -227,33 +257,49 @@ impl Unit {
                 .any(|&side| within_strictly(self.turning_circle(side), at, r))
     }
 
+    /// The way on from its next waypoint, along the leg after it: past a
+    /// point lying on that waypoint, along the leg after that. None with
+    /// no leg after it.
+    fn onward(&self) -> Option<[f32; 2]> {
+        let n = self.path.len();
+        let next = *self.path.last()?;
+        let after = self.path[n.checked_sub(2)?];
+        let (from, to) = match within(next, after, SAME_POINT) {
+            true => (after, self.path[n.checked_sub(3)?]),
+            false => (next, after),
+        };
+        normalised([to[0] - from[0], to[1] - from[1]])
+    }
+
+    /// Whether it's driving straight for a spot of its own: a destination
+    /// close by, or the dash of a detour.
+    fn going_straight(&self) -> bool {
+        self.straight || self.detour
+    }
+
     /// Takes up the leg to its next waypoint, passing over the waypoints
-    /// it's already level with or past. The leg ends short of a corner by
-    /// the room it takes to turn it.
-    fn take_leg(&mut self) {
+    /// it's already level with or past, or within `reach` of. The leg ends
+    /// short of a corner by the room it takes to turn it.
+    fn take_leg(&mut self, reach: f32) {
         while self.leg.is_none() {
             let Some(&next) = self.path.last() else {
                 return;
             };
             let along = [next[0] - self.from[0], next[1] - self.from[1]];
             let heading = normalised(along).unwrap_or(self.facing);
-            let onward = (self.path.len().checked_sub(2))
-                .and_then(|i| normalised([self.path[i][0] - next[0], self.path[i][1] - next[1]]));
-            let lead = match onward {
-                Some(onward) if self.turn_radius > 0.0 => {
+            let lead = match self.onward() {
+                Some(onward) if self.turn_radius > 0.0 && !self.going_straight() => {
                     let cos = heading[0] * onward[0] + heading[1] * onward[1];
                     let sin = (heading[0] * onward[1] - heading[1] * onward[0]).abs();
                     // The tangent of half the angle between the two legs.
-                    let lead = self.turn_radius * sin / (1.0 + cos);
-                    let length = libm::hypotf(along[0], along[1]);
-                    if lead < length { lead } else { length }
+                    self.turn_radius * sin / (1.0 + cos)
                 }
                 _ => 0.0,
             };
             let aim = [next[0] - heading[0] * lead, next[1] - heading[1] * lead];
             let left =
                 (aim[0] - self.position[0]) * heading[0] + (aim[1] - self.position[1]) * heading[1];
-            if left <= 0.0 || within(self.position, aim, LEG_REACH) {
+            if left <= 0.0 || within(self.position, aim, reach) {
                 self.pass();
                 continue;
             }
@@ -270,16 +316,17 @@ impl Unit {
     /// `top` and goes the way it faces, until it's level with the leg's
     /// end, however far to the side that leaves it. It never slows to turn.
     /// It turns at a fixed rate whatever its speed, `own` top speed over its
-    /// radius, so at that speed it keeps to its turning circle.
-    fn drive(&mut self, top: f32, own: f32) {
-        self.take_leg();
-        let (Some(&next), Some(leg)) = (self.path.last(), self.leg) else {
+    /// radius, so at that speed it keeps to its turning circle. Whether
+    /// it's time it looked at how its move is going.
+    fn drive(&mut self, top: f32, own: f32, reach: f32) -> bool {
+        self.take_leg(reach);
+        let Some(leg) = self.leg.filter(|_| !self.path.is_empty()) else {
             self.speed = 0.0;
-            return;
+            return false;
         };
         if self.pace <= 0.0 {
             self.speed = 0.0;
-            return;
+            return false;
         }
         match leg.snapped || self.turn_radius <= 0.0 {
             true => self.facing = leg.heading,
@@ -302,76 +349,17 @@ impl Unit {
         };
         self.position[0] += self.facing[0] * go;
         self.position[1] += self.facing[1] * go;
-        if ends {
+        if ends || within(self.position, leg.aim, AT_AIM) {
             self.pass();
             self.leg = None;
             self.detour = false;
             if self.path.is_empty() {
                 self.speed = 0.0;
             }
-            return;
+            return false;
         }
         self.look = self.look.saturating_sub(1);
-        if self.look == 0 {
-            self.think(next, leg);
-        }
-    }
-
-    /// Looks at how the leg to `next` is going: gives up turning onto a
-    /// last leg that ends somewhere it can't turn onto, and, once it's done
-    /// turning but is left well to the side of its leg, makes for the leg
-    /// again at an angle, or straight for the leg's end where that comes
-    /// first.
-    fn think(&mut self, next: [f32; 2], leg: Leg) {
-        self.look = match leg.snapped {
-            true => LOOK_SNAPPED,
-            false => LOOK,
-        };
-        if self.path.len() == 1 && !leg.snapped && self.too_tight(next) {
-            self.facing = leg.heading;
-            self.leg = Some(Leg {
-                snapped: true,
-                ..leg
-            });
-            self.look = LOOK_SNAPPED;
-            return;
-        }
-        if self.facing != leg.heading {
-            return;
-        }
-        let [hx, hy] = leg.heading;
-        let back = [self.position[0] - next[0], self.position[1] - next[1]];
-        // How far to the leg's left it is, and short of its end.
-        let aside = hx * back[1] - hy * back[0];
-        let short = -(hx * back[0] + hy * back[1]);
-        if aside.abs() < OFF_LINE {
-            return;
-        }
-        // At 45°, or as much less as turning in and back out again leaves
-        // room for.
-        let room = match self.turn_radius > 0.0 {
-            true => 1.0 - aside.abs() / (2.0 * self.turn_radius),
-            false => -1.0,
-        };
-        let angle = libm::acosf(room.max(-1.0)).min(FRAC_PI_4);
-        let along = aside.abs() / libm::tanf(angle);
-        self.from = self.position;
-        self.leg = None;
-        self.look = LOOK;
-        if along >= short {
-            let to = [next[0] - self.position[0], next[1] - self.position[1]];
-            self.facing = normalised(to).unwrap_or(self.facing);
-            self.detour = true;
-            return;
-        }
-        self.path.push([
-            self.position[0] + hy * aside + hx * along,
-            self.position[1] - hx * aside + hy * along,
-        ]);
-        // Made from the same point of the leader's as the one it leads to.
-        if let Some(&source) = self.sources.last() {
-            self.sources.push(source);
-        }
+        self.look == 0
     }
 
     /// Where to draw it a fraction `t` of the way through the tick that
@@ -394,6 +382,16 @@ fn steer(facing: &mut [f32; 2], to: [f32; 2], most: f32) -> f32 {
     let (sin, cos) = libm::sincosf(most * angle.signum());
     *facing = [fx * cos - fy * sin, fx * sin + fy * cos];
     most
+}
+
+/// A way planned for a unit, next waypoint last.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Route {
+    pub(crate) points: Vec<[f32; 2]>,
+    /// Whether it's only the first stage of a way too long to plan at once.
+    stage: bool,
+    /// Whether it's a single leg straight for a destination close by.
+    straight: bool,
 }
 
 impl World {
@@ -536,9 +534,10 @@ impl World {
         organization.hand_out = false;
     }
 
-    /// Has the organization at `organization`, whose move found no route,
-    /// stay as it was, its move dropped: it rests where it stands, turned
-    /// to the `facing` the move was given, if any.
+    /// Has the organization at `organization`, whose move found no route
+    /// or was given up, drop the move and rest where it stands, turned to
+    /// the `facing` the move was given, if any. Its members make for their
+    /// places round there, those already in them staying put.
     fn stay(&mut self, organization: usize, facing: Option<[f32; 2]>) {
         let here = self.standing_point(organization);
         self.drop_route(organization);
@@ -546,10 +545,17 @@ impl World {
         r.position = here;
         r.travelling = false;
         r.turn_to = None;
+        r.ordered_speed = None;
+        // An attack on the way to its target is over.
+        if r.order == Order::Attack {
+            r.order = Order::Move;
+        }
         if let Some(facing) = facing {
             r.facing = facing;
         }
-        self.take_places(organization);
+        // Those in place stay put, turning only to a way the move was to
+        // face, as they would on arriving.
+        self.rest_places(organization, facing.is_some());
     }
 
     pub(crate) fn set_formation(
@@ -586,50 +592,71 @@ impl World {
         let leader = (self.pacer(organization))
             .map(|p| r.units[p])
             .filter(|_| r.travelling);
+        let lone = self.lone(organization);
         let mut places = self.destination_places(organization);
         let lead = leader.and_then(|l| places.iter().find(|(u, _)| *u == l).copied());
+        // As is one already near where it's going.
+        let near =
+            lead.is_some_and(|(l, place)| within(self.units[l].position, place, ARRIVAL_REACH));
+        let exact = exact || near;
         let route = lead
-            .and_then(|(l, place)| self.plan(l, place, exact))
+            .and_then(|(l, place)| self.plan(l, place, exact, true))
             .unwrap_or_default();
+        // Closed in where it stands, it goes nowhere until it gives up,
+        // nor do the rest.
+        let held = lead.is_some() && route.points.is_empty() && !near;
         // A route that turns ends facing along its last leg, its places
         // turned with it. The leader's own place is the regiment's
         // position, whichever way it faces.
-        if let &[end, before, ..] = &route[..]
+        if let &[end, before, ..] = &route.points[..]
             && let Some(facing) = normalised([end[0] - before[0], end[1] - before[1]])
         {
             self.organizations[organization].facing = facing;
             places = self.destination_places(organization);
         }
-        let first_leg = (lead.zip(route.last())).and_then(|((l, _), &next)| {
+        let first_leg = (lead.zip(route.points.last())).and_then(|((l, _), &next)| {
             let at = self.units[l].position;
             normalised([next[0] - at[0], next[1] - at[1]])
         });
         let r = &mut self.organizations[organization];
-        r.route_end = route.first().copied();
-        r.route.clone_from(&route);
-        r.heading = first_leg.or(route.first().map(|_| r.facing));
+        let end = route.points.first().copied();
+        r.route_end = end.or(lead.filter(|_| held).map(|(_, place)| place));
+        r.route.clone_from(&route.points);
+        r.heading = first_leg.or(end.map(|_| r.facing));
+        r.stage = route.stage;
+        r.resend_places = false;
         // Each plan's a try, but for one moved onto something.
-        if !route.is_empty() && r.follow.is_none() {
+        if !route.points.is_empty() && r.follow.is_none() {
             r.tries = r.tries.saturating_add(1);
         }
         let facing = r.facing;
         if let Some((l, place)) = lead {
-            match route.is_empty() {
-                false => {
+            // A regiment's leader stops where its route ends, and the
+            // regiment sends it again from there; one on its own makes for
+            // the spot itself.
+            match (end, lone) {
+                (Some(end), _) => {
+                    let goal = if lone { place } else { end };
                     let unit = &mut self.units[l];
-                    unit.take(route.clone(), exact);
+                    unit.take_route(route.clone(), goal, exact);
                     unit.closing = None;
                     unit.end_facing = facing;
                 }
-                true => self.take_place(l, place, facing, exact),
+                (None, _) if held => {
+                    self.units[l].halt();
+                    return;
+                }
+                (None, _) => self.take_place(l, place, facing, exact),
             }
         }
         for (u, place) in places {
             if !self.units[u].alive() || lead.is_some_and(|(l, _)| l == u) {
                 continue;
             }
-            match (lead, route.is_empty()) {
-                (Some((l, _)), false) => self.take_copy(organization, l, u, &route, (place, exact)),
+            match (lead, route.points.is_empty()) {
+                (Some((l, _)), false) => {
+                    self.take_copy(organization, l, u, &route.points, (place, exact));
+                }
                 _ => self.take_place(u, place, facing, exact),
             }
         }
@@ -646,9 +673,19 @@ impl World {
         if let Some(facing) = organization.turn_to.take() {
             organization.facing = facing;
         }
+        self.rest_places(r, true);
+    }
+
+    /// Sends each member of the organization at `r`, come to rest, to its
+    /// place, but for those already in theirs, which stay put, turning to
+    /// face its way if `turn` and they're in a regiment; those that don't
+    /// get there it sends once more.
+    fn rest_places(&mut self, r: usize, turn: bool) {
+        let organization = &mut self.organizations[r];
+        organization.resend_places = true;
         let facing = organization.facing;
         let exact = organization.unpack_at.is_some();
-        let alone = self.lone(r);
+        let turn = turn && !self.lone(r);
         for (u, place) in self.formation_places(r) {
             let unit = &self.units[u];
             if !unit.alive() || unit.closing.is_some() {
@@ -658,12 +695,38 @@ impl World {
                 true => {
                     let unit = &mut self.units[u];
                     unit.halt();
-                    if !alone {
+                    if turn {
                         unit.facing = facing;
                     }
                     unit.end_facing = facing;
                 }
                 false => self.take_place(u, place, facing, exact),
+            }
+        }
+    }
+
+    /// Has the organization at `r`, come to rest, send the members that
+    /// didn't get to their places once more, once they've all stopped, and
+    /// leave them where they are after that.
+    fn resend_places(&mut self, r: usize) {
+        let organization = &self.organizations[r];
+        if !organization.resend_places || organization.resume.is_some() {
+            return;
+        }
+        let units = || organization.units.iter().map(|&u| &self.units[u]);
+        if units().any(|u| u.alive() && (u.moving() || u.goal.is_some())) {
+            return;
+        }
+        let facing = organization.facing;
+        let exact = organization.unpack_at.is_some();
+        self.organizations[r].resend_places = false;
+        for (u, place) in self.formation_places(r) {
+            let unit = &self.units[u];
+            if unit.alive()
+                && unit.closing.is_none()
+                && !within(unit.position, place, ARRIVAL_REACH)
+            {
+                self.take_place(u, place, facing, exact);
             }
         }
     }
@@ -704,10 +767,11 @@ impl World {
     pub(crate) fn keep_routes(&mut self) {
         self.follow_leaders();
         for r in 0..self.organizations.len() {
-            if self.organizations[r].route_end.is_none() {
+            if !(self.ticks + r as u64).is_multiple_of(u64::from(LOOK)) {
                 continue;
             }
-            if !(self.ticks + r as u64).is_multiple_of(u64::from(LOOK)) {
+            if self.organizations[r].route_end.is_none() {
+                self.resend_places(r);
                 continue;
             }
             if self.organizations[r].hand_out {
@@ -765,31 +829,44 @@ impl World {
             self.end_route(r);
             return;
         }
-        if organization.resume.is_some() || !organization.engaged.is_empty() {
-            // Stopped short to fight, which takes the move up again after.
+        // Stopped short to fight, which takes the move up again after, or
+        // gone after something of its own.
+        let elsewhere = self.units[l].closing.is_some();
+        if organization.resume.is_some() || !organization.engaged.is_empty() || elsewhere {
             self.organizations[r].route_end = None;
             return;
         }
+        // One on its own has given up already.
+        let alone = self.lone(r);
+        // A long way's next stage is tried afresh.
+        if organization.stage {
+            self.organizations[r].tries = 0;
+        }
+        let organization = &self.organizations[r];
         let given = (self.ticks - organization.sent) as f32 * TICK;
         let tried = organization.tries >= WAYS_TRIED && given >= self.rules.move_fail_seconds;
         let exact = organization.unpack_at.is_some();
-        let route = match tried {
+        let route = match tried || alone {
             true => None,
-            false => own.and_then(|(_, place)| self.plan(l, place, exact)),
+            false => own.and_then(|(_, place)| self.plan(l, place, exact, false)),
         };
-        let Some(route) = route.filter(|route| !route.is_empty()) else {
+        let Some(route) = route else {
             let turn_to = self.organizations[r].turn_to;
-            self.organizations[r].ordered_speed = None;
             self.stay(r, turn_to);
             return;
         };
-        let facing = self.organizations[r].facing;
         let organization = &mut self.organizations[r];
         organization.tries = organization.tries.saturating_add(1);
-        organization.route_end = route.first().copied();
-        organization.route.clone_from(&route);
+        organization.stage = route.stage;
+        // Closed in, it stays where it is, trying, until it may give up.
+        let Some(&end) = route.points.first() else {
+            return;
+        };
+        let facing = organization.facing;
+        organization.route_end = Some(end);
+        organization.route.clone_from(&route.points);
         let unit = &mut self.units[l];
-        unit.take(route, exact);
+        unit.take_route(route, end, exact);
         unit.end_facing = facing;
     }
 
@@ -1053,58 +1130,79 @@ impl World {
         }
     }
 
-    /// Sends a unit to stand at `place` facing `facing`.
+    /// Sends a unit to stand at `place` facing `facing`, stopping right
+    /// there if `exact` or it's already near.
     pub(crate) fn take_place(&mut self, u: usize, place: [f32; 2], facing: [f32; 2], exact: bool) {
         // Nothing in the air sets off on a move.
         if self.units[u].in_air() {
             return;
         }
-        let Some(way) = self.plan(u, place, exact) else {
+        let exact = exact || within(self.units[u].position, place, ARRIVAL_REACH);
+        let Some(route) = self.plan(u, place, exact, true) else {
             // One that finds no route stops where it is, as it faces.
             self.units[u].halt();
             return;
         };
         let unit = &mut self.units[u];
-        unit.take(way, exact);
+        unit.take_route(route, place, exact);
         unit.closing = None;
         unit.end_facing = facing;
-        if unit.path.is_empty() {
-            unit.goal = None;
-            unit.facing = facing;
-        }
     }
 
-    /// The way a unit takes to stop at `to`, last waypoint first, `exact`
-    /// for a move that has to end right there. It goes straight at what's
-    /// near enough on such a move, and turns at once to what's ahead of it
-    /// but nearer than it could turn onto; otherwise it finds a way to
-    /// where it [aims](Self::aimed_at).
+    /// The way a unit takes to stop at `to`, `exact` for a move that has
+    /// to end right there. On a move that's planned none yet, `fresh`, it
+    /// goes straight at what's near enough on such a move, and turns at
+    /// once to what's ahead of it but nearer than it could turn onto;
+    /// otherwise it finds a way to where it [aims](Self::aimed_at).
     /// None where it [finds no route](Self::no_route).
-    pub(crate) fn plan(&mut self, u: usize, to: [f32; 2], exact: bool) -> Option<Vec<[f32; 2]>> {
+    pub(crate) fn plan(
+        &mut self,
+        u: usize,
+        to: [f32; 2],
+        exact: bool,
+        fresh: bool,
+    ) -> Option<Route> {
         let unit = &self.units[u];
         let off = [to[0] - unit.position[0], to[1] - unit.position[1]];
-        if exact && within_strictly(unit.position, to, STRAIGHT_REACH) {
-            return Some(vec![to]);
+        let straight = Route {
+            points: vec![to],
+            stage: false,
+            straight: true,
+        };
+        if fresh && exact && within_strictly(unit.position, to, STRAIGHT_REACH) {
+            return Some(straight);
         }
         let [fx, fy] = unit.facing;
         let ahead = fx * off[0] + fy * off[1] >= 0.0;
         let side = fx * off[1] - fy * off[0];
         let r = unit.turn_radius;
-        if r > 0.0 && ahead && within_strictly(unit.turning_circle(side), to, r) {
+        if fresh && r > 0.0 && ahead && within_strictly(unit.turning_circle(side), to, r) {
             if let Some(facing) = normalised(off) {
                 self.units[u].facing = facing;
             }
-            return Some(vec![to]);
+            return Some(straight);
         }
         let to = self.routed(u, to)?;
-        Some(self.way(u, to))
+        let way = self.way_found(u, to)?;
+        Some(Route {
+            points: way.points,
+            stage: way.stage,
+            straight: false,
+        })
+    }
+
+    /// A unit's way to `to`, last waypoint first, as [`World::way_found`]
+    /// has it; none where that finds none.
+    pub(crate) fn way(&self, u: usize, to: [f32; 2]) -> Vec<[f32; 2]> {
+        self.way_found(u, to).map(|w| w.points).unwrap_or_default()
     }
 
     /// A unit's way to `to`, last waypoint first. It passes through the
     /// obstacles it's caught on, as one put out through its building, or
     /// beside one unpacked next to it, is: those its shape overlaps, and
     /// those blocking its tile, which reach further than their shapes do.
-    pub(crate) fn way(&self, u: usize, to: [f32; 2]) -> Vec<[f32; 2]> {
+    /// None where it's cut short where the unit stands.
+    fn way_found(&self, u: usize, to: [f32; 2]) -> Option<path::Way> {
         let unit = &self.units[u];
         let tile = Tile::at(unit.position);
         let body = unit.shape.map(|shape| Obstacle {
@@ -1126,9 +1224,9 @@ impl World {
         } else {
             let pathing = self.pathing.without(caught);
             path::find(&pathing, unit.domain, unit.position, to)
-        };
-        way.reverse();
-        way
+        }?;
+        way.points.reverse();
+        Some(way)
     }
 
     /// Where the unit at `u` sent to `to` aims its route: the first spot on
@@ -1190,21 +1288,25 @@ impl World {
         Some(tgmap::from_local(o.position, o.facing, [across, along]))
     }
 
-    /// Whether the unit at `u` finds no route to `to`, so doesn't set off.
+    /// Whether the unit at `u` finds no route to `to`, so doesn't set off:
+    /// it has nowhere to [route](Self::routed) to, or its way there is cut
+    /// short where it stands.
     pub(crate) fn no_route(&self, u: usize, to: [f32; 2]) -> bool {
-        self.routed(u, to).is_none()
+        (self.routed(u, to)).is_none_or(|to| self.way_found(u, to).is_none())
     }
 
     /// Where the unit at `u` sent to `to` routes to: where it
     /// [aims](Self::aimed_at), unless there's no spot to aim at or, where
     /// the rules divide the map into areas, none of its own kind of ground
     /// joins it to that spot and a straight line there crosses some closed
-    /// to it. One standing on ground closed to it has no area to judge by.
+    /// to it. One standing on ground closed to it has no area to judge by,
+    /// and an ethereal one none to keep to.
     fn routed(&self, u: usize, to: [f32; 2]) -> Option<[f32; 2]> {
         let aimed = self.aimed_at(u, to)?;
         let unit = &self.units[u];
         let (from, domain) = (unit.position, unit.domain);
         let cut_off = self.rules.terrain_rules.areas
+            && !unit.ethereal
             && self.pathing.crossable(Tile::at(from), domain)
             && !self.pathing.joined(domain, from, aimed)
             && !path::open(&self.pathing, domain, from, aimed);
@@ -1335,7 +1437,8 @@ impl World {
             }
             let fresh = unit.leg.is_none();
             if fresh {
-                self.units[u].take_leg();
+                let reach = self.rules.leg_reach;
+                self.units[u].take_leg(reach);
             }
             let unit = &self.units[u];
             let beat = (self.ticks + u as u64).is_multiple_of(u64::from(LOOK));
@@ -1432,39 +1535,132 @@ impl World {
                 true => self.rules.catchup_speed * own,
                 false => tops[r],
             };
-            unit.drive(top.min(limit), own);
+            let reach = self.rules.leg_reach;
+            if unit.look == 0 {
+                unit.take_leg(reach);
+                // A leg it snapped onto it looks at no sooner.
+                let snapped = unit.leg.is_some_and(|l| l.snapped);
+                let straight = unit.going_straight() && !snapped;
+                self.units[u].look = self.look_ticks(u, straight);
+            }
+            let unit = &mut self.units[u];
+            if unit.drive(top.min(limit), own, reach) {
+                self.think(u);
+            }
+            let unit = &self.units[u];
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {
                     true => EXACT_REACH,
                     false => ARRIVAL_REACH,
                 };
-                let (exact, ways) = (unit.exact, unit.ways);
+                let (exact, ways, stage) = (unit.exact, unit.ways, unit.stage);
                 let there = within(unit.position, goal, reach);
-                let again = match there || ways >= WAYS_TRIED {
-                    true => Vec::new(),
-                    false => self.plan(u, goal, exact).unwrap_or_default(),
-                };
+                // A long way's next stage is planned afresh.
+                let ways = if stage { 0 } else { ways };
+                let again = (!there && ways < WAYS_TRIED)
+                    .then(|| self.plan(u, goal, exact, false))
+                    .flatten();
                 let unit = &mut self.units[u];
-                match again.is_empty() {
-                    true => {
-                        unit.goal = None;
+                match again {
+                    // Given up, it stops where it is, as it faces.
+                    None => {
+                        unit.halt();
                         if there && !alone {
                             unit.facing = facing;
                         }
                     }
-                    false => {
+                    Some(route) => {
                         // Trying another way is the same move.
                         let shelling = unit.shelling;
-                        unit.take(again, exact);
-                        (unit.goal, unit.ways, unit.shelling) = (Some(goal), ways + 1, shelling);
+                        unit.take_route(route, goal, exact);
+                        (unit.ways, unit.shelling) = (ways + 1, shelling);
                     }
                 }
             }
             let unit = &mut self.units[u];
             if let Some(t) = &mut unit.trailer {
-                t.previous = t.position;
                 t.follow(unit.position, unit.facing);
             }
+        }
+    }
+
+    /// Ticks until the unit at `u` next looks at how its move is going,
+    /// drawn afresh each time: sooner while it's driving `straight` for a
+    /// spot of its own.
+    fn look_ticks(&self, u: usize, straight: bool) -> u32 {
+        let [fewest, most] = match straight {
+            true => LOOKS_STRAIGHT,
+            false => LOOKS,
+        };
+        // Drawn without drawing on the match's chances, each unit its own.
+        let mut seed = self.rng ^ self.ticks.rotate_left(32) ^ (u as u64).wrapping_mul(0x9e37_79b9);
+        let chance = next_chance(&mut seed);
+        (fewest + (chance * (most - fewest + 1) as f32) as u32).min(most)
+    }
+
+    /// Has the unit at `u` look at how the leg it's driving is going:
+    /// gives up turning onto a last leg that ends somewhere it can't turn
+    /// onto, and, once it's done turning but is left well to the side of
+    /// its leg, makes for the leg again at an angle, or straight for the
+    /// leg's end where that comes first, unless something's in the way.
+    fn think(&mut self, u: usize) {
+        let unit = &self.units[u];
+        let (Some(&next), Some(leg)) = (unit.path.last(), unit.leg) else {
+            return;
+        };
+        if unit.path.len() == 1 && !leg.snapped && unit.too_tight(next) {
+            let unit = &mut self.units[u];
+            unit.facing = leg.heading;
+            unit.leg = Some(Leg {
+                snapped: true,
+                ..leg
+            });
+            return;
+        }
+        if unit.facing != leg.heading {
+            return;
+        }
+        let at = unit.position;
+        let [hx, hy] = leg.heading;
+        let back = [at[0] - next[0], at[1] - next[1]];
+        // How far to the leg's left it is, and short of its end.
+        let aside = hx * back[1] - hy * back[0];
+        let short = -(hx * back[0] + hy * back[1]);
+        if aside.abs() < OFF_LINE {
+            return;
+        }
+        // At 45°, or as much less as turning in and back out again leaves
+        // room for.
+        let room = match unit.turn_radius > 0.0 {
+            true => 1.0 - aside.abs() / (2.0 * unit.turn_radius),
+            false => -1.0,
+        };
+        let angle = libm::acosf(room.max(-1.0)).min(FRAC_PI_4);
+        let along = aside.abs() / libm::tanf(angle);
+        let dash = along >= short;
+        let to = match dash {
+            true => next,
+            false => [
+                at[0] + hy * aside + hx * along,
+                at[1] - hx * aside + hy * along,
+            ],
+        };
+        if !path::clear(&self.pathing, unit.domain, at, to) {
+            return;
+        }
+        let unit = &mut self.units[u];
+        unit.from = at;
+        unit.leg = None;
+        if dash {
+            let off = [next[0] - at[0], next[1] - at[1]];
+            unit.facing = normalised(off).unwrap_or(unit.facing);
+            unit.detour = true;
+            return;
+        }
+        unit.path.push(to);
+        // Made from the same point of the leader's as the one it leads to.
+        if let Some(&source) = unit.sources.last() {
+            unit.sources.push(source);
         }
     }
 
@@ -1788,6 +1984,7 @@ mod tests {
             hitch: [0.0, -2.0],
             coupling: [0.0, 1.0],
             placed: None,
+            trailer: None,
         };
         let mut w = vehicle(0.0, 0.0, Some(trailer));
         let t = w.units[0].trailer.as_ref().unwrap();
@@ -1864,7 +2061,8 @@ mod tests {
         assert!(leader - behind < 1.5, "{leader} {behind}");
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [9.0, 30.0]));
-        assert!(near(w.units[1].position, [11.0, 30.0]));
+        // A leg ends within a hundredth of its end.
+        assert!(distance(w.units[1].position, [11.0, 30.0]) <= 0.01);
     }
 
     #[test]
@@ -2563,8 +2761,11 @@ mod tests {
         // Held to the leader's heading, north, 3 off its line.
         unit.from = [11.0, 10.0];
         unit.position = [14.0, 12.0];
+        unit.look = crate::LOOK;
         for _ in 0..=crate::LOOK {
-            w.units[1].drive(2.0, 2.0);
+            if w.units[1].drive(2.0, 2.0, 0.1) {
+                w.think(1);
+            }
         }
         // It turns in at 45 degrees, to a point on its line.
         let unit = &w.units[1];
@@ -2684,5 +2885,339 @@ mod tests {
         w.units[0].health = 1.0;
         w.keep_pacers();
         assert_eq!(w.pacer(0), Some(0));
+    }
+
+    /// A unit on its own, a vehicle turning round a radius of 2.
+    fn lone_vehicle() -> World {
+        let mut w = vehicle(0.0, 1.0, None);
+        w.units[0].template = "tank".into();
+        assert!(w.lone(0));
+        w
+    }
+
+    fn moved(w: &mut World, to: [f32; 2]) {
+        w.apply(
+            7,
+            Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
+    }
+
+    /// Water from y = 16 up.
+    fn lake(side: usize, from: i32) -> Pathing {
+        let mut pathing = Pathing::uniform(side, Domain::Land);
+        for x in 0..side as i32 {
+            for y in from..side as i32 {
+                pathing.set(Tile::new(x, y), Domain::Naval);
+            }
+        }
+        pathing
+    }
+
+    #[test]
+    fn a_lone_unit_sent_into_a_lake_stops_at_the_shore_and_gives_up_there() {
+        let mut w = lone_vehicle();
+        w.pathing = lake(20, 8);
+        moved(&mut w, [10.0, 19.0]);
+        // Headed for the shore, it's still to get to where it was sent.
+        assert_eq!(w.units[0].goal, Some([10.0, 19.0]));
+        run(&mut w, 5.0);
+        let u = &w.units[0];
+        assert!(!u.moving() && u.goal.is_none());
+        assert!(
+            u.position[1] < 16.0 && u.position[1] > 13.0,
+            "{:?}",
+            u.position
+        );
+        assert!(!w.organizations[0].travelling);
+        assert!(w.organizations[0].route_end.is_none());
+    }
+
+    #[test]
+    fn a_regiment_sent_into_a_lake_tries_from_the_shore_until_it_may_give_up() {
+        let mut w = world(lake(20, 8));
+        moved(&mut w, [10.0, 20.0]);
+        // At the shore by now, it tries again until 5 seconds are up.
+        run(&mut w, 4.5);
+        assert!(w.organizations[0].route_end.is_some());
+        assert!(w.organizations[0].tries >= 3);
+        run(&mut w, 2.5);
+        let r = &w.organizations[0];
+        assert!(r.route_end.is_none() && !r.travelling);
+        // It rests where it stopped, not where it was sent.
+        assert!(r.position[1] < 16.0, "{:?}", r.position);
+        assert!(w.units.iter().all(|u| u.position[1] < 16.0));
+    }
+
+    #[test]
+    fn a_regiment_closed_in_where_its_leader_stands_gives_up_without_moving() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // Everything round the leader's tile, 4,5, is blocked.
+        for (x, y) in [
+            (3, 4),
+            (4, 4),
+            (5, 4),
+            (3, 5),
+            (5, 5),
+            (3, 6),
+            (4, 6),
+            (5, 6),
+        ] {
+            pathing.set_blocked(Tile::new(x, y));
+        }
+        let mut w = world(pathing);
+        let before: Vec<[f32; 2]> = w.units.iter().map(|u| u.position).collect();
+        moved(&mut w, [10.0, 30.0]);
+        // It's set off, but nobody moves.
+        assert!(w.organizations[0].travelling);
+        run(&mut w, 3.0);
+        assert!(w.organizations[0].route_end.is_some());
+        run(&mut w, 4.0);
+        assert!(w.organizations[0].route_end.is_none());
+        assert!(!w.organizations[0].travelling);
+        let after: Vec<[f32; 2]> = w.units.iter().map(|u| u.position).collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_route_longer_than_the_tile_limit_is_driven_a_stage_at_a_time() {
+        let mut w = lone_vehicle();
+        w.pathing = Pathing::uniform(800, Domain::Land);
+        w.units[0].speed_max = 40.0;
+        w.units[0].turn_radius = 0.0;
+        let to = [1550.0, 10.0];
+        moved(&mut w, to);
+        assert!(w.units[0].stage);
+        // Three stages and more, more plans than a move may make at once.
+        let mut stages = 1;
+        let mut end = w.units[0].path.first().copied();
+        for _ in 0..(60.0 / crate::TICK) as usize {
+            w.tick();
+            let now = w.units[0].path.first().copied();
+            stages += usize::from(now.is_some() && now != end);
+            end = now;
+        }
+        assert!(stages > 3, "{stages}");
+        assert!(
+            within(w.units[0].position, to, ARRIVAL_REACH),
+            "{:?}",
+            w.units[0].position
+        );
+    }
+
+    #[test]
+    fn a_move_whose_tile_route_is_cut_short_where_it_stands_fails_at_once() {
+        let mut pathing = Pathing::uniform(300, Domain::Land);
+        // A corridor east along row 0 and back along row 2: 254 steps out
+        // it's no nearer row 2's start than where it began.
+        for x in 0..299 {
+            pathing.set_blocked(Tile::new(x, 1));
+        }
+        for x in 0..300 {
+            pathing.set_blocked(Tile::new(x, 3));
+        }
+        let mut w = lone_vehicle();
+        w.pathing = pathing;
+        w.units[0].stand_at([1.0, 1.0], [1.0, 0.0]);
+        w.organizations[0].position = [1.0, 1.0];
+        assert!(w.no_route(0, [1.0, 5.0]));
+        moved(&mut w, [1.0, 5.0]);
+        assert!(!w.organizations[0].travelling && !w.units[0].moving());
+    }
+
+    #[test]
+    fn ethereal_things_are_not_kept_to_their_area() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // A channel all the way across.
+        for y in 0..20 {
+            pathing.set(Tile::new(8, y), Domain::Naval);
+        }
+        let mut w = lone_vehicle();
+        w.pathing = pathing;
+        w.rules.terrain_rules.areas = true;
+        assert!(w.no_route(0, [30.0, 10.0]));
+        w.units[0].ethereal = true;
+        assert!(!w.no_route(0, [30.0, 10.0]));
+    }
+
+    #[test]
+    fn looks_come_every_one_to_one_point_three_seconds_and_sooner_dashing() {
+        let mut w = lone_vehicle();
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..40 {
+            w.tick();
+            let n = w.look_ticks(0, false);
+            assert!((10..=13).contains(&n), "{n}");
+            seen.insert(n);
+            assert!((3..=6).contains(&w.look_ticks(0, true)));
+        }
+        assert!(seen.len() > 1, "{seen:?}");
+    }
+
+    /// The lone vehicle at 10,10 facing north on a leg north along x = 12,
+    /// 2 to its right, with `blocked` tiles.
+    fn off_its_line(blocked: &[(i32, i32)]) -> World {
+        let mut w = lone_vehicle();
+        for &(x, y) in blocked {
+            w.pathing.set_blocked(Tile::new(x, y));
+        }
+        let u = &mut w.units[0];
+        u.path = vec![[12.0, 36.0]];
+        u.from = [12.0, 0.0];
+        u.goal = Some([12.0, 36.0]);
+        u.take_leg(0.1);
+        w
+    }
+
+    #[test]
+    fn units_off_their_line_make_no_detour_through_what_is_in_the_way() {
+        let mut w = off_its_line(&[]);
+        w.think(0);
+        assert_eq!(w.units[0].path.len(), 2, "{:?}", w.units[0].path);
+        // The turn-in point, 2 ahead at 45°, is on a blocked tile.
+        let mut w = off_its_line(&[(6, 6)]);
+        w.think(0);
+        assert_eq!(w.units[0].path, [[12.0, 36.0]]);
+        assert!(w.units[0].leg.is_some());
+    }
+
+    #[test]
+    fn corners_are_led_into_past_a_point_lying_on_the_next() {
+        let mut w = lone_vehicle();
+        let u = &mut w.units[0];
+        // North to 10,20, then a point all but on it, then east.
+        u.path = vec![[30.0, 20.0], [10.0, 20.0001], [10.0, 20.0]];
+        let [x, y] = u.onward().unwrap();
+        assert!((x - 1.0).abs() < 1e-3 && y.abs() < 1e-3, "{x} {y}");
+        u.take_leg(0.1);
+        // A right angle round a radius of 2 is led into 2 early.
+        let aim = u.leg.unwrap().aim;
+        assert!(distance(aim, [10.0, 18.0]) < 1e-3, "{aim:?}");
+        // With nothing after those two, there's no corner to lead into.
+        u.path = vec![[10.0, 20.0001], [10.0, 20.0]];
+        assert_eq!(u.onward(), None);
+        // Nor on a leg straight for a spot of its own.
+        u.path = vec![[30.0, 20.0], [10.0, 20.0]];
+        (u.leg, u.straight) = (None, true);
+        u.take_leg(0.1);
+        assert_eq!(u.leg.unwrap().aim, [10.0, 20.0]);
+    }
+
+    #[test]
+    fn legs_are_passed_within_the_datas_reach_of_their_end() {
+        let mut w = lone_vehicle();
+        let u = &mut w.units[0];
+        u.path = vec![[10.0, 30.0], [10.0, 10.4]];
+        u.take_leg(0.1);
+        assert_eq!(u.path.len(), 2);
+        u.leg = None;
+        u.take_leg(0.5);
+        assert_eq!(u.path, [[10.0, 30.0]]);
+    }
+
+    #[test]
+    fn close_destinations_go_straight_only_before_the_move_has_planned() {
+        let mut w = lone_vehicle();
+        // An exact move 1.5 ahead, and one 1.5 behind.
+        for to in [[10.0, 11.5], [10.0, 8.5]] {
+            let first = w.plan(0, to, true, true).unwrap();
+            assert!(first.straight && first.points == [to]);
+            let again = w.plan(0, to, true, false).unwrap();
+            assert!(!again.straight);
+        }
+        // Inside its turning circle, it turns to face it at once, but only
+        // on a first plan.
+        let beside = [11.0, 10.5];
+        assert!(!w.plan(0, beside, false, false).unwrap().straight);
+        assert_eq!(w.units[0].facing, [0.0, 1.0]);
+        assert!(w.plan(0, beside, false, true).unwrap().straight);
+        assert_ne!(w.units[0].facing, [0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_move_to_somewhere_already_near_has_to_end_right_there() {
+        let mut w = lone_vehicle();
+        w.take_place(0, [10.0, 10.4], [0.0, 1.0], false);
+        assert!(w.units[0].exact);
+        w.take_place(0, [10.0, 14.0], [0.0, 1.0], false);
+        assert!(!w.units[0].exact);
+    }
+
+    #[test]
+    fn a_regiment_whose_move_fails_keeps_where_it_stands_and_drops_an_attack() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // An island to the north, cut off by water.
+        for x in 0..20 {
+            pathing.set(Tile::new(x, 10), Domain::Naval);
+        }
+        let mut w = world(pathing);
+        w.rules.terrain_rules.areas = true;
+        // The right-hand man stands a little off his place.
+        w.units[1].position = [11.3, 10.0];
+        let position = w.organizations[0].position;
+        w.advance(7, 0, [10.0, 30.0], crate::Order::Attack, None)
+            .unwrap();
+        let r = &w.organizations[0];
+        assert_eq!(r.order, crate::Order::Move);
+        assert!(!r.travelling && r.position == position);
+        // Already in his place, near enough, he stays put.
+        assert!(!w.units[1].moving());
+        run(&mut w, 2.0);
+        assert_eq!(w.units[1].position, [11.3, 10.0]);
+    }
+
+    #[test]
+    fn a_member_that_gives_up_on_its_place_is_sent_once_more_and_then_left() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // The right-hand man's place at 11,20 is blocked.
+        pathing.set_blocked(Tile::new(5, 10));
+        let mut w = world(pathing);
+        moved(&mut w, [10.0, 20.0]);
+        while w.organizations[0].route_end.is_some() {
+            w.tick();
+        }
+        // Once everyone's stopped, it's sent again, then left be.
+        assert!(w.organizations[0].resend_places);
+        run(&mut w, 5.0);
+        assert!(!w.organizations[0].resend_places);
+        let at = w.units[1].position;
+        assert!(!within(at, [11.0, 20.0], ARRIVAL_REACH));
+        for _ in 0..(10.0 / crate::TICK) as usize {
+            w.tick();
+            assert!(w.units[1].goal.is_none() && w.units[1].position == at);
+        }
+    }
+
+    #[test]
+    fn trailers_tow_trailers_of_their_own() {
+        let second = tgmap::Trailer {
+            template: "limber".into(),
+            hitch: [0.0, -1.0],
+            coupling: [0.0, 1.0],
+            placed: None,
+            trailer: None,
+        };
+        let first = tgmap::Trailer {
+            template: "gun".into(),
+            hitch: [0.0, -2.0],
+            coupling: [0.0, 1.0],
+            placed: None,
+            trailer: Some(Box::new(second)),
+        };
+        let mut w = vehicle(0.0, 0.0, Some(first));
+        // Straight behind: the first at 10,7, its own at 10,5.
+        let t = w.units[0].trailer.as_ref().unwrap();
+        assert!(near(t.trailer.as_ref().unwrap().position, [10.0, 5.0]));
+        moved(&mut w, [30.0, 10.0]);
+        run(&mut w, 15.0);
+        let t = w.units[0].trailer.as_ref().unwrap();
+        let towed = t.trailer.as_ref().unwrap();
+        let hitch = tgmap::from_local(t.position, t.facing, [0.0, -1.0]);
+        let coupled = tgmap::from_local(towed.position, towed.facing, [0.0, 1.0]);
+        assert!(near(coupled, hitch), "{coupled:?} {hitch:?}");
+        assert!(near(towed.facing, [1.0, 0.0]), "{:?}", towed.facing);
     }
 }
