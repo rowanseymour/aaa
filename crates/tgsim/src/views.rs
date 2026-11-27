@@ -1,8 +1,9 @@
-//! Triggers moving a side's view of the map.
+//! Triggers changing how the map is seen: moving a side's view, and the
+//! letterbox and screen fade every side sees.
 
 use tgmap::triggers::Value;
 
-use crate::World;
+use crate::{TICK, World};
 
 /// A trigger moving one side's view, from wherever it is when the move
 /// starts.
@@ -92,5 +93,51 @@ pub(crate) fn camera(p: Option<&tgmap::triggers::Parameter>) -> Option<View> {
     match p.map(|p| &p.value) {
         Some(Value::Int(id)) => Some(View::Camera(*id)),
         _ => None,
+    }
+}
+
+/// The letterbox or the screen fade, as a trigger last switched it: coming
+/// in or going out over `seconds` of game time from tick `at`, from
+/// wherever it was.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Slide {
+    pub on: bool,
+    pub at: u64,
+    pub seconds: f32,
+}
+
+crate::hash::digest!(Slide { on, at, seconds });
+
+impl Slide {
+    /// How far in it is at `ticks` into the match, which may fall between
+    /// two: from 0, gone, to 1, fully in. Switching restarts it from the
+    /// far end, so going out starts from fully in.
+    pub fn shown(&self, ticks: f32) -> f32 {
+        let gone = match self.seconds > 0.0 {
+            true => ((ticks - self.at as f32) * TICK / self.seconds).clamp(0.0, 1.0),
+            false => 1.0,
+        };
+        match self.on {
+            true => gone,
+            false => 1.0 - gone,
+        }
+    }
+}
+
+impl World {
+    /// The letterbox or screen fade as a trigger switches it now.
+    pub(crate) fn slide(
+        &self,
+        on: Option<&tgmap::triggers::Parameter>,
+        seconds: Option<f32>,
+    ) -> Option<Slide> {
+        let Some(Value::Int(on)) = on.map(|p| &p.value) else {
+            return None;
+        };
+        Some(Slide {
+            on: *on != 0,
+            at: self.ticks,
+            seconds: seconds.unwrap_or(0.0).max(0.0),
+        })
     }
 }

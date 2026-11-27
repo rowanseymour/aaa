@@ -1739,6 +1739,8 @@ pub struct AVars {
     pub sun_dimmer_multiplier_when_paused: Option<f32>,
     /// How dark a shadow is, as the share of the sun it takes away.
     pub dynamic_shadow_sun_modulate: Option<f32>,
+    /// Each letterbox bar's share of the screen's height.
+    pub letterbox_height_ratio: Option<f32>,
     /// What streamed audio plays in place of a file the archives don't have.
     pub default_audio_streaming_resource: Option<String>,
     /// The music that plays nothing, for stopping music.

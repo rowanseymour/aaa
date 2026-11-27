@@ -108,7 +108,7 @@ pub use targets::TypeSlots;
 pub use tgmap::{Outcome, Player, Relation, Team};
 pub use triggers::{Counter, SunChange, Switch, Triggers};
 pub use value::CombatMeans;
-pub use views::{Pace, View, ViewMove};
+pub use views::{Pace, Slide, View, ViewMove};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;

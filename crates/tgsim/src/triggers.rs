@@ -43,6 +43,9 @@ pub struct Triggers {
     pub views: Vec<crate::ViewMove>,
     /// Whether a trigger has cutscene mode on.
     pub cutscene: bool,
+    /// The letterbox and screen fade, once a trigger has switched them.
+    pub letterbox: Option<crate::Slide>,
+    pub screenfade: Option<crate::Slide>,
     /// The objectives the map defines, for its triggers to give.
     pub(crate) objectives: Arc<[tgmap::Objective]>,
     /// The kingdoms an event's parameter and a condition's last picked,
@@ -162,6 +165,8 @@ impl Triggers {
             counter: None,
             views: Vec::new(),
             cutscene: false,
+            letterbox: None,
+            screenfade: None,
             objectives: Arc::default(),
             areas: Arc::default(),
             cameras: Arc::default(),
@@ -193,6 +198,8 @@ impl crate::hash::Digest for Triggers {
         self.counter.digest(h);
         self.views.digest(h);
         self.cutscene.digest(h);
+        self.letterbox.digest(h);
+        self.screenfade.digest(h);
         self.event_kingdom.digest(h);
         self.condition_kingdom.digest(h);
         self.listening.digest(h);
@@ -274,6 +281,8 @@ const HANDLED: &[&str] = &[
     "camera_pans_to_camera_over_time",
     "camera_pans_to_camera_over_time_in_realtime",
     "camera_returns_to_default_over_time",
+    "global_toggle_letterbox",
+    "global_toggle_screenfade",
     "actor_moves_to_location",
     "actor_performs_command_on_actor",
     "actor_performs_command_at_location",
@@ -919,6 +928,16 @@ impl World {
                 let seconds = self.number(p.get(2)).unwrap_or(0.0);
                 let to = crate::making::location(p.get(1)).map(View::Default);
                 self.move_view(self.kingdom(p.first()), to, seconds, Pace::Steady)
+            }
+            "global_toggle_letterbox" | "global_toggle_screenfade" => {
+                let Some(slide) = self.slide(p.first(), self.number(p.get(1))) else {
+                    return false;
+                };
+                match e.name.as_str() {
+                    "global_toggle_letterbox" => self.triggers.letterbox = Some(slide),
+                    _ => self.triggers.screenfade = Some(slide),
+                }
+                true
             }
             "global_toggle_cutscene_mode" => match p.first().map(|p| &p.value) {
                 Some(Value::Int(on)) => {
@@ -1814,6 +1833,47 @@ mod tests {
             ],
             "a side or camera the map hasn't placed is no move"
         );
+    }
+
+    #[test]
+    fn the_letterbox_and_fade_restart_from_the_far_end_when_switched() {
+        let toggle = |name: &str, on, seconds| {
+            let on = parameter("ma_boolean", "mi_boolean", Value::Int(on));
+            element(name, vec![on, int(seconds)])
+        };
+        let bars = |on, seconds| toggle("global_toggle_letterbox", on, seconds);
+        let fade = |on, seconds| toggle("global_toggle_screenfade", on, seconds);
+        let mut w = with(
+            pool(),
+            vec![
+                // Only the last in a tick counts.
+                trigger(
+                    1,
+                    true,
+                    false,
+                    vec![],
+                    vec![fade(0, 9), fade(1, 0), bars(1, 4)],
+                ),
+                trigger(2, true, false, vec![after(2)], vec![bars(0, 2), fade(0, 2)]),
+            ],
+            &[],
+        );
+        run(&mut w, 1.0);
+        let ticks = w.ticks as f32;
+        let letterbox = w.triggers.letterbox.expect("switched on");
+        assert!(letterbox.on);
+        assert_eq!(letterbox.shown(letterbox.at as f32), 0.0);
+        assert_eq!(letterbox.shown(letterbox.at as f32 + 20.0), 0.5);
+        assert_eq!(letterbox.shown(ticks + 1000.0), 1.0);
+        let screenfade = w.triggers.screenfade.expect("switched on");
+        assert_eq!(screenfade.shown(screenfade.at as f32), 1.0, "at once");
+        run(&mut w, 2.0);
+        for slide in [w.triggers.letterbox, w.triggers.screenfade].map(Option::unwrap) {
+            assert!(!slide.on);
+            assert_eq!(slide.shown(slide.at as f32), 1.0, "from fully in");
+            assert_eq!(slide.shown(slide.at as f32 + 10.0), 0.5);
+            assert_eq!(slide.shown(slide.at as f32 + 20.0), 0.0);
+        }
     }
 
     #[test]

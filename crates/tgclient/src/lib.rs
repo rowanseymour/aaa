@@ -34,6 +34,7 @@ mod confirm;
 mod connection;
 mod console;
 mod control_groups;
+mod curtains;
 mod deliveries;
 mod displays;
 mod drive;
@@ -506,6 +507,7 @@ pub fn run(program: Program) -> ExitCode {
         .add_plugins(hud::HudPlugin)
         .add_plugins(music::MusicPlugin)
         .add_plugins(effects::EffectsPlugin)
+        .add_plugins(curtains::CurtainsPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .insert_resource(ui::Theme::of(&modern))
@@ -748,7 +750,10 @@ pub fn run(program: Program) -> ExitCode {
         .add_systems(
             Update,
             (
-                keys::send.run_if(keys_free).run_if(keys_heard),
+                keys::send
+                    .run_if(keys_free)
+                    .run_if(keys_heard)
+                    .run_if(curtains::interface_up),
                 (
                     special_ops::act,
                     idle::cycle,
@@ -869,8 +874,13 @@ fn takes_input(
     menu: Res<pause::PauseMenu>,
     displays: Res<displays::Displays>,
     loading: Query<(), With<LoadingScreen>>,
+    sim: Option<Res<Sim>>,
+    fixed: Res<Time<Fixed>>,
 ) -> bool {
-    keys_heard(console, menu) && displays::closed(Some(displays)) && loading.is_empty()
+    keys_heard(console, menu)
+        && displays::closed(Some(displays))
+        && loading.is_empty()
+        && curtains::interface_up(sim, fixed)
 }
 
 /// Whether keys reach the match's hotkeys: neither the console nor the

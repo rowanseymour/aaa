@@ -1019,6 +1019,9 @@ pub mod layer {
     /// What's drawn over the map but on no one thing, such as the box
     /// dragged to select.
     pub const SELECTING: i32 = 30;
+    /// The letterbox and screen fade, over the map and all that's drawn on
+    /// it, under the interface.
+    pub const CURTAINS: i32 = 40;
     /// The interface over the match, in either style: its panels and what's
     /// written over the map, such as messages.
     pub const HUD: i32 = 50;
