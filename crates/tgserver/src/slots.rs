@@ -51,6 +51,16 @@ impl Slots {
         self.open.insert(player);
     }
 
+    /// Has the people on sides `a` and `b` trade places, each taking their
+    /// nation and faction along; anything else stays with the side.
+    pub fn trade(&mut self, a: u32, b: u32) {
+        for map in [&mut self.nations, &mut self.factions] {
+            let (on_a, on_b) = (map.remove(&a), map.remove(&b));
+            put(map, a, on_b);
+            put(map, b, on_a);
+        }
+    }
+
     /// Moves a person from side `from` to side `to`, none being to watch.
     /// Their nation and faction go with them. A computer player on `to`
     /// trades places with them, taking its profile, handicap, nation and
@@ -153,6 +163,16 @@ mod tests {
         slots.seat(None, Some(2));
         assert!(slots.computers.is_empty() && slots.handicaps.is_empty());
         assert_eq!(slots.nations, [(1, id("usa"))].into());
+    }
+
+    #[test]
+    fn people_trading_places_take_their_nations_and_factions() {
+        let mut slots = slots();
+        slots.nations.remove(&2);
+        slots.trade(1, 2);
+        assert_eq!(slots.nations, [(2, id("usa"))].into());
+        assert_eq!(slots.factions, [(1, id("konev")), (2, id("patton"))].into());
+        assert_eq!(slots.handicaps, [(2, id("easy"))].into());
     }
 
     #[test]

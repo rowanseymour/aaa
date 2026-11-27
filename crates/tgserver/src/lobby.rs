@@ -4,7 +4,7 @@
 //! has come to, and at launch hands each person's link on to the host of
 //! the match.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,9 @@ pub struct Staging {
     pub owners: BTreeMap<u32, u32>,
     /// Everyone in the game, in the order they came in.
     pub guests: Vec<Guest>,
+    /// Offers to trade sides that stand, from one person to another, by
+    /// what the host knows each as.
+    pub offers: BTreeSet<(u32, u32)>,
     /// The seconds left before the game launches, while it counts down.
     pub countdown: Option<u32>,
 }
@@ -110,6 +113,17 @@ impl Staging {
     pub fn owns(&self, client: u32, player: u32) -> bool {
         let computer = !self.taken(player) && !self.slots.is_open(player);
         computer && self.owner(player) == Some(client)
+    }
+
+    /// Whether the people at `a` and `b` have an offer to trade sides
+    /// between them, made by either.
+    pub fn offered(&self, a: u32, b: u32) -> bool {
+        self.offers.contains(&(a, b)) || self.offers.contains(&(b, a))
+    }
+
+    /// Whether the person at `client` is on a side.
+    fn seated(&self, client: u32) -> bool {
+        self.guest(client).is_some_and(|g| g.side.is_some())
     }
 
     /// Whether side `player` is free for someone to take: open, and nobody
@@ -172,7 +186,20 @@ impl Staging {
             // Nobody is ready without the map.
             Choice::Ready(ready) => guest.side.is_some() && (!ready || guest.holds || guest.host),
             Choice::Holds(_, _) => true,
+            // Only between two people on sides.
+            Choice::Offer(to, true) => *to != client && guest.side.is_some() && self.seated(*to),
+            Choice::Offer(to, false) => self.offers.contains(&(client, *to)),
+            Choice::Answer(from, accept) => {
+                let both = guest.side.is_some() && self.seated(*from);
+                self.offers.contains(&(*from, client)) && (both || !accept)
+            }
         }
+    }
+
+    /// Clears every offer to and from the person at `client`.
+    fn withdraw(&mut self, client: u32) {
+        self.offers
+            .retain(|&(from, to)| from != client && to != client);
     }
 
     /// Puts the sides in teams as `preset` has it, `sides` being those a
@@ -261,6 +288,23 @@ impl Staging {
                     guest.ready = ready;
                 }
             }
+            Choice::Offer(to, true) => _ = self.offers.insert((client, to)),
+            Choice::Offer(to, false) => _ = self.offers.remove(&(client, to)),
+            Choice::Answer(from, false) => _ = self.offers.remove(&(from, client)),
+            Choice::Answer(from, true) => {
+                let side = |s: &Staging, c| s.guest(c).and_then(|g| g.side);
+                let (Some(theirs), Some(mine)) = (side(self, from), side(self, client)) else {
+                    return;
+                };
+                self.slots.trade(theirs, mine);
+                for (c, s) in [(from, mine), (client, theirs)] {
+                    if let Some(guest) = self.guest_mut(c) {
+                        guest.side = Some(s);
+                    }
+                }
+                self.withdraw(from);
+                self.withdraw(client);
+            }
             // Whoever runs the host launches and puts people out.
             Choice::Launch(_) | Choice::Kick(_) => {}
         }
@@ -303,6 +347,12 @@ pub enum Choice {
     /// Take a side, by player id, or none to watch.
     Side(Option<u32>),
     Ready(bool),
+    /// Offer the person at this client to trade sides with them, or
+    /// withdraw the offer.
+    Offer(u32, bool),
+    /// Answer the offer of the person at this client: trade sides with
+    /// them, or turn it down.
+    Answer(u32, bool),
     /// Launch, counting down if everyone is ready and else asking them to
     /// become so; or stop the countdown.
     Launch(bool),
@@ -565,6 +615,15 @@ impl<L: Link> Lobby<L> {
             }
             choice => {
                 self.staging.make(client, choice);
+                // An offer is for the places the two hold, so it goes
+                // once either holds none.
+                let staging = &self.staging;
+                let seated: Vec<u32> = (staging.guests.iter())
+                    .filter(|g| g.side.is_some())
+                    .map(|g| g.client)
+                    .collect();
+                let both = |&(a, b): &(u32, u32)| seated.contains(&a) && seated.contains(&b);
+                self.staging.offers.retain(both);
                 true
             }
         }
@@ -612,6 +671,7 @@ impl<L: Link> Lobby<L> {
         };
         let (_, mut link) = self.links.remove(at);
         let guest = self.staging.guests.remove(at);
+        self.staging.withdraw(client);
         if let Some(side) = guest.side {
             self.staging.slots.empty(side);
         }
@@ -1204,6 +1264,68 @@ mod tests {
         turn(&mut lobby, &mut [&mut host, &mut bob]);
         let staging = bob.staging();
         assert!(staging.guest(1).unwrap().holds && !staging.guest(2).unwrap().holds);
+    }
+
+    #[test]
+    fn people_on_sides_trade_them_by_offer_each_taking_their_nation() {
+        let (mut lobby, mut host, _) = hosted();
+        let mut bob = ask(&mut lobby, "Bob", "sesame").unwrap();
+        let mut carol = ask(&mut lobby, "Carol", "sesame").unwrap();
+        host.choose(Choice::Side(Some(1))).unwrap();
+        host.choose(Choice::Nation(1, Some(Id::from("usa"))))
+            .unwrap();
+        bob.choose(Choice::Side(Some(2))).unwrap();
+        bob.choose(Choice::Nation(2, Some(Id::from("japan"))))
+            .unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        for entry in [&mut host, &mut bob, &mut carol] {
+            entry.take_told();
+        }
+        // Two offering to each other leaves both standing; either may
+        // withdraw their own.
+        bob.choose(Choice::Offer(1, true)).unwrap();
+        host.choose(Choice::Offer(2, true)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        assert_eq!(carol.staging().offers, [(1, 2), (2, 1)].into());
+        assert!(carol.staging().offered(1, 2));
+        bob.choose(Choice::Offer(1, false)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        assert_eq!(carol.staging().offers, [(1, 2)].into());
+        // Not with someone watching, nor by them, nor answering what
+        // wasn't offered.
+        bob.choose(Choice::Offer(3, true)).unwrap();
+        carol.choose(Choice::Offer(2, true)).unwrap();
+        host.choose(Choice::Answer(2, true)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        assert_eq!(bob.take_told().len(), 1);
+        assert_eq!(carol.take_told().len(), 1);
+        assert_eq!(host.take_told().len(), 1);
+        // Accepting trades them at once, and clears what they offered.
+        bob.choose(Choice::Answer(1, true)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        let staging = carol.staging();
+        assert_eq!(staging.guest(1).unwrap().side, Some(2));
+        assert_eq!(staging.guest(2).unwrap().side, Some(1));
+        let nations = [(1, Id::from("japan")), (2, Id::from("usa"))];
+        assert_eq!(staging.slots.nations, nations.into());
+        assert!(staging.offers.is_empty());
+        // Turned down, or by one who goes, an offer is gone.
+        host.choose(Choice::Offer(2, true)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        bob.choose(Choice::Answer(1, false)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        assert!(carol.staging().offers.is_empty());
+        bob.choose(Choice::Offer(1, true)).unwrap();
+        bob.choose(Choice::Side(None)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        assert!(carol.staging().offers.is_empty());
+        bob.choose(Choice::Side(Some(1))).unwrap();
+        bob.choose(Choice::Offer(1, true)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob, &mut carol]);
+        assert!(!carol.staging().offers.is_empty());
+        bob.leave();
+        lobby.turn();
+        assert!(lobby.staging().offers.is_empty());
     }
 
     #[test]

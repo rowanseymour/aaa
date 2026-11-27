@@ -17,7 +17,7 @@ use crate::presets::Preset;
 use crate::ui::GLYPH_DIR;
 use crate::ui::{
     Card, Chosen, Dropdown, Font, Hint, Ink, Shown, Surface, button, called, card, clickable,
-    dropdown, inert, label, opener, padded, panel, slug, switch, text,
+    disabled, dropdown, inert, label, opener, padded, panel, slug, switch, text,
 };
 use crate::{Data, Screen, Seed, Side, confirm};
 
@@ -1057,8 +1057,40 @@ fn show_slots(
     };
     let sides: Vec<&Player> = brief.sides().collect();
     let number = |id: u32| sides.iter().position(|p| p.id == id);
+    // The sides a person may move to.
+    let movable = |id: u32| match staging {
+        Some((s, _)) => s.sides.contains(&id),
+        None => number(id).is_some_and(|i| sides[i].playable),
+    };
     for (heading, members) in lobby.teams() {
-        commands.spawn((ChildOf(slots), text(heading, Font::Heading)));
+        let header = commands
+            .spawn((
+                ChildOf(slots),
+                Node {
+                    column_gap: px(SLOT_GAP),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                children![text(heading.clone(), Font::Heading)],
+            ))
+            .id();
+        // Joining a team takes its first side nobody holds.
+        let joined = lobby.person.is_some_and(|p| members.contains(&p));
+        let free = members.iter().find(|&&p| lobby.empty(p) && movable(p));
+        match free.filter(|_| !joined) {
+            Some(&free) => {
+                commands
+                    .spawn((
+                        ChildOf(header),
+                        button("Join Team", Font::Body),
+                        called(format!("lobby.join.{}", slug(&heading))),
+                        Hint("Switch to this team".into()),
+                        SideChoice(Some(free)),
+                    ))
+                    .observe(choose_side);
+            }
+            None => _ = commands.spawn((ChildOf(header), disabled("Join Team", Font::Body))),
+        }
         for id in members {
             let Some(i) = number(id) else {
                 continue;
@@ -1175,6 +1207,11 @@ fn show_slots(
             }
             if let Some(guest) = holder {
                 crate::staging::marks(&mut commands, row, guest, hosting, &look);
+                if let Some((staging, me)) = staging
+                    && guest.client != me
+                {
+                    offers(&mut commands, row, staging, me, guest, &side);
+                }
             } else if computer {
                 let mine = (player, side.as_str(), lobby.mine(id));
                 handicap_list(&mut commands, row, &lobby, mine, &handicaps);
@@ -1192,15 +1229,19 @@ fn show_slots(
                         let _ = staged.entry.choose(tgserver::Choice::Open(id));
                     });
             }
-            // The person can move to a side no other person takes.
-            let movable = staging.map_or(player.playable, |(s, _)| s.sides.contains(&id));
-            if (lobby.mine(id) || empty) && movable {
+            // The person can move to a side no other person takes,
+            // trading places with their own computer player.
+            if (lobby.mine(id) || empty) && movable(id) {
+                let hint = match empty {
+                    true => "Switch to this slot",
+                    false => "Swap slots with AI player",
+                };
                 commands
                     .spawn((
                         ChildOf(row),
                         button("Swap", Font::Body),
                         called(format!("{side}.seat")),
-                        Hint("Switch to this slot".into()),
+                        Hint(hint.into()),
                         SideChoice(Some(id)),
                     ))
                     .observe(choose_side);
@@ -1249,6 +1290,72 @@ fn show_slots(
             children![text(label, Font::Body)],
         ))
         .observe(choose_side);
+}
+
+/// The mark and buttons for offers to trade sides between the person at
+/// `me` and `guest`, on the slot `side` of `guest`'s `row`. Only someone
+/// on a side may offer.
+fn offers(
+    commands: &mut Commands,
+    row: Entity,
+    staging: &tgserver::Staging,
+    me: u32,
+    guest: &tgserver::Guest,
+    side: &str,
+) {
+    let them = guest.client;
+    if staging.offered(me, them) {
+        let pending = label("Swap Pending", Font::Body, Ink::Muted);
+        commands.spawn((
+            ChildOf(row),
+            pending,
+            Hint("Slot Swap Offer Pending".into()),
+        ));
+    }
+    if staging.guest(me).is_none_or(|g| g.side.is_none()) {
+        return;
+    }
+    let mut buttons = Vec::new();
+    if staging.offers.contains(&(them, me)) {
+        buttons.push((
+            "Accept",
+            "accept",
+            "Accept offer to swap slots",
+            tgserver::Choice::Answer(them, true),
+        ));
+        buttons.push((
+            "Reject",
+            "reject",
+            "Reject offer to swap slots",
+            tgserver::Choice::Answer(them, false),
+        ));
+    }
+    buttons.push(match staging.offers.contains(&(me, them)) {
+        true => (
+            "Cancel",
+            "cancel",
+            "Cancel offer to swap slots",
+            tgserver::Choice::Offer(them, false),
+        ),
+        false => (
+            "Swap",
+            "offer",
+            "Offer to swap slots with player",
+            tgserver::Choice::Offer(them, true),
+        ),
+    });
+    for (words, name, hint, choice) in buttons {
+        commands
+            .spawn((
+                ChildOf(row),
+                button(words, Font::Body),
+                called(format!("{side}.{name}")),
+                Hint(hint.into()),
+            ))
+            .observe(move |_: On<Activate>, mut staged: ResMut<Staged>| {
+                let _ = staged.entry.choose(choice.clone());
+            });
+    }
 }
 
 /// What a choice of a nation, a faction or a handicap is called after its
