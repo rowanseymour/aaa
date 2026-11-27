@@ -666,7 +666,7 @@ text = '''A chain longer than 254 areas is cut short at the area reached that is
 [[topic.rule]]
 id = "area-stages"
 tags = ["code"]
-text = '''A move with a chain of areas goes in stages. Each stage heads for the centre of the first area along the chain, after the unit's own, that a straight line from the unit can't reach without crossing a tile closed to it, passing over areas whose centre has a thing on it; with no such area, it heads for the destination (for a cut chain, the end of the cut chain is no stopping point then). The centre is first made a spot the unit could stand on, as the destination is ([Where the move is aimed](#where-the-move-is-aimed)); if none is found there's no route and the move fails. The stage is done once the unit stands in that area, and it plans the next one from there.'''
+text = '''A move with a chain of areas goes in stages. Each stage heads for the centre of the first area along the chain, after the unit's own, that a straight line from the unit can't reach without crossing a tile closed to it, passing over areas whose centre has a thing on it; with no such area, it heads for the destination (for a cut chain, the end of the cut chain is no stopping point then). The centre is first made a spot the unit could stand on, as the destination is ([Where the move is aimed](#where-the-move-is-aimed)); if none is found there's no route and the move fails. The stage is done once the unit stands in that area or in any area bordering it (sharing a tile edge with it, whatever its kind), and it plans the next one from there. So a unit usually starts its next stage a step short of the area it was heading for.'''
 
 [[topic.rule]]
 id = "region-path-planner-switch"
@@ -998,10 +998,5 @@ asked = 2026-11-22
 
 [[open]]
 q = '''Which formation does a retreating regiment take, when its layout names no retreat formation? The data's own description says the last organized one, which is Column in every stock layout.'''
-by = "analysis"
-asked = 2026-11-27
-
-[[open]]
-q = '''A stage of a move over areas is also counted done on one further test besides the unit standing in that area; what is it?'''
 by = "analysis"
 asked = 2026-11-27
