@@ -12,15 +12,12 @@ use crate::{Piece, Shelled};
 /// its timing are inside.
 const ZONE_RANGE_MIN: f32 = 18.0;
 
-/// How near a building an order's point is to be on it.
-const ON_BUILDING: f32 = 1.0;
-
 /// The least speed a group hands a regiment; one it would hand less stands
 /// and waits for the rest.
 const SPEED_MIN: f32 = 1.0;
 
-/// How far outside the supply zone of an enemy thing a group heads for its
-/// regiments time their arrival at.
+/// How far outside the guard zone of an enemy thing a group's order is on
+/// its regiments time their arrival at.
 const SUPPLY_ZONE_BUFFER: f32 = 5.0;
 
 /// Regiments ordered together as one.
@@ -30,9 +27,8 @@ pub struct Group {
     pub owner: u32,
     /// Indices into [`World::organizations`], in the group's order.
     pub organizations: Vec<usize>,
-    /// The building it was last sent onto, by index into
-    /// [`World::buildings`].
-    pub heading_for: Option<usize>,
+    /// The enemy thing its order is on, if any.
+    pub heading_for: Option<Piece>,
     /// The orders queued for it as a whole, each its regiments' together,
     /// first first.
     pub queue: Vec<Vec<Command>>,
@@ -548,32 +544,38 @@ impl World {
             .then_some(first)
     }
 
-    /// The enemy building `orders` send a group onto or at, by index into
-    /// [`World::buildings`], whose supply zone it times its arrival by.
-    fn heading_for(&self, player: u32, orders: &[Command]) -> Option<usize> {
-        let enemy = |b: usize| {
-            let owner = self.buildings[b].owner;
-            self.sides.relation(player, owner) == crate::Relation::Enemy
-                && self.buildings[b].standing()
-        };
-        let at = |to: [f32; 2]| {
-            (0..self.buildings.len())
-                .find(|&b| enemy(b) && self.buildings[b].distance(to) <= ON_BUILDING)
-        };
-        orders.iter().find_map(|o| match *o {
-            Command::MoveOnto {
-                piece: Piece::Building(b),
-                ..
-            }
-            | Command::GuardPiece {
-                piece: Piece::Building(b),
-                ..
-            } => enemy(b).then_some(b),
-            Command::Attack { to, .. } | Command::Move { to, .. } | Command::Guard { to, .. } => {
-                at(to)
-            }
-            _ => None,
+    /// The enemy thing `orders` are on, whose guard zone a group times its
+    /// arrival by.
+    fn heading_for(&self, player: u32, orders: &[Command]) -> Option<Piece> {
+        orders.iter().find_map(|o| {
+            let piece = match *o {
+                Command::Bombard {
+                    target: Shelled::Thing(p),
+                    ..
+                } => p,
+                _ => order_piece(o)?,
+            };
+            let owner = self.piece_owner(piece);
+            (self.sides.relation(player, owner) == crate::Relation::Enemy).then_some(piece)
         })
+    }
+
+    /// How far round `piece` its guard zone reaches, if it has one: a
+    /// regiment's is its living units' widest.
+    fn guard_range(&self, piece: Piece) -> Option<f32> {
+        let zones = &self.rules.guard_zones;
+        match piece {
+            Piece::Building(b) => {
+                let building = &self.buildings[b];
+                building
+                    .standing()
+                    .then(|| zones.get(&building.template).copied())?
+            }
+            Piece::Organization(r) => (self.organizations[r].units.iter())
+                .filter(|&&u| self.units[u].alive())
+                .filter_map(|&u| zones.get(&self.units[u].template).copied())
+                .reduce(f32::max),
+        }
     }
 
     /// Takes the organization at `r` out of its group, which goes if
@@ -786,9 +788,9 @@ impl World {
 
     /// Hands each of the group `id`'s regiments taking part and moving the
     /// speed that makes its time there the longest's: its own speed times
-    /// its time over the longest. Heading for an enemy thing with a supply
-    /// zone, each times its arrival at the zone's edge, a little out, less
-    /// how far ahead of the group's centre it is.
+    /// its time over the longest. On an enemy thing with a guard zone, each
+    /// times its arrival at the zone's edge, a little out, less how far
+    /// ahead of the group's centre it is.
     fn time_group(&mut self, id: u32, sent: &[usize]) {
         let g = self
             .groups
@@ -796,11 +798,7 @@ impl World {
             .find(|g| g.id == id)
             .expect("listed")
             .clone();
-        let zone = g.heading_for.and_then(|b| {
-            let range = self.supply_range(b)?;
-            let enemy = self.buildings[b].owner != g.owner;
-            enemy.then_some(range)
-        });
+        let zone = g.heading_for.and_then(|p| self.guard_range(p));
         let times: Vec<(usize, f32, f32)> = (g.organizations.iter().enumerate())
             .filter(|&(_, &r)| {
                 (g.times_all || self.organizations[r].taking_part)
@@ -1290,6 +1288,63 @@ mod tests {
         }
         assert_eq!(w.organizations[0].order, crate::Order::Pursue(2));
         assert!(crate::distance(w.centre(0), w.centre(2)) <= 18.5);
+    }
+
+    /// `before`'s regiments 0 and 1 a step apart front to back, sent as a
+    /// group onto `piece` at 30,40, `owner`'s regiment 2 or building,
+    /// with regiment 2's men and buildings guarding `range` round them if
+    /// any; the speeds each was handed.
+    fn onto_guarded(piece: crate::Piece, owner: u32, range: Option<f32>) -> [f32; 2] {
+        let mut w = before(owner, vec![rifle(10.0, 1.0)]);
+        if piece == crate::Piece::Building(0) {
+            w = with_buildings(w, &[building(9, owner, [30.0, 40.0])]);
+            w.units[2].position = [55.0, 55.0];
+            w.organizations[2].position = [55.0, 55.0];
+        }
+        w.units[1].position = [40.0, 0.0];
+        w.organizations[1].position = [40.0, 0.0];
+        if let Some(range) = range {
+            for template in [w.units[2].template.clone(), "house".into()] {
+                w.rules.guard_zones.insert(template, range);
+            }
+        }
+        w.apply(
+            1,
+            both(|organization| Command::MoveOnto {
+                organization,
+                piece,
+            }),
+        )
+        .unwrap();
+        w.plan_pending();
+        run(&mut w, 2.0);
+        [0, 1].map(|r| w.organizations[r].group_speed.expect("timed"))
+    }
+
+    #[test]
+    fn a_group_on_an_enemy_thing_with_a_guard_zone_arrives_at_its_edge_front_first() {
+        use crate::Piece::{Building, Organization};
+        // Both have as far to go round it; the front one, 5 ahead of the
+        // centre, has 15 + 5 + 5 less of it to time and the back one
+        // 15 + 5 - 5, so it goes at 15/25 of the back one's speed.
+        for piece in [Building(0), Organization(2)] {
+            let [front, back] = onto_guarded(piece, 2, Some(15.0));
+            assert!(
+                (front / back - 0.6).abs() < 0.05,
+                "{piece:?} {front} {back}"
+            );
+        }
+        // Without a guard zone, or on their own side's, they time it to
+        // the end of their routes.
+        for (owner, range) in [(2, None), (1, Some(15.0))] {
+            for piece in [Building(0), Organization(2)] {
+                let [front, back] = onto_guarded(piece, owner, range);
+                assert!(
+                    (front / back - 1.0).abs() < 0.05,
+                    "{piece:?} {owner} {front} {back}"
+                );
+            }
+        }
     }
 
     #[test]

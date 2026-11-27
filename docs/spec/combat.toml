@@ -1189,8 +1189,15 @@ text = '''No distance makes it give up, and neither does losing sight of the tar
 
 [[topic.rule]]
 id = "city-siege"
-tags = ["code"]
-text = '''Attacking a target inside an enemy city turns into a siege. How a siege plays is open.'''
+tags = ["code", "data"]
+text = '''
+In AA, attacking something in an enemy city is an ordinary attack: no siege ever starts, since sieges are made against [settlements](settlements.toml) and AA's data has none. A city's blocks, its centre, and units standing in it are attacked as above.
+
+Kohan II's sieges: an attack on something that belongs to an enemy settlement (one of its buildings, or anything standing in the settlement's zone), when the regiment can attack that settlement and the target is within its `operational_range`, becomes a siege of it.
+- While the regiment is farther than `SiegeMinimumDistanceForBehavior` (40) plus the settlement zone's radius from the settlement's centre, it simply moves toward the centre.
+- Closer than that, it attacks its target as above, except that its route may pass through that settlement's walls, and it first engages any wall on its route that is within its control zone's radius plus its own size and the wall's. It looks again for walls in its way at most every `SiegeMinimumListRefreshSeconds` (2), when its route has changed. Its attack target ([Picking targets](#picking-targets), tier 6) is the first wall in its way, else the besieged target.
+- If the target leaves the settlement, or the settlement is gone or has no owner, the siege becomes an ordinary attack on the target; if the target is gone, the attack ends as above.
+'''
 
 [[topic.rule]]
 id = "attack-ground"
