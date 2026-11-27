@@ -279,7 +279,7 @@ pub fn fit_view(
             continue;
         };
         let (at, size) = fit(size);
-        layout.set_if_neq(LayoutScale::of(size.y as f32 / scale / ui.0));
+        layout.set_if_neq(LayoutScale::of(size.y as f32 / scale / ui.0, size.y as f32));
         let now = (camera.viewport.as_ref()).map(|v| (v.physical_position, v.physical_size));
         if now != Some((at, size)) {
             camera.viewport = Some(Viewport {

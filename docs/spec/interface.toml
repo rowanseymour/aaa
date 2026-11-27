@@ -41,6 +41,56 @@ tags = ["code", "data"]
 text = '''`UI/resolution.tgi` lists 4:3 sizes only (800x600, 1024x768, 1280x960), but it isn't the options' list.'''
 
 [[topic]]
+title = "Font sizes"
+under = "Layout units and placement"
+intro = '''How big text is drawn and how far apart its lines are, in screen pixels. Unlike positions, text isn't stretched: a font is rebuilt at a whole pixel size for the window's height, and its glyphs are drawn at that size.'''
+
+[[topic.rule]]
+id = "font-pixel-size"
+tags = ["code", "data"]
+text = '''A font's `size` (`Fonts/font_*.tgi`) is scaled by the window's height over 768 and rounded to the nearest whole number: `small` (12) is 12 at 768 high, 14 at 900, 17 at 1080; `small_bold` (14) is 16 at 900. The window's width plays no part.'''
+
+[[topic.rule]]
+id = "font-backup-size"
+tags = ["code", "data"]
+text = '''If that rounded size is under the character set's `use_backup_font_when_smaller_than`, the `backup_font` is used instead, at its `backup_font_size` scaled and rounded the same way: `small` switches to Arial below 12, so at 600 high (9) it's Arial 11 scaled to 9.'''
+
+[[topic.rule]]
+id = "font-file-size-in-points"
+tags = ["code"]
+text = '''A font loaded from a file (`font = /fonts/truetype/A&A.TTF`) takes that size in points, so its em is the size times 4/3 pixels: `small` at 900 high (14) has an 18.67-pixel em. A system font named without a file (`font = Arial`) takes the size as its pixel height instead: `small_bold` at 900 high is Arial 16 pixels high.'''
+
+[[topic.rule]]
+id = "font-line-height"
+tags = ["code"]
+text = '''Every glyph of a font gets the same cell height, which is the font's line height. For a font file it's the font's line spacing at that em (ascent plus descent plus line gap, from the file), rounded up to a whole pixel. For a system font it's the height Windows gives the font at that pixel size.'''
+
+[[topic.rule]]
+id = "font-line-height-effects"
+tags = ["code", "data"]
+text = '''An `outline` adds 2 to that height; otherwise a `shadow` adds 1. `small` and `small_bold` both have a shadow.'''
+
+[[topic.rule]]
+id = "small-font-line-height"
+tags = ["code", "game", "data"]
+text = '''So `small` (`A&A.ttf`, whose line spacing is 1.096 em) is 22 pixels a line at 900 high (18.67 × 1.096 = 20.46, up to 21, plus 1 for the shadow), 19 at 768 and 26 at 1080. The 22 at 900 is what AA's tooltips show.'''
+
+[[topic.rule]]
+id = "small-bold-line-height"
+tags = ["game", "guess"]
+text = '''`small_bold` (Arial bold) at 900 high is Arial 16 pixels high, which Windows makes 18 pixels a line, so 19 with the shadow. The tooltip frames measured in AA fit this.'''
+
+[[topic.rule]]
+id = "text-block-height"
+tags = ["code"]
+text = '''A block of text is as tall as its lines added up, the last line counted in full like the others. A line is as tall as the tallest font used on it; an empty line is as tall as the font in effect at its end. Icon glyphs don't change a line's height.'''
+
+[[topic.rule]]
+id = "text-to-layout"
+tags = ["code"]
+text = '''Where a widget is sized to its text, the text's size in pixels is turned back into layout units (divided by the window's width over 1024 and height over 768) before padding is added, and the whole is then stretched again with the layout. Text wraps at its width in layout units turned into pixels the same way.'''
+
+[[topic]]
 title = "The map view"
 intro = '''AA traced; Kohan II unchecked.'''
 
@@ -486,6 +536,26 @@ id = "anchored-tooltips"
 tags = ["game", "data"]
 text = '''In a match, tooltips are anchored rather than following the mouse (`anchored_tooltips` on `Game`): AA puts the box's bottom-right corner at 1024, 521 (`anchored_tooltip_x`, `anchored_tooltip_y`), the screen's right edge just above the control panel, 346 wide (`anchored_tooltip_width`), as tall as its text.'''
 
+[[topic.rule]]
+id = "anchored-tooltip-padding"
+tags = ["code", "data"]
+text = '''The pane's `padding_x` and `padding_y` (18 and 15 in AA's `ToolTipGame`, in `UI/Game/tooltip.tgi`) are layout units like any position, so they stretch with the window: 15 is 17.6 pixels at 900 high. The text area starts that far in from the pane's left and top, and its width is the pane's 346 less twice `padding_x`; the text wraps to that width.'''
+
+[[topic.rule]]
+id = "anchored-tooltip-label-offset"
+tags = ["data", "guess"]
+text = '''The label's own `T = 1` (and `L = 0`) places the text within the text area in layout units too, so 1 is 1.17 pixels at 900 high.'''
+
+[[topic.rule]]
+id = "anchored-tooltip-height"
+tags = ["code", "game"]
+text = '''In layout units, the pane is the text's height (turned back from pixels as in [text to layout](#text-to-layout)) plus twice `padding_y`, plus half a unit, and its bottom stays at the anchor. The text is measured as a block ([text block height](#text-block-height)): the title in `small_bold` makes its own line as tall as that font's, and the title ends with the font back at `small`, so the blank line after it and the body lines are `small`'s.'''
+
+[[topic.rule.example]]
+given = { screen = "1600x900", lines = "title, blank, one body line" }
+then = { text_px = "19 + 22 + 22 = 63", text_layout = 53.76, pane_layout = 84.26, pane_px = 98.7, top_px = 511.8, bottom_px = 610.5 }
+note = "The deploy tooltip's frame runs from about 512 to 610; each further body line adds 22 pixels."
+
 [[topic]]
 title = "Images"
 
@@ -581,3 +651,13 @@ asked = 2026-11-16
 q = '''When exactly `KingdomDropDown`, `DisplayBannerPanel` and `Subtitles` show.'''
 by = "analysis"
 asked = 2026-11-16
+
+[[open]]
+q = '''How many pixels a line is `small_bold` (Arial bold) at 16 pixels high: 19 with its shadow fits the tooltip frames, but a capture with two title-font lines, or a measurement on Windows, would settle it.'''
+by = "analysis"
+asked = 2026-11-27
+
+[[open]]
+q = '''Does the tooltip label's `T = 1` move the text down by a layout unit inside the padding? A close look at where the first line's glyphs sit in a capture would settle it.'''
+by = "analysis"
+asked = 2026-11-27

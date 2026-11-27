@@ -6,7 +6,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use tgdata::widgets::{SCREEN, Tiles, Widget};
+use tgdata::widgets::{Edge, SCREEN, Tiles, Widget};
 
 use super::lettering::{Letters, Measured, PLAIN, Sliced};
 use super::{GAME, Pictures};
@@ -25,6 +25,9 @@ const GLYPH: f32 = 13.0;
 /// between amounts, in the layouts' pixels, as the game's tooltips measure.
 const TAB: f32 = 99.0;
 const SPACE: f32 = 4.0;
+/// What the pane adds to its height past its text and padding, in the
+/// layouts' pixels.
+const BELOW: f32 = 0.5;
 
 /// The pane, and what it says.
 #[derive(Component)]
@@ -50,7 +53,8 @@ enum Saying {
 /// The pane ready to spawn.
 pub struct Built {
     node: Node,
-    padding: Vec2,
+    /// Its text's padding, left, right, top and bottom.
+    padding: [f32; 4],
     frame: Option<(Handle<Image>, f32)>,
     pane: Pane,
 }
@@ -73,11 +77,19 @@ impl Built {
         let x = number(game, "anchored_tooltip_x").unwrap_or(SCREEN[0]);
         let y = number(game, "anchored_tooltip_y").unwrap_or(SCREEN[1]);
         let width = number(game, "anchored_tooltip_width").unwrap_or(SCREEN[0] / 3.0);
-        let padding = Vec2::new(
+        let (across, down) = (
             number(Some(pane), "padding_x").unwrap_or(0.0),
             number(Some(pane), "padding_y").unwrap_or(0.0),
         );
         let label = pane.find(TEXT).and_then(|l| l.parts.first());
+        // The label's own place within the padding moves its text without
+        // changing the pane's size.
+        let start = |edge| match edge {
+            Edge::Start(at) => at,
+            _ => 0.0,
+        };
+        let (l, t) = label.map_or((0.0, 0.0), |l| (start(l.bounds.left), start(l.bounds.top)));
+        let padding = [across + l, across - l, down + t, down - t + BELOW];
         let font = label.and_then(|l| l.font.clone()).unwrap_or(PLAIN.into());
         letters.read(pictures.game, faces, &font);
         let title = (pictures.game.tooltip_title_font()).unwrap_or_else(|| font.clone());
@@ -121,7 +133,7 @@ impl Built {
                 ..default()
             },
             Measured {
-                padding: Some(self.padding),
+                edges: Some(self.padding),
                 ..default()
             },
             Pickable::IGNORE,
@@ -255,11 +267,11 @@ fn write(
     saying: &Saying,
 ) {
     let text = |words: &str, colour: Color| letters.text(&pane.font, words, colour);
-    // A title in the title's font but as far apart as the rest's lines, and
+    // A title in the title's font, its line as tall as that font's, and
     // for a tooltip, the blank line the game puts after it.
     let title = |lines: &mut ChildSpawnerCommands, name: &Marked, more: bool| {
         lines
-            .spawn(letters.text_within(&pane.title, &pane.font, &name.before, pane.body))
+            .spawn(letters.text(&pane.title, &name.before, pane.body))
             .with_children(|line| {
                 let span = |words: &str, colour| {
                     (

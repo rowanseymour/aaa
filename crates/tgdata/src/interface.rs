@@ -378,6 +378,7 @@ impl GameData {
             face: face("font"),
             size: number(font, "size").unwrap_or(12.0),
             bold,
+            outline: flag("outline"),
             shadow: flag("shadow")
                 .then(|| set.and_then(|s| number(s, "shadow_opacity")).unwrap_or(1.0)),
             backup,
@@ -640,6 +641,8 @@ pub struct FontLook {
     /// for a face the data holds, pixels for one of the system's.
     pub size: f32,
     pub bold: bool,
+    /// Whether its glyphs are outlined.
+    pub outline: bool,
     /// How opaque the shadow behind its glyphs is, where it has one.
     pub shadow: Option<f32>,
     /// The font it's drawn in instead when it would be drawn too small.

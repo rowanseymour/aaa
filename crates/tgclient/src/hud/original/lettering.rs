@@ -10,20 +10,22 @@ use super::SCREEN;
 use crate::Screen;
 
 /// How many of the interface's pixels a pixel of the layouts' screen is,
-/// as [`fit_view`](super::fit_view) fits that screen to the window.
+/// as [`fit_view`](super::fit_view) fits that screen to the window, and
+/// how many of the window's own pixels, which fonts are sized in.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
-pub struct LayoutScale(pub f32);
+pub struct LayoutScale(pub f32, pub f32);
 
 impl Default for LayoutScale {
     fn default() -> Self {
-        LayoutScale(1.0)
+        LayoutScale(1.0, 1.0)
     }
 }
 
 impl LayoutScale {
-    /// The scale for a screen drawn `height` of the interface's pixels tall.
-    pub fn of(height: f32) -> Self {
-        LayoutScale(height / SCREEN[1])
+    /// The scale for a screen drawn `height` of the interface's pixels
+    /// tall, and `pixels` of the window's.
+    pub fn of(height: f32, pixels: f32) -> Self {
+        LayoutScale(height / SCREEN[1], pixels / SCREEN[1])
     }
 }
 
@@ -31,20 +33,43 @@ impl LayoutScale {
 #[derive(Component, Clone)]
 pub struct Lettered {
     own: Drawn,
-    /// The font's backup, and the font's size and the size it's drawn in
-    /// its backup below, as the data gives them.
-    backup: Option<(Drawn, f32, f32)>,
+    /// The font's backup, and the size it's drawn in its backup below.
+    backup: Option<(Drawn, f32)>,
     /// The font whose lines its lines are as far apart as, where it's not
     /// its own: a label's, for text in another font within it.
     pitch: Option<Lettering>,
 }
 
-/// A face, and its size: in the layouts' pixels for a font's own, in
-/// the interface's for a backup.
+/// A face, and its size as the data gives it.
 #[derive(Clone)]
 struct Drawn {
     face: Option<Read>,
-    px: f32,
+    size: f32,
+    /// Whether the size is in points, as it is for a face the data holds,
+    /// rather than pixels, as for one of the system's.
+    points: bool,
+    /// The pixels its shadow or outline adds to its lines.
+    effects: f32,
+}
+
+impl Drawn {
+    /// Its em in pixels where a layout pixel is `s` of them, its size
+    /// scaled to whole pixels first.
+    fn em(&self, s: f32) -> f32 {
+        let size = (self.size * s).round();
+        if self.points {
+            size * 96.0 / 72.0
+        } else {
+            size
+        }
+    }
+
+    /// How far apart its lines are, in the same pixels.
+    fn line(&self, s: f32) -> f32 {
+        let em = self.em(s);
+        let spacing = (self.face.as_ref()).map_or(em, |r| (r.spacing(self.points) * em).ceil());
+        spacing + self.effects
+    }
 }
 
 /// A face as read, and how tall its lines are.
@@ -53,15 +78,17 @@ struct Read {
     face: Handle<Face>,
     /// Its file, for measuring text in it.
     bytes: std::sync::Arc<[u8]>,
-    /// Its height above and below the baseline, in ems, as Windows takes it.
+    /// Its height above and below the baseline, in ems, as Windows takes
+    /// it, and the gap its file asks for between lines.
     ascent: f32,
     descent: f32,
+    gap: f32,
 }
 
 impl Read {
     /// `bytes` as a face, if they are one.
     fn new(bytes: Vec<u8>, faces: &mut Assets<Face>) -> Option<Read> {
-        let (ascent, descent) = {
+        let (ascent, descent, gap) = {
             let parsed = ttf_parser::Face::parse(&bytes, 0).ok()?;
             let em = f32::from(parsed.units_per_em());
             let os2 = parsed.tables().os2;
@@ -69,13 +96,15 @@ impl Read {
                 (t.windows_ascender(), t.windows_descender())
             });
             // Both from the baseline, the descent below it negative.
-            (f32::from(up) / em, -f32::from(down) / em)
+            let gap = f32::from(parsed.line_gap()) / em;
+            (f32::from(up) / em, -f32::from(down) / em, gap)
         };
         Some(Read {
             bytes: bytes.clone().into(),
             face: faces.add(Face::from_bytes(bytes)),
             ascent,
             descent,
+            gap,
         })
     }
 
@@ -92,10 +121,10 @@ impl Read {
         text.chars().map(|c| f32::from(advance(c))).sum::<f32>() * px / em
     }
 
-    /// How far apart its lines are at `px` pixels, each part rounded up to
-    /// whole pixels as Windows does.
-    fn line(&self, px: f32) -> f32 {
-        (self.ascent * px).ceil() + (self.descent * px).ceil()
+    /// How far apart its lines are, in ems: with the file's line gap for a
+    /// face the data holds, without for one standing in for the system's.
+    fn spacing(&self, own: bool) -> f32 {
+        self.ascent + self.descent + if own { self.gap } else { 0.0 }
     }
 }
 
@@ -104,6 +133,9 @@ impl Read {
 pub struct Measured {
     pub size: Option<Vec2>,
     pub padding: Option<Vec2>,
+    /// Padding whose edges differ, left, right, top and bottom, in place of
+    /// `padding`.
+    pub edges: Option<[f32; 4]>,
     pub min_width: Option<f32>,
     /// The gap between its children across.
     pub gap: Option<f32>,
@@ -118,15 +150,23 @@ pub struct Measured {
 #[derive(Component)]
 pub struct Sliced;
 
-/// The face a font is drawn in at scale `s`, and its size in the
-/// interface's pixels: its backup's where it's scaled below the size the
-/// backup takes over at. The size compared is the one the font's scaled
-/// to; the backup's is the screen's own, as it's there to keep small text
-/// legible.
-fn drawn_at<'a>(own: &'a Drawn, backup: Option<&'a (Drawn, f32, f32)>, s: f32) -> (&'a Drawn, f32) {
+/// `pixels` of the window's in the interface's, `to` of them each, never so
+/// much as to be laid out past that many whole pixels again.
+fn within(pixels: f32, to: f32) -> f32 {
+    let back = 1.0 / to;
+    let mut v = pixels * to;
+    while v * back > pixels {
+        v = f32::from_bits(v.to_bits() - 1);
+    }
+    v
+}
+
+/// The face a font is drawn in at scale `s`: its backup's where its size,
+/// scaled to whole pixels, is below the size the backup takes over at.
+fn drawn_at<'a>(own: &'a Drawn, backup: Option<&'a (Drawn, f32)>, s: f32) -> &'a Drawn {
     match backup {
-        Some((backup, size, below)) if size * s < *below => (backup, backup.px),
-        _ => (own, own.px * s),
+        Some((backup, below)) if (own.size * s).round() < *below => backup,
+        _ => own,
     }
 }
 
@@ -149,6 +189,12 @@ pub fn scale(
     mut sliced: Query<&mut ImageNode, With<Sliced>>,
 ) {
     let s = scale.0;
+    // A window with no height, as when it's minimised, has nothing to fit.
+    if scale.1 <= 0.0 {
+        return;
+    }
+    // Fonts are sized in the window's pixels, then drawn in the interface's.
+    let (p, to) = (scale.1, scale.0 / scale.1);
     for mut image in &mut sliced {
         if let NodeImageMode::Sliced(slicer) = &image.image_mode
             && slicer.max_corner_scale != s
@@ -158,30 +204,28 @@ pub fn scale(
             image.image_mode = NodeImageMode::Sliced(slicer);
         }
     }
-    let sized = |(font, line): (&mut Mut<TextFont>, &mut Mut<LineHeight>),
-                 (drawn, px): (&Drawn, f32),
-                 (pitch, at): (&Drawn, f32)| {
-        let size = FontSize::Px(px);
-        if font.font_size != size {
-            font.font_size = size;
-        }
-        if let Some(read) = &drawn.face {
-            let face = FontSource::Handle(read.face.clone());
-            if font.font != face {
-                font.font = face;
+    let sized =
+        |(font, line): (&mut Mut<TextFont>, &mut Mut<LineHeight>), drawn: &Drawn, pitch: &Drawn| {
+            let size = FontSize::Px(drawn.em(p) * to);
+            if font.font_size != size {
+                font.font_size = size;
             }
-        }
-        if let Some(read) = &pitch.face {
-            let height = LineHeight::Px(read.line(at));
+            if let Some(read) = &drawn.face {
+                let face = FontSource::Handle(read.face.clone());
+                if font.font != face {
+                    font.font = face;
+                }
+            }
+            let height = LineHeight::Px(within(pitch.line(p), to));
             if **line != height {
                 **line = height;
             }
-        }
-    };
+        };
     for (lettered, mut font, mut line, mut shadow, children) in &mut texts {
-        let drawn = drawn_at(&lettered.own, lettered.backup.as_ref(), s);
-        let pitch =
-            (lettered.pitch.as_ref()).map_or(drawn, |p| drawn_at(&p.own, p.backup.as_ref(), s));
+        let drawn = drawn_at(&lettered.own, lettered.backup.as_ref(), p);
+        let pitch = (lettered.pitch.as_ref()).map_or(drawn, |pitch| {
+            drawn_at(&pitch.own, pitch.backup.as_ref(), p)
+        });
         sized((&mut font, &mut line), drawn, pitch);
         let offset = Vec2::splat(s);
         if shadow.offset != offset {
@@ -221,11 +265,17 @@ pub fn scale(
         {
             node.margin.top = px(top * s);
         }
-        if let Some(pad) = measured.padding {
-            let padding = UiRect::axes(px(pad.x * s), px(pad.y * s));
-            if node.padding != padding {
-                node.padding = padding;
+        let padding = match (measured.edges, measured.padding) {
+            (Some([l, r, t, b]), _) => {
+                Some(UiRect::new(px(l * s), px(r * s), px(t * s), px(b * s)))
             }
+            (None, Some(pad)) => Some(UiRect::axes(px(pad.x * s), px(pad.y * s))),
+            (None, None) => None,
+        };
+        if let Some(padding) = padding
+            && node.padding != padding
+        {
+            node.padding = padding;
         }
     }
 }
@@ -273,22 +323,11 @@ struct Lettering {
     /// How opaque the shadow behind it is: none where it has none.
     shadow: f32,
     /// As [`Lettered`]'s.
-    backup: Option<(Drawn, f32, f32)>,
+    backup: Option<(Drawn, f32)>,
 }
 
 /// The font a label that names none is in.
 pub const PLAIN: &str = "small";
-
-/// How many pixels tall a font of `size` in `face` is. The game sizes a
-/// face its data holds in points of a 96 dots-per-inch screen, and one of
-/// the system's in pixels, as text in each measures on its screen.
-fn pixels(face: Option<&tgdata::Typeface>, size: f32) -> f32 {
-    if face.is_some_and(|f| f.system) {
-        size
-    } else {
-        size * 96.0 / 72.0
-    }
-}
 
 impl Letters {
     /// Reads the font `ids` names, if it hasn't been.
@@ -297,7 +336,7 @@ impl Letters {
         if self.fonts.contains_key(&key) {
             return;
         }
-        let mut drawn = |face: Option<&tgdata::Typeface>, size| {
+        let mut drawn = |face: Option<&tgdata::Typeface>, size, effects| {
             let read = face.and_then(|face| {
                 let path = face.file.as_ref()?;
                 let file = path.to_ascii_lowercase();
@@ -315,17 +354,27 @@ impl Letters {
             });
             Drawn {
                 face: read,
-                px: pixels(face, size),
+                size,
+                points: !face.is_some_and(|f| f.system),
+                effects,
             }
         };
         let lettering = match game.font(ids) {
-            Some(look) => Lettering {
-                own: drawn(look.face.as_ref(), look.size),
-                shadow: look.shadow.unwrap_or(0.0),
-                backup: (look.backup).map(|b| (drawn(b.face.as_ref(), b.size), look.size, b.below)),
-            },
+            Some(look) => {
+                let effects = match (look.outline, look.shadow) {
+                    (true, _) => 2.0,
+                    (false, Some(_)) => 1.0,
+                    (false, None) => 0.0,
+                };
+                Lettering {
+                    own: drawn(look.face.as_ref(), look.size, effects),
+                    shadow: look.shadow.unwrap_or(0.0),
+                    backup: (look.backup)
+                        .map(|b| (drawn(b.face.as_ref(), b.size, effects), b.below)),
+                }
+            }
             None => Lettering {
-                own: drawn(None, 12.0),
+                own: drawn(None, 12.0, 0.0),
                 shadow: 0.0,
                 backup: None,
             },
@@ -340,13 +389,15 @@ impl Letters {
             (self.fonts.get(&ids.to_ascii_lowercase()).cloned()).unwrap_or(Lettering {
                 own: Drawn {
                     face: None,
-                    px: 16.0,
+                    size: 12.0,
+                    points: true,
+                    effects: 0.0,
                 },
                 shadow: 0.0,
                 backup: None,
             });
         let faces =
-            std::iter::once(&mut lettering.own).chain(lettering.backup.as_mut().map(|(b, _, _)| b));
+            std::iter::once(&mut lettering.own).chain(lettering.backup.as_mut().map(|(b, _)| b));
         for drawn in faces {
             if drawn.face.is_none() {
                 drawn.face = self.first.clone().or_else(|| self.any.clone());
@@ -364,15 +415,17 @@ impl Letters {
     /// lines are, in the layouts' pixels.
     pub fn measure(&self, ids: &str, words: &str) -> (f32, f32) {
         let own = self.lettering(ids).own;
-        (own.face.as_ref()).map_or((0.0, own.px), |r| (r.width(words, own.px), r.line(own.px)))
+        let (em, line) = (own.em(1.0), own.line(1.0));
+        (own.face.as_ref()).map_or((0.0, line), |r| (r.width(words, em), line))
     }
 
     /// The font `ids` names, as read, at its size on the layouts' screen.
     pub fn font(&self, ids: &str) -> TextFont {
         let own = self.lettering(ids).own;
+        let font_size = FontSize::Px(own.em(1.0));
         TextFont {
             font: (own.face).map_or_else(FontSource::default, |r| FontSource::Handle(r.face)),
-            font_size: FontSize::Px(own.px),
+            font_size,
             ..default()
         }
     }
@@ -405,8 +458,7 @@ impl Letters {
         let lettering = self.lettering(ids);
         let pitch = (!label.eq_ignore_ascii_case(ids)).then(|| self.lettering(label));
         let lined = pitch.as_ref().map_or(&lettering.own, |p| &p.own);
-        let line = (lined.face.as_ref())
-            .map_or_else(LineHeight::default, |r| LineHeight::Px(r.line(lined.px)));
+        let line = LineHeight::Px(lined.line(1.0));
         (
             self.font(ids),
             line,
@@ -427,29 +479,30 @@ impl Letters {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_font_scaled_below_its_threshold_is_drawn_in_its_backup() {
-        let read = |face| Read {
+    fn read(face: Handle<Face>, ascent: f32, descent: f32) -> Read {
+        Read {
             face,
             bytes: Default::default(),
-            ascent: 0.75,
-            descent: 0.25,
-        };
+            ascent,
+            descent,
+            gap: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_font_scaled_below_its_threshold_is_drawn_in_its_backup() {
         let own = Handle::<Face>::default();
         let backup = Handle::<Face>::Uuid(bevy::asset::uuid::Uuid::from_u128(1), default());
+        let drawn = |face, size, points| Drawn {
+            face: Some(read(face, 0.75, 0.25)),
+            size,
+            points,
+            effects: 0.0,
+        };
+        // `small`: 12 points, Arial 11 below 12.
         let lettered = Lettered {
-            own: Drawn {
-                face: Some(read(own.clone())),
-                px: 16.0,
-            },
-            backup: Some((
-                Drawn {
-                    face: Some(read(backup.clone())),
-                    px: 11.0,
-                },
-                12.0,
-                12.0,
-            )),
+            own: drawn(own.clone(), 12.0, true),
+            backup: Some((drawn(backup.clone(), 11.0, false), 12.0)),
             pitch: None,
         };
         let mut app = App::new();
@@ -459,7 +512,7 @@ mod tests {
             .spawn((Text::new("x"), lettered, TextShadow::default()))
             .id();
         let drawn = |app: &mut App, s| {
-            app.world_mut().resource_mut::<LayoutScale>().0 = s;
+            *app.world_mut().resource_mut::<LayoutScale>() = LayoutScale(s, s);
             app.update();
             let font = app.world().get::<TextFont>(text).unwrap();
             let line = *app.world().get::<LineHeight>(text).unwrap();
@@ -473,27 +526,40 @@ mod tests {
                 LineHeight::Px(16.0)
             )
         );
+        // At 600 high it's 9, so Arial 11 scaled to 9.
         assert_eq!(
-            drawn(&mut app, 0.75),
+            drawn(&mut app, 600.0 / 768.0),
             (
                 FontSource::Handle(backup),
-                FontSize::Px(11.0),
-                LineHeight::Px(12.0)
+                FontSize::Px(9.0),
+                LineHeight::Px(9.0)
             )
         );
     }
 
     #[test]
-    fn lines_are_as_far_apart_as_a_faces_rounded_height() {
-        let read = Read {
-            face: Handle::default(),
-            bytes: Default::default(),
-            ascent: 0.846,
-            descent: 0.25,
+    fn whole_pixels_lay_out_as_no_more_than_that_many() {
+        let to = 768.0 / 900.0;
+        for pixels in [19.0, 22.0, 26.0, 1.0] {
+            let v = within(pixels, to);
+            assert!(v / to <= pixels && v * (1.0 / to) <= pixels);
+            assert!((v - pixels * to).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn lines_are_a_whole_pixel_sizes_spacing_rounded_up_and_its_shadow() {
+        // `small`: 12 points of A&A, which has a shadow.
+        let small = Drawn {
+            face: Some(read(Handle::default(), 0.846, 0.25)),
+            size: 12.0,
+            points: true,
+            effects: 1.0,
         };
-        // 13.5 and 4 pixels, rounded up apart.
-        assert_eq!(read.line(16.0), 18.0);
-        assert_eq!(read.line(12.0), 14.0);
+        assert_eq!(small.line(1.0), 19.0);
+        assert_eq!(small.line(900.0 / 768.0), 22.0);
+        assert_eq!(small.line(1080.0 / 768.0), 26.0);
+        assert_eq!(small.em(900.0 / 768.0), 14.0 * 4.0 / 3.0);
     }
 
     #[test]
@@ -503,13 +569,10 @@ mod tests {
         let mut letters = Letters::default();
         let lettering = Lettering {
             own: Drawn {
-                face: Some(Read {
-                    face: face.clone(),
-                    bytes: Default::default(),
-                    ascent: 1.0,
-                    descent: 0.0,
-                }),
-                px: 16.0,
+                face: Some(read(face.clone(), 1.0, 0.0)),
+                size: 12.0,
+                points: true,
+                effects: 0.0,
             },
             shadow: 0.0,
             backup: None,
