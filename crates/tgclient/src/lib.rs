@@ -75,6 +75,7 @@ use tgserver::presets;
 mod resource_bar;
 mod saved;
 mod scenario;
+mod scripted_camera;
 mod selection;
 mod sound;
 mod special_ops;
@@ -661,7 +662,9 @@ pub fn run(program: Program) -> ExitCode {
                     target_map,
                 )
                     .chain()
-                    .after(camera::Controls),
+                    .after(camera::Controls)
+                    .after(scripted_camera::follow),
+                scripted_camera::follow.after(camera::Controls),
             )
                 .run_if(in_state(Screen::Match)),
         )

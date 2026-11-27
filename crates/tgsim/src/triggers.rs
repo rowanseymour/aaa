@@ -11,6 +11,7 @@ use tgmap::{Id, Shape};
 
 use crate::scripted::Aim;
 use crate::targets::Thing;
+use crate::views::{self, Pace, View};
 use crate::{Notice, Piece, Refused, SECOND, Standing, State, TICK, World};
 
 /// Where a trigger stands in the match.
@@ -38,6 +39,10 @@ pub struct Triggers {
     pub suns: Vec<SunChange>,
     /// The countdown a trigger has put on screen, for every side to see.
     pub counter: Option<Counter>,
+    /// The moves of sides' views triggers have made, oldest first.
+    pub views: Vec<crate::ViewMove>,
+    /// Whether a trigger has cutscene mode on.
+    pub cutscene: bool,
     /// The objectives the map defines, for its triggers to give.
     pub(crate) objectives: Arc<[tgmap::Objective]>,
     /// The kingdoms an event's parameter and a condition's last picked,
@@ -47,6 +52,8 @@ pub struct Triggers {
     pub condition_kingdom: Option<u32>,
     /// The map's areas, in its order.
     pub(crate) areas: Arc<[tgmap::Area]>,
+    /// The map's cameras, in its order.
+    pub cameras: Arc<[tgmap::Camera]>,
     /// Who was in each of `areas` at its last check.
     pub(crate) inside: Vec<Vec<Thing>>,
     /// The soft shape of each organization template, which places a
@@ -153,8 +160,11 @@ impl Triggers {
             names: Vec::new(),
             suns: Vec::new(),
             counter: None,
+            views: Vec::new(),
+            cutscene: false,
             objectives: Arc::default(),
             areas: Arc::default(),
+            cameras: Arc::default(),
             inside: Vec::new(),
             organization_soft: Arc::default(),
             event_kingdom: None,
@@ -181,6 +191,8 @@ impl crate::hash::Digest for Triggers {
         self.variables.digest(h);
         self.suns.digest(h);
         self.counter.digest(h);
+        self.views.digest(h);
+        self.cutscene.digest(h);
         self.event_kingdom.digest(h);
         self.condition_kingdom.digest(h);
         self.listening.digest(h);
@@ -259,6 +271,9 @@ const HANDLED: &[&str] = &[
     "global_set_sun_colors",
     "game_counter_show",
     "game_counter_hide",
+    "camera_pans_to_camera_over_time",
+    "camera_pans_to_camera_over_time_in_realtime",
+    "camera_returns_to_default_over_time",
     "actor_moves_to_location",
     "actor_performs_command_on_actor",
     "actor_performs_command_at_location",
@@ -886,6 +901,32 @@ impl World {
                 self.triggers.counter = None;
                 true
             }
+            "camera_pans_to_camera_over_time" => {
+                let pace = match p.get(3).map(|p| &p.value) {
+                    Some(Value::Int(eased)) if *eased != 0 => Pace::Eased,
+                    _ => Pace::Steady,
+                };
+                let seconds = self.number(p.get(2)).unwrap_or(0.0);
+                let (k, to) = (self.kingdom(p.first()), views::camera(p.get(1)));
+                self.move_view(k, to, seconds, pace)
+            }
+            "camera_pans_to_camera_over_time_in_realtime" => {
+                let seconds = self.number(p.get(2)).unwrap_or(0.0);
+                let (k, to) = (self.kingdom(p.first()), views::camera(p.get(1)));
+                self.move_view(k, to, seconds, Pace::RealTime)
+            }
+            "camera_returns_to_default_over_time" => {
+                let seconds = self.number(p.get(2)).unwrap_or(0.0);
+                let to = crate::making::location(p.get(1)).map(View::Default);
+                self.move_view(self.kingdom(p.first()), to, seconds, Pace::Steady)
+            }
+            "global_toggle_cutscene_mode" => match p.first().map(|p| &p.value) {
+                Some(Value::Int(on)) => {
+                    self.triggers.cutscene = *on != 0;
+                    true
+                }
+                _ => false,
+            },
             "kingdom_mission_lost" => match self.kingdom(p.first()) {
                 Some(k) => {
                     self.lose(k);
@@ -1391,7 +1432,7 @@ mod tests {
     use crate::targets::Thing;
     use crate::testing::run;
     use crate::testing::{at_war, battle, soldier};
-    use crate::{Notice, Outcome, World};
+    use crate::{Notice, Outcome, Pace, View, World};
     use tgmap::Id;
 
     fn parameter(kind: &str, source: &str, value: Value) -> Parameter {
@@ -1709,6 +1750,90 @@ mod tests {
         assert_eq!(counter.left(shown + 1000.0), 0.0);
         run(&mut w, 60.0);
         assert_eq!(w.triggers.counter, None);
+    }
+
+    #[test]
+    fn a_trigger_moves_a_sides_view_to_a_camera_or_the_default() {
+        let camera = |id| parameter("ma_camera", "mi_camera", Value::Int(id));
+        let pan = |id, seconds, eased| {
+            let eased = parameter("ma_boolean", "mi_boolean", Value::Int(eased));
+            element(
+                "camera_pans_to_camera_over_time",
+                vec![kingdom(1), camera(id), int(seconds), eased],
+            )
+        };
+        let realtime = element(
+            "camera_pans_to_camera_over_time_in_realtime",
+            vec![kingdom(1), camera(7), int(4)],
+        );
+        let back = element(
+            "camera_returns_to_default_over_time",
+            vec![kingdom(1), place([30.0, 40.0]), int(6)],
+        );
+        let nobody = element(
+            "camera_returns_to_default_over_time",
+            vec![kingdom(99), place([30.0, 40.0]), int(6)],
+        );
+        let mut w = with(
+            pool(),
+            vec![trigger(
+                1,
+                true,
+                false,
+                vec![],
+                vec![
+                    pan(9, 3, 0),
+                    nobody,
+                    pan(7, 5, 1),
+                    pan(7, 0, 0),
+                    realtime,
+                    back,
+                ],
+            )],
+            &[],
+        );
+        w.triggers.cameras = vec![tgmap::Camera {
+            id: 7,
+            name: "Intro".into(),
+            position: [10.0, 20.0, 0.0],
+            facing: [0.707, -0.707, 0.839],
+            zoom: 1.3,
+        }]
+        .into();
+        run(&mut w, 0.5);
+        let moves: Vec<_> = (w.triggers.views.iter())
+            .map(|m| (m.player, m.to, m.seconds, m.pace))
+            .collect();
+        assert_eq!(
+            moves,
+            [
+                (1, View::Camera(7), 5.0, Pace::Eased),
+                (1, View::Camera(7), 0.0, Pace::Steady),
+                (1, View::Camera(7), 4.0, Pace::RealTime),
+                (1, View::Default([30.0, 40.0]), 6.0, Pace::Steady),
+            ],
+            "a side or camera the map hasn't placed is no move"
+        );
+    }
+
+    #[test]
+    fn a_trigger_switches_cutscene_mode() {
+        let mode = |on| {
+            let on = parameter("ma_boolean", "mi_boolean", Value::Int(on));
+            element("global_toggle_cutscene_mode", vec![on])
+        };
+        let mut w = with(
+            pool(),
+            vec![
+                trigger(1, true, false, vec![], vec![mode(1)]),
+                trigger(2, true, false, vec![after(2)], vec![mode(0)]),
+            ],
+            &[],
+        );
+        run(&mut w, 1.0);
+        assert!(w.triggers.cutscene);
+        run(&mut w, 2.0);
+        assert!(!w.triggers.cutscene);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 mod areas;
 mod buildings;
+mod cameras;
 #[cfg(test)]
 mod fixtures;
 mod ground;
@@ -17,6 +18,7 @@ mod units;
 
 pub use areas::{Area, AreaShape};
 pub use buildings::Building;
+pub use cameras::Camera;
 pub use ground::{Ground, Tilt};
 pub use obstacle::Obstacle;
 pub use outline::Outline;
@@ -94,6 +96,8 @@ pub struct Map {
     pub objectives: Vec<Objective>,
     /// The regions its triggers test things against.
     pub areas: Vec<Area>,
+    /// The views its triggers move the camera to.
+    pub cameras: Vec<Camera>,
     /// The sight-givers and markers placed in it.
     pub props: Vec<Prop>,
     /// The soft shape of each organization template, which places a
@@ -179,6 +183,7 @@ impl Map {
             .map_err(|e| format!("{name}: {e}"))?;
         let mut things = map.things().map_err(err)?;
         let areas = things.iter().filter_map(Area::of).collect();
+        let cameras = things.iter().filter_map(Camera::of).collect();
         // Past every id the map has, kept or not, since triggers name things
         // by id.
         let next = next_id(&things);
@@ -327,6 +332,7 @@ impl Map {
             triggers,
             objectives,
             areas,
+            cameras,
             props,
             organization_soft: recruits.organization_soft(),
             rules: StoredRules::read(game, &mut map).map_err(err)?,

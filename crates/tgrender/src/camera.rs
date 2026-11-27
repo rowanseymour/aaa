@@ -84,6 +84,12 @@ impl RtsCamera {
         };
     }
 
+    /// Lets the game's camera zoom as near and far as a free one can.
+    pub fn unhold_zoom(&mut self) {
+        let d = game_distance();
+        self.zoom = (FREE_DISTANCE.0 / d, FREE_DISTANCE.1 / d);
+    }
+
     /// How near to and far from its focus it can be.
     pub fn distances(&self) -> (f32, f32) {
         match self.free {
