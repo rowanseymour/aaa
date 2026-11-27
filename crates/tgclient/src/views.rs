@@ -54,12 +54,16 @@ pub(crate) struct UnitView {
 pub(crate) struct TrailerView {
     /// Index into the sim's units.
     unit: usize,
+    /// How many trailers along it is from the unit: 0 for the one the unit
+    /// tows itself.
+    along: usize,
     conform: Option<Shape>,
     footing: Footing,
 }
 
 /// Spawns the model of the sim's `unit`, placed as `thing`, moving at up to
-/// `speed`, and of any `trailer` it tows; false if the unit has none.
+/// `speed`, and of any `trailer` it tows, with what that tows in turn;
+/// false if the unit has none.
 #[allow(clippy::too_many_arguments)]
 fn spawn_unit_view(
     commands: &mut Commands,
@@ -72,7 +76,8 @@ fn spawn_unit_view(
     owner: u32,
     unit: usize,
 ) -> bool {
-    if let Some(t) = trailer {
+    let towed = std::iter::successors(trailer, |t| t.trailer.as_deref());
+    for (along, t) in towed.enumerate() {
         let footing = models.footing(t.template.as_str());
         let towed = thing_at(
             ground,
@@ -86,6 +91,7 @@ fn spawn_unit_view(
             let conform = models.conform(t.template.as_str());
             commands.entity(e).insert(TrailerView {
                 unit,
+                along,
                 conform,
                 footing,
             });
@@ -121,7 +127,8 @@ pub(crate) fn show_trailers(
     let t = fixed.overstep_fraction();
     for (view, mut transform, mut visibility) in &mut views {
         let unit = &sim.0.units[view.unit];
-        let Some(trailer) = unit.trailer.as_ref().filter(|_| unit.alive()) else {
+        let mut towed = std::iter::successors(unit.trailer.as_ref(), |t| t.trailer.as_deref());
+        let Some(trailer) = towed.nth(view.along).filter(|_| unit.alive()) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };

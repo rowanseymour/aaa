@@ -703,6 +703,8 @@ pub struct Unit {
     /// On a stage of a move over areas, the area it's heading for: the
     /// stage is done once it's in it or one beside it.
     stage_area: Option<u32>,
+    /// Whether it's done a stage of its move, so plans the next afresh.
+    stage_done: bool,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -1644,7 +1646,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, straight, stage, sources, with, returning, onto, stage_area, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, straight, stage, sources, with, returning, onto, stage_area, stage_done, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
     health_factor,
     fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,

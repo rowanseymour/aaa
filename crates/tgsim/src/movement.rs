@@ -188,6 +188,7 @@ impl Unit {
         self.returning = false;
         self.onto = None;
         self.stage_area = None;
+        self.stage_done = false;
     }
 
     /// Sets it off along `route` to stop at `goal`, which is where it's
@@ -216,6 +217,7 @@ impl Unit {
         self.detour = false;
         self.straight = false;
         self.stage = false;
+        (self.stage_area, self.onto) = (None, None);
         self.sources.clear();
     }
 
@@ -645,7 +647,10 @@ impl World {
                     unit.end_facing = facing;
                 }
                 (None, _) if held => {
-                    self.units[l].halt();
+                    let units = self.organizations[organization].units.clone();
+                    for u in units {
+                        self.units[u].halt();
+                    }
                     return;
                 }
                 (None, _) => self.take_place(l, place, facing, exact),
@@ -828,7 +833,14 @@ impl World {
         // Its own position follows its leader's, so it's where it was sent
         // once that is where the leader has its place there.
         let there = own.map_or(organization.position, |(_, place)| place);
-        if within(organization.banner.at, there, ARRIVAL_REACH) {
+        // One on its own is where it stands, and has given up already if it
+        // isn't there.
+        let alone = self.lone(r);
+        let at = match alone {
+            true => self.units[l].position,
+            false => organization.banner.at,
+        };
+        if within(at, there, ARRIVAL_REACH) {
             self.end_route(r);
             return;
         }
@@ -839,11 +851,9 @@ impl World {
             self.organizations[r].route_end = None;
             return;
         }
-        // One on its own has given up already.
-        let alone = self.lone(r);
-        // A long way's next stage is tried afresh, and every member handed
-        // a route for it.
-        if organization.stage && !alone {
+        // A long way's next stage, once the last is done, is tried afresh,
+        // and every member handed a route for it.
+        if organization.stage && self.units[l].stage_done && !alone {
             self.organizations[r].tries = 0;
             self.take_places(r);
             return;
@@ -1148,7 +1158,7 @@ impl World {
             let alone = self.lone(self.units[u].organization);
             let unit = &mut self.units[u];
             unit.halt();
-            unit.end_facing = facing;
+            (unit.closing, unit.end_facing) = (None, facing);
             if !alone {
                 unit.facing = facing;
             }
@@ -1642,10 +1652,14 @@ impl World {
                     true => EXACT_REACH,
                     false => ARRIVAL_REACH,
                 };
-                let (exact, ways, stage) = (unit.exact, unit.ways, unit.stage);
+                let (exact, ways) = (unit.exact, unit.ways);
                 let there = self.got_to(u, goal, reach);
-                // A long way's next stage is planned afresh.
-                let ways = if stage { 0 } else { ways };
+                // A stage of a long way done, the next is planned afresh: a
+                // cut tile route once it's driven, one over areas once it's
+                // in or beside the area.
+                let done = unit.stage_done || (unit.stage && unit.stage_area.is_none());
+                self.units[u].stage_done = done;
+                let ways = if done { 0 } else { ways };
                 let again = (!there && ways < WAYS_TRIED)
                     .then(|| self.plan(u, goal, exact, false))
                     .flatten();
@@ -1688,15 +1702,16 @@ impl World {
         let leads = !self.lone(r)
             && self.organizations[r].route_end.is_some()
             && self.pacer(r).map(|p| self.organizations[r].units[p]) == Some(u);
+        let unit = &mut self.units[u];
         if leads {
-            self.units[u].halt();
+            unit.halt();
+            unit.stage_done = true;
             return;
         }
-        let unit = &mut self.units[u];
         // Planned again at once, as when it's run out of route.
         unit.path.clear();
         unit.leg = None;
-        unit.stage_area = None;
+        (unit.stage_area, unit.stage_done) = (None, true);
     }
 
     /// Ticks until the unit at `u` next looks at how its move is going,
@@ -3262,6 +3277,14 @@ mod tests {
         // One that has to end right there still goes the last bit.
         w.take_place(0, [10.0, 10.4], [0.0, 1.0], true);
         assert!(w.units[0].moving() && w.units[0].exact);
+    }
+
+    #[test]
+    fn a_unit_sent_to_a_place_it_is_already_at_stops_closing_in() {
+        let mut w = lone_vehicle();
+        w.units[0].closing = Some(1.0);
+        w.take_place(0, [10.0, 10.3], [0.0, 1.0], false);
+        assert!(w.units[0].closing.is_none() && !w.units[0].moving());
     }
 
     #[test]

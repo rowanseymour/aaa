@@ -151,8 +151,8 @@ pub fn load(
 
 /// Shows the aimed order's cursor over the map and the minimap's diamond,
 /// the attack cursor for an armed special operation, and the usual one
-/// elsewhere. Bombard shows its invalid cursor over a place none of those
-/// it's for can bombard; no cursor tests whether a place can be reached.
+/// elsewhere. Bombard shows its invalid cursor over what none of those it's
+/// for can bombard; no cursor tests whether a place can be reached.
 #[allow(clippy::too_many_arguments)]
 pub fn cursor(
     mut commands: Commands,
@@ -161,7 +161,12 @@ pub fn cursor(
     time: Res<Time>,
     pointer: Pointer,
     loaded: Res<Loaded>,
-    (sim, selected, aimed_for): (Res<Sim>, Res<crate::Selected>, Res<actions::AimedFor>),
+    (sim, selected, aimed_for, focus): (
+        Res<Sim>,
+        Res<crate::Selected>,
+        Res<actions::AimedFor>,
+        Res<crate::Focus>,
+    ),
     window: Single<(Entity, Option<&CursorIcon>), With<PrimaryWindow>>,
 ) {
     let pointed = pointer.at(&loaded.map.ground);
@@ -174,7 +179,11 @@ pub fn cursor(
             Some(r) => vec![r],
             None => selected.0.clone(),
         };
-        aim == Aim::Bombard && !given.iter().any(|&r| sim.0.bombards_place(r, at))
+        // What's under it, as a click there would bombard.
+        let target = focus
+            .piece()
+            .map_or(tgsim::Shelled::Place(at), tgsim::Shelled::Thing);
+        aim == Aim::Bombard && !given.iter().any(|&r| sim.0.could_bombard(r, target))
     };
     let frames = match *page {
         Page::Aiming(aim) if over_map && out_of_range(aim) => {

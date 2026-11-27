@@ -143,10 +143,10 @@ impl World {
     }
 
     /// Whether some member of the organization at `r` could take a bombard
-    /// order on the place `at`.
-    pub fn bombards_place(&self, r: usize, at: [f32; 2]) -> bool {
-        let target = Shelled::Place(at);
-        self.bombardable(r, Bombardment { target, spot: at })
+    /// order on `target` where it is now.
+    pub fn could_bombard(&self, r: usize, target: Shelled) -> bool {
+        let spot = self.spot(target);
+        self.bombardable(r, Bombardment { target, spot })
     }
 
     /// Whether some member of the organization at `r` is already in reach
@@ -516,10 +516,11 @@ mod tests {
     fn places_out_of_reach_of_what_cant_move_cant_be_bombarded() {
         // The bombard cursor marks a place out of range by this.
         let mut w = shelling(vec![mortar(10.0)]);
-        assert!(w.bombards_place(0, [10.0, 30.0]));
+        let at = |at| Shelled::Place(at);
+        assert!(w.could_bombard(0, at([10.0, 30.0])));
         w.units[0].speed_max = 0.0;
-        assert!(!w.bombards_place(0, [10.0, 30.0]));
-        assert!(w.bombards_place(0, [10.0, 15.0]));
+        assert!(!w.could_bombard(0, at([10.0, 30.0])));
+        assert!(w.could_bombard(0, at([10.0, 15.0])));
     }
 
     #[test]

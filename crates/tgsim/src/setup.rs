@@ -425,6 +425,7 @@ impl World {
             returning: false,
             onto: None,
             stage_area: None,
+            stage_done: false,
             speed_max: m.speed,
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),

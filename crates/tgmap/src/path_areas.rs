@@ -249,7 +249,8 @@ fn rectangles(side: usize, bits: &[u8], rules: &AreaRules) -> Vec<Rect> {
     let mut covered = vec![false; side * side];
     let mut out = Vec::new();
     let [mult, div] = rules.shrink;
-    let mut size = rules.first_square as usize;
+    // Down to single tiles, so every tile is in one.
+    let mut size = rules.first_square.max(1) as usize;
     while size >= 1 {
         for x in 0..side {
             for y in 0..side {

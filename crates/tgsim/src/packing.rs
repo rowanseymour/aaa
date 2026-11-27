@@ -3,7 +3,9 @@
 
 use tgmap::{Domain, Obstacle, Unpacks};
 
-use crate::{ARRIVAL_REACH, LOOK, Left, Notice, Order, State, TICK, World, normalised, within};
+use crate::{
+    ARRIVAL_REACH, EXACT_REACH, LOOK, Left, Notice, Order, State, TICK, World, normalised, within,
+};
 
 /// Where a packed building ordered to unpack at `at` is sent: the nearest
 /// whole units to it.
@@ -98,8 +100,9 @@ impl World {
             let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
             let here = self.units[truck].position;
             let at = [here[0] - unpacks.offset[0], here[1] - unpacks.offset[1]];
+            // A lone truck has to get right there; a regiment within reach.
             let there = match lone {
-                true => within(here, stop, ARRIVAL_REACH),
+                true => within(here, stop, EXACT_REACH),
                 false => within(organization.position, stop, ARRIVAL_REACH),
             };
             let room = there && self.room_to_unpack(&unpacks, at, facing);
@@ -509,6 +512,25 @@ mod tests {
         run(&mut w, 2.0);
         assert!(w.organizations[r].unpack_at.is_none());
         assert_eq!(w.buildings.len(), 1);
+        let told = Notice::CannotUnpack {
+            player: 1,
+            organization: r,
+        };
+        assert_eq!(w.notices, [told]);
+    }
+
+    #[test]
+    fn lone_trucks_stopped_short_of_their_spot_say_they_cant_unpack() {
+        let mut w = headquarters();
+        let mut t = truck();
+        t.owner = 1;
+        t.renumber(9);
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_organization(&t);
+        // 0.3 off where it was to stop: near, but not right there.
+        w.organizations[r].unpack_at = Some(([30.0, 30.3], NORTH));
+        w.tick();
+        assert!(w.organizations[r].unpack_at.is_none() && w.buildings.len() == 1);
         let told = Notice::CannotUnpack {
             player: 1,
             organization: r,
