@@ -366,6 +366,8 @@ pub struct Member {
     /// once.
     pub turn_rate: f32,
     pub trailer: Option<Trailer>,
+    /// Whether nothing gets in its way.
+    pub ethereal: bool,
     /// What it can take and deal; `None` for what can't be hurt.
     pub fighter: Option<Fighter>,
     /// Its health as a fraction of its fighter's.
@@ -387,6 +389,25 @@ pub struct Trailer {
     /// The id of the object the map has for it, and where that stands and
     /// the way it faces; `None` for one to put straight behind the member.
     pub placed: Option<(u32, [f32; 2], [f32; 2])>,
+    /// What it tows in turn, coupled to its own hitch.
+    pub trailer: Option<Box<Trailer>>,
+}
+
+/// The most trailers in a row one thing tows, so that data towing round in
+/// a circle tows a few.
+const MOST_TOWED: usize = 4;
+
+/// The trailer what `body` describes tows, and what that tows in turn.
+fn trailer(body: &Body, bodies: &HashMap<Id, Body>, depth: usize) -> Option<Trailer> {
+    let template = body.trailer.as_ref().filter(|_| depth < MOST_TOWED)?;
+    let towed = bodies.get(template)?;
+    Some(Trailer {
+        template: template.clone(),
+        hitch: body.hitch.unwrap_or_default(),
+        coupling: towed.hitch.unwrap_or_default(),
+        placed: None,
+        trailer: trailer(towed, bodies, depth + 1).map(Box::new),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -421,10 +442,14 @@ pub(crate) fn organizations(
         .collect();
     let placed = |m: &Thing| {
         let mut member = member(m, bodies, fighters)?;
-        let towed = m.towed().and_then(|id| by_id.get(&id));
-        if let (Some(trailer), Some(towed)) = (&mut member.trailer, towed) {
-            let [x, y, _] = towed.position;
-            trailer.placed = Some((towed.id, [x, y], facing(towed)));
+        // Each in the row stands where the map has it.
+        let mut towed = m.towed().and_then(|id| by_id.get(&id));
+        let mut trailer = member.trailer.as_mut();
+        while let (Some(t), Some(thing)) = (trailer, towed) {
+            let [x, y, _] = thing.position;
+            t.placed = Some((thing.id, [x, y], facing(thing)));
+            towed = thing.towed().and_then(|id| by_id.get(&id));
+            trailer = t.trailer.as_deref_mut();
         }
         Some(member)
     };
@@ -540,14 +565,7 @@ fn raw_member(
 ) -> Option<Member> {
     let key = Id::from(template);
     let body = bodies.get(&key)?;
-    let trailer = body.trailer.as_ref().and_then(|t| {
-        Some(Trailer {
-            template: t.clone(),
-            hitch: body.hitch.unwrap_or_default(),
-            coupling: bodies.get(t)?.hitch.unwrap_or_default(),
-            placed: None,
-        })
-    });
+    let trailer = trailer(body, bodies, 0);
     Some(Member {
         id,
         position,
@@ -559,6 +577,7 @@ fn raw_member(
         turn_rate: body.turn_rate,
         shape: body.blocking,
         trailer,
+        ethereal: body.ethereal,
         fighter: fighters.get(&key).cloned(),
         template: key,
     })

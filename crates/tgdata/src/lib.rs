@@ -101,7 +101,7 @@ pub use strikes::{Affliction, Lookout, Strike};
 pub use strings::{PingLook, Strings};
 pub use supply::{Enchantment, Kind, Operation, Summon, SupplyEffect, SupplyRules};
 pub use terrain::{
-    DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
+    AreaRules, DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
 };
 pub use views::{Animation, AnimationKind, Footing, Portrait, View};
 pub use world_rules::{
@@ -908,6 +908,12 @@ impl GameData {
     /// with its place goes at most, if the data says.
     pub fn catchup_speed(&self) -> Option<f32> {
         self.svar(|v| v.mover_catchup_speed)
+    }
+
+    /// How near the end of a leg a unit taking it up has to be to pass
+    /// it, if the data says.
+    pub fn leg_reach(&self) -> Option<f32> {
+        self.svar(|v| v.reached_destination_threshold)
     }
 
     /// The least a regiment's banner goes a second catching up with its

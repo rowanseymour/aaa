@@ -36,6 +36,41 @@ pub struct TerrainRules {
     pub areas: bool,
 }
 
+/// How a map is cut into the areas moves are planned over, all in tiles.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AreaRules {
+    /// The side of the first squares tried, each next one this times
+    /// `shrink[0]` over `shrink[1]`, rounded down.
+    pub first_square: u32,
+    pub shrink: [u32; 2],
+    /// The longest side an area is cut to on a map `base_width` across,
+    /// growing with the map's width to the power `width_power`.
+    pub widest: f32,
+    pub base_width: f32,
+    pub width_power: f32,
+    /// The fewest tiles, and fewest along a side, a piece needs to be an
+    /// area of its own.
+    pub least_tiles: u32,
+    pub least_width: u32,
+    /// The most tiles an area may have for a small piece to join it.
+    pub most_joined: u32,
+}
+
+impl Default for AreaRules {
+    fn default() -> Self {
+        AreaRules {
+            first_square: 10,
+            shrink: [3, 4],
+            widest: 12.0,
+            base_width: 64.0,
+            width_power: 0.3333,
+            least_tiles: 9,
+            least_width: 3,
+            most_joined: 1000,
+        }
+    }
+}
+
 impl Default for TerrainRules {
     fn default() -> Self {
         TerrainRules {
@@ -73,6 +108,28 @@ fn effect(p: &defs::Property) -> TerrainEffect {
 }
 
 impl GameData {
+    /// How maps are cut into areas, the data's own settings over the
+    /// defaults.
+    pub fn area_rules(&self) -> AreaRules {
+        let d = AreaRules::default();
+        AreaRules {
+            first_square: (self.svar(|v| v.static_map_starting_square_size))
+                .unwrap_or(d.first_square),
+            shrink: [
+                (self.svar(|v| v.static_map_fast_square_reduction_mult)).unwrap_or(d.shrink[0]),
+                (self.svar(|v| v.static_map_fast_square_reduction_div)).unwrap_or(d.shrink[1]),
+            ],
+            widest: (self.svar(|v| v.static_map_max_rectangle_width)).unwrap_or(d.widest),
+            base_width: (self.svar(|v| v.static_map_base_map_width)).unwrap_or(d.base_width),
+            width_power: (self.svar(|v| v.static_map_max_rectangle_width_exp))
+                .unwrap_or(d.width_power),
+            least_tiles: (self.svar(|v| v.static_map_min_region_size)).unwrap_or(d.least_tiles),
+            least_width: (self.svar(|v| v.static_map_min_region_width)).unwrap_or(d.least_width),
+            most_joined: (self.svar(|v| v.static_map_max_region_size_for_expansion))
+                .unwrap_or(d.most_joined),
+        }
+    }
+
     pub fn terrain_rules(&self) -> TerrainRules {
         let slowest = self.svar(|v| v.terrain_minimum_move_speed);
         let areas = self.svar(|v| v.use_region_path_planner);

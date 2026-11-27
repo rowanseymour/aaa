@@ -265,7 +265,8 @@ impl World {
             if unit.awaited {
                 continue;
             }
-            unit.take(vec![tgmap::from_local(to, facing, offset)], false);
+            // Walking out to its place, it has to get right there.
+            unit.take(vec![tgmap::from_local(to, facing, offset)], true);
             unit.end_facing = facing;
         }
     }

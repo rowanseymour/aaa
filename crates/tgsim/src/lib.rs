@@ -161,9 +161,8 @@ pub const ARRIVAL_REACH: f32 = 0.5;
 
 pub const EXACT_REACH: f32 = 0.1;
 
-/// Ticks between a moving unit's looks at how its move is going, and
-/// between those of one that's given up turning onto its leg. The game
-/// spreads them over 1 to 1.3 seconds and 0.3 to 0.6.
+/// Ticks between an organization's looks at how its move is going, and
+/// its members' at keeping their places.
 const LOOK: u32 = 12;
 
 /// The share of an organization's control range its pursued enemy has to come
@@ -333,8 +332,12 @@ pub struct Organization {
     /// Where it's on its way to unpack, and the way the building will
     /// face there.
     pub unpack_at: Option<([f32; 2], [f32; 2])>,
-    /// The tick it asks again for room to unpack, once refused it.
-    unpack_again: Option<u64>,
+    /// How many times, once at the spot, it's told its packed building to
+    /// unpack there and been refused for want of room.
+    unpack_again: Option<u8>,
+    /// The place in `units` of its layout's primary slot, whose member
+    /// unpacks it, for a layout that has one.
+    pub primary: Option<usize>,
     /// The building it unpacked into, by index into [`World::buildings`].
     pub unpacked_into: Option<usize>,
     /// For one just put out by a building, the building's rally point, to
@@ -424,6 +427,12 @@ pub struct Organization {
     pub pacer: Option<usize>,
     /// What it was doing when it last checked whether it's targeted.
     pub checked_as: Option<&'static str>,
+    /// Whether its leader's route is only the first stage of a way too
+    /// long to plan at once.
+    pub stage: bool,
+    /// Whether, come to rest, it's yet to send the members that didn't get
+    /// to their places once more.
+    pub resend_places: bool,
     /// The way it was sent to face, which it turns to once there, rather
     /// than along its route's last leg.
     pub turn_to: Option<[f32; 2]>,
@@ -669,6 +678,15 @@ pub struct Unit {
     /// Whether it's dashing straight for its next waypoint to get back
     /// onto its route.
     detour: bool,
+    /// Whether it's driving a single leg straight for a destination close
+    /// by.
+    straight: bool,
+    /// Whether its way is only the first stage of one too long to plan at
+    /// once.
+    stage: bool,
+    /// Whether nothing gets in its way, so its moves aren't kept to the
+    /// map's areas.
+    pub ethereal: bool,
     /// On a copy of its leader's route, the leader's point each of its
     /// waypoints was made from, the next last; empty on a way of its own.
     sources: Vec<[f32; 2]>,
@@ -679,6 +697,14 @@ pub struct Unit {
     /// being cut off from it, which it does at its catch-up speed until
     /// it's handed another.
     returning: bool,
+    /// The thing it's going to, which it has also got to once its outline
+    /// is within [`EXACT_REACH`] of a blocking one's.
+    onto: Option<Target>,
+    /// On a stage of a move over areas, the area it's heading for: the
+    /// stage is done once it's in it or one beside it.
+    stage_area: Option<u32>,
+    /// Whether it's done a stage of its move, so plans the next afresh.
+    stage_done: bool,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -810,6 +836,8 @@ pub struct Trailer {
     hitch: [f32; 2],
     /// The same point from the trailer.
     coupling: [f32; 2],
+    /// What it tows in turn.
+    pub trailer: Option<Box<Trailer>>,
 }
 
 /// An owned object that can be hurt but not move, such as a house, a
@@ -1579,12 +1607,12 @@ digest!(Organization {
     id, template, number, owner, units, speed, position, banner, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
-    guard, arriving, terrain_properties, settled, travelling, route_end, route, heading, tries, sent, hand_out, targeted, given_speed, pacer, checked_as, turn_to, entrenched, morale, morale_max,
+    guard, arriving, terrain_properties, settled, travelling, route_end, route, heading, tries, sent, hand_out, targeted, given_speed, pacer, checked_as, stage, resend_places, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
     chased, follow, build, mending, explore, queue,
 } skip {
     // Its template's.
-    formations, unpacks,
+    formations, unpacks, primary,
     // Follows from where it stands.
     terrain,
 });
@@ -1618,14 +1646,14 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, sources, with, returning, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, straight, stage, sources, with, returning, onto, stage_area, stage_done, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
     health_factor,
     fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
     aloft, landed, properties,
 } skip {
     // Its template's.
-    speed_max,
+    speed_max, ethereal,
     domain, shape, fighter,
     // Follows from where it stands.
     terrain,
@@ -1637,7 +1665,8 @@ digest!(Trailer {
     previous,
     facing,
     hitch,
-    coupling
+    coupling,
+    trailer
 });
 
 digest!(Building {
@@ -2030,6 +2059,7 @@ mod tests {
             hitch: [0.0, -2.0],
             coupling: [0.0, 1.0],
             placed: None,
+            trailer: None,
         };
         // Towing round corners and a rock, which steering and going round
         // obstacles do with trigonometry and distances to their shapes.
@@ -2058,7 +2088,7 @@ mod tests {
         let played = format!("{}\n{}", snapshot(&battle), snapshot(&towing));
         assert_eq!(
             fingerprint(&[&battle, &towing]),
-            0xb7212e47f3b71ea9,
+            0x9343_43d0_06f7_5aa2,
             "{played}"
         );
     }

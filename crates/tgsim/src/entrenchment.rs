@@ -14,7 +14,10 @@ impl World {
     /// enough.
     pub(crate) fn keep_entrenchment(&mut self) {
         for r in 0..self.organizations.len() {
-            if self.organizations[r].travelling && !self.underway(r) {
+            // One still trying for where it was sent is travelling, moving
+            // or not.
+            let trying = self.organizations[r].route_end.is_some();
+            if self.organizations[r].travelling && !trying && !self.underway(r) {
                 self.organizations[r].travelling = false;
             }
             let calm = self.settled_in(r);
