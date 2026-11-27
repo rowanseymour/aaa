@@ -380,9 +380,9 @@ impl World {
 
     /// Has the unit at `u`, with no enemy to take on, work on what its
     /// organization is raising or repairing once the organization's near
-    /// it: going within reach of it and using its repair on it each time
-    /// that's recharged, or, with none for it, going up to it. Returns
-    /// whether it did.
+    /// it and the unit's with it: going within reach of it and using its
+    /// repair on it each time that's recharged, or, with none for it, going
+    /// up to it. Returns whether it did.
     pub(crate) fn mend(&mut self, u: usize) -> bool {
         let r = self.units[u].organization;
         let organization = &self.organizations[r];
@@ -393,7 +393,7 @@ impl World {
             return false;
         };
         let reach = PURSUIT_REACH * organization.control(&self.rules.guard_rules);
-        if !within(self.centre(r), self.middle(piece), reach) {
+        if !within(self.centre(r), self.middle(piece), reach) || !self.with_organization(u) {
             return false;
         }
         let Some(t) = self.mend_target(r, piece) else {
@@ -476,7 +476,7 @@ impl World {
 mod tests {
     use crate::testing::*;
 
-    use tgmap::{Id, Repair, Targets};
+    use tgmap::{Id, Repair, Targets, Tile};
 
     use crate::{Build, Command, Notice, Piece, Refused, State};
 
@@ -678,6 +678,99 @@ mod tests {
             building: 0
         }));
         assert_eq!(w.organizations[0].mending, None);
+    }
+
+    #[test]
+    fn engineers_stop_in_reach_of_a_site_their_way_ends_beside() {
+        let mut w = engineers();
+        let site = w.rules.buildable.get_mut(&Id::from("bunker")).unwrap();
+        let room = site.obstacle.as_mut().unwrap();
+        (room.shape, room.soft) = (
+            tgmap::Shape::Circle { radius: 2.0 },
+            tgmap::Shape::Circle { radius: 2.1 },
+        );
+        site.fighter.target = tgmap::Shape::Circle { radius: 2.1 };
+        let engineer = &mut w.units[0];
+        engineer.shape = Some(tgmap::Shape::Circle { radius: 0.5 });
+        engineer.fighter.as_mut().unwrap().target = tgmap::Shape::Circle { radius: 0.5 };
+        // From the north-east, its way ends at the middle of the open
+        // tile beside the site, short of the site's own position.
+        engineer.position = [11.4, 28.0];
+        w.organizations[0].position = [11.4, 28.0];
+        w.apply(1, build([10.0, 20.0])).unwrap();
+        run_until(&mut w, 10.0, |w| !w.buildings.is_empty());
+        run_until(&mut w, 10.0, |w| w.units[0].mended.is_some());
+    }
+
+    #[test]
+    fn engineers_cut_off_from_a_site_keep_off_the_ground_between() {
+        let mut w = engineers();
+        w.apply(1, build([10.0, 20.0])).unwrap();
+        run_until(&mut w, 10.0, |w| !w.buildings.is_empty());
+        let side = w.pathing.side as i32;
+        for x in 0..side {
+            for y in 12..14 {
+                w.pathing.set_blocked(Tile::new(x, y));
+            }
+        }
+        w.units[0].position = [10.0, 29.0];
+        w.organizations[0].position = [10.0, 29.0];
+        w.units[0].halt();
+        for _ in 0..(5.0 / crate::TICK) as usize {
+            w.tick();
+            let at = Tile::at(w.units[0].position);
+            assert!(w.pathing.passable(at, tgmap::Domain::Land), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn engineers_joining_a_filling_regiment_raise_its_site() {
+        let mut w = engineers();
+        let mut captain = w.units[0].clone();
+        captain.fighter.as_mut().unwrap().builds = Vec::new();
+        captain.fighter.as_mut().unwrap().repairs = Vec::new();
+        let mut later = w.units[0].clone();
+        later.awaited = true;
+        w.units.push(captain);
+        w.units.push(later);
+        w.organizations[0].units = vec![2, 0, 3];
+        w.organizations[0].leader = Some(0);
+        w.apply(1, build([10.0, 16.0])).unwrap();
+        run_until(&mut w, 10.0, |w| !w.buildings.is_empty());
+        // The engineer still to come joins as the site goes up.
+        w.arrive(0, 2);
+        run_until(&mut w, 60.0, |w| !w.buildings[0].constructing);
+    }
+
+    #[test]
+    fn only_members_with_the_regiment_work_on_its_site() {
+        let mut w = engineers();
+        for u in 2..5 {
+            let mut engineer = w.units[0].clone();
+            engineer.organization = 0;
+            w.units.push(engineer);
+            w.organizations[0].units.push(u);
+        }
+        w.apply(1, build([10.0, 16.0])).unwrap();
+        run_until(&mut w, 10.0, |w| !w.buildings.is_empty());
+        let away = 4;
+        let hold = |w: &mut crate::World| {
+            w.units[away].position = [36.0, 12.0];
+            w.units[away].halt();
+        };
+        hold(&mut w);
+        assert!(!w.with_organization(away));
+        w.units[away].mended = None;
+        let site = Some(crate::Target::Building(0));
+        for _ in 0..(3.0 / crate::TICK) as usize {
+            hold(&mut w);
+            w.tick();
+            assert_ne!(w.units[away].target, site);
+        }
+        assert!(w.units[0].mended.is_some());
+        // Back with it, it joins in.
+        w.units[away].position = w.units[0].position;
+        run_until(&mut w, 10.0, |w| w.units[away].mended.is_some());
     }
 
     #[test]

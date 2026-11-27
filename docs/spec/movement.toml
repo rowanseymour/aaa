@@ -560,6 +560,24 @@ tags = ["code"]
 text = '''Going to another thing that blocks tiles (`blocking`, such as a building), a unit has also arrived once its outline comes within 0.1 of that thing's outline; for anything else only its position counts.'''
 
 [[topic.rule]]
+id = "stopping-in-range"
+tags = ["code", "data"]
+text = '''
+A man going to a thing to use an ability on it (the approach of his attack, the walk to a building he builds or repairs) stops as soon as he's within that ability's reach, wherever he is on his route:
+- His route is planned to the thing's own position, as for any move to a thing: the destination is made standable and a close one gets a straight leg, as above, and the arrival tests above still apply when his route runs out.
+- At every step of his drive, his soft shape's gap to the thing's soft shape ([objects](objects.toml#gap-between-two-shapes)) is tested against the ability's `range` less 0.0001 (or the distance he covers in that step, if that's more). Once it's within, the move ends there, mid-route or not, and he decides again what to do ([combat](combat.toml#rating-outcomes)), which is now to use the ability.
+- As each leg of his route ends, his centre's distance to the thing's centre is tested against the same reach as well.
+- It's the soft shapes that stop him, even for a thing whose template gives it a `target_shape` of its own (AA's battleships and carriers), though range itself is measured between target shapes ([combat](combat.toml#range-edge-to-edge)). For everything else in AA the two are the same.
+
+So an engineer (soft circle 0.5) walking to a bunker site (soft circle 2.1) with his range of 1 stops on the step that brings his centre within 3.6 of the site's, short of where his route ends, which lies nearer the site.
+'''
+
+[[topic.rule]]
+id = "out-of-range-after-move"
+tags = ["code", "guess"]
+text = '''If his move ends without bringing him within reach (it arrived, failed, or ran out of plans), he doesn't walk straight at the thing. He sets off again from where he stands when he's next given the work: for builders and repairers, the regiment hands it out again each time it looks at the building ([construction](construction.toml#closing-in)). That each such hand-out restarts his walk afresh, with its plan count reset, is a guess.'''
+
+[[topic.rule]]
 id = "replan-if-not-arrived"
 tags = ["code"]
 text = '''If it hasn't arrived it plans again from where it stands and drives again.'''
@@ -998,5 +1016,10 @@ asked = 2026-11-22
 
 [[open]]
 q = '''Which formation does a retreating regiment take, when its layout names no retreat formation? The data's own description says the last organized one, which is Column in every stock layout.'''
+by = "analysis"
+asked = 2026-11-27
+
+[[open]]
+q = '''Does a man whose walk to a building he builds or repairs ended out of reach set off again when his regiment next hands out the work, or stand where he is (out-of-range-after-move)?'''
 by = "analysis"
 asked = 2026-11-27
