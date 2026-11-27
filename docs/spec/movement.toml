@@ -13,22 +13,12 @@ text = '''A mover's `turn_type` is `INSTANT`, `IN_PLACE` or `WHILE_MOVING`. `INS
 [[topic.rule]]
 id = "turn-rate"
 tags = ["code", "data"]
-text = '''`IN_PLACE` and `WHILE_MOVING` move alike: nothing in how the unit turns, drives or arrives tells them apart. Both turn at a fixed rate of `speed_max` / `turn_radius` radians a second, whatever speed the unit is doing at the time. Stock HQ and supply trucks (`speed_max` 3, `turn_radius` 3) turn at 1 radian a second.'''
-
-[[topic.rule]]
-id = "in-place-drives-while-turning"
-tags = ["code"]
-text = '''So an `IN_PLACE` unit does not stop to turn: it drives while turning, like a `WHILE_MOVING` one.'''
+text = '''`IN_PLACE` and `WHILE_MOVING` move alike: nothing in how the unit turns, drives or arrives tells them apart. Both turn at a fixed rate of `speed_max` / `turn_radius` radians a second, whatever speed the unit is doing at the time. Stock HQ and supply trucks (`speed_max` 3, `turn_radius` 3) turn at 1 radian a second. So an `IN_PLACE` unit does not stop to turn: it drives while turning. `turn_radians_per_sec` is never used.'''
 
 [[topic.rule]]
 id = "default-turn-type"
 tags = ["code", "data"]
 text = '''The root mover template sets `turn_type = INSTANT`, so a unit with a `turn_radius` and no `turn_type` anywhere up its template chain turns instantly and its radius does nothing. A unit that sets only `turn_radius` keeps its template's `turn_type`: stock halftracks set 1.5 over their template's `WHILE_MOVING`.'''
-
-[[topic.rule]]
-id = "turn-radians-per-sec-unused"
-tags = ["code"]
-text = '''`turn_radians_per_sec` is never used.'''
 
 [[topic]]
 title = "Driving a leg"
@@ -50,18 +40,10 @@ text = '''
 Each simulation step, in this order:
 1. It turns toward the leg's heading by its turn rate times the step length, the shorter way round. If that is enough to reach the heading it takes the heading exactly.
 2. Its speed changes (see [Speed](#speed)).
-3. It moves speed times the step length along the way it now faces.
+3. It moves speed times the step length along the way it now faces, never sideways or backwards.
+
+So it doesn't steer at its aim point: it swings onto the leg's heading and drives, and if the swing carries it off the leg's line it stays off until it gets back on line ([Second thoughts](#second-thoughts)).
 '''
-
-[[topic.rule]]
-id = "moves-forward-only"
-tags = ["code"]
-text = '''It only ever moves the way it faces: never sideways or backwards.'''
-
-[[topic.rule]]
-id = "no-steering-at-aim"
-tags = ["code"]
-text = '''So the unit doesn't steer at its aim point. It swings onto the leg's heading and drives; if the swing has carried it off the leg's line it stays off until the correction below.'''
 
 [[topic.rule]]
 id = "leg-end"
@@ -475,11 +457,6 @@ id = "next-leg-at-lead"
 tags = ["code"]
 text = '''It drives the leg until it is level with the point lead short of the corner, then takes up the next leg at once: the heading becomes the next leg's and the aim point the next point, less that point's own lead. Nothing else changes: it keeps its speed and turns at its rate as it goes. At its top speed that draws an arc of radius `turn_radius` touching both legs.'''
 
-[[topic.rule]]
-id = "lead-recomputed"
-tags = ["code"]
-text = '''The lead is worked out when the unit takes up a leg, and again each time it finishes a turn (takes the heading exactly). It depends only on the route's points and `turn_radius`, so the second gives the same lead unless the route has changed in between, as by a detour.'''
-
 [[topic]]
 title = "Second thoughts"
 
@@ -578,11 +555,12 @@ text = '''The regiment has arrived when its position is within 0.5 of where it w
 
 [[topic]]
 title = "Moves that can't be made"
+intro = '''What happens when a route is planned to somewhere the unit can't get to.'''
 
 [[topic.rule]]
 id = "unreachable-destinations"
 tags = ["code"]
-text = '''What happens when a route is planned to somewhere the unit can't get to. A regiment plans from its leader's position, by what its leader can cross; a unit planning its own way (a lone unit, or a member on a move of its own, such as to its place) plans the same way. A member handed a copy of its regiment's route plans nothing ([Members' routes](#members-routes)), and a destination close by may get a straight leg with no plan ([A destination close by](#a-destination-close-by)).'''
+text = '''A regiment plans from its leader's position, by what its leader can cross; a unit planning its own way (a lone unit, or a member on a move of its own, such as to its place) plans the same way. A member handed a copy of its regiment's route plans nothing ([Members' routes](#members-routes)), and a destination close by may get a straight leg with no plan ([A destination close by](#a-destination-close-by)).'''
 
 [[topic]]
 title = "Where the move is aimed"
@@ -737,11 +715,7 @@ text = '''A truck in no regiment unpacks where it stands at once, without moving
 
 [[topic]]
 title = "Explore orders"
-
-[[topic.rule]]
-id = "explore"
-tags = ["code"]
-text = '''Explore (command `explore`) sends a regiment off on its own to uncover the map around a place the player picks, and keeps it at that until it's given another order.'''
+intro = '''Explore (command `explore`) sends a regiment off on its own to uncover the map around a place the player picks, and keeps it at that until it's given another order.'''
 
 [[topic]]
 title = "Who can explore"
