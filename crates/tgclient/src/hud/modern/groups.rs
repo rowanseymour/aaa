@@ -14,15 +14,20 @@ use crate::control_groups::{GROUPS, GroupButton, Shown, Strip, select_group};
 use crate::keys::Bindings;
 use crate::ui::{self, Blocks, Click, Edge, Font, ImageCache, Ink, Surface, label};
 
-/// A slot's side, and how far in its picture is drawn from the sides
-/// away from the window's edge.
+/// A slot's width, its border's, and how far in its picture is drawn from
+/// the sides away from the window's edge. The slot is only as tall as that
+/// leaves its square picture, which runs off the window's edge as the slot
+/// does.
 const SLOT: f32 = 36.0;
+const BORDER: f32 = 1.0;
 const INSET: f32 = 2.0;
+const PICTURE: f32 = SLOT - 2.0 * (BORDER + INSET);
+const SLOT_HEIGHT: f32 = PICTURE + INSET + BORDER;
 
 /// How tall and wide the strip is, padded as the action palette is but
 /// for its top, where the slots run off the window's edge, for what goes
 /// under and beside it.
-pub const HEIGHT: f32 = SLOT + PAD;
+pub const HEIGHT: f32 = SLOT_HEIGHT + PAD;
 pub const WIDTH: f32 = GROUPS as f32 * SLOT + 2.0 * PAD;
 
 /// The widest the tooltip under the strip is before its words wrap.
@@ -97,12 +102,12 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                             Surface::Slot,
                             Node {
                                 width: px(SLOT),
-                                height: px(SLOT),
-                                // Square and touching, as one row of tiles,
-                                // open to the window's edge.
+                                height: px(SLOT_HEIGHT),
+                                // Touching, as one row of tiles, open to the
+                                // window's edge.
                                 border: UiRect {
                                     top: px(0),
-                                    ..UiRect::all(px(1))
+                                    ..UiRect::all(px(BORDER))
                                 },
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
@@ -119,9 +124,8 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                                 position_type: PositionType::Absolute,
                                 left: px(INSET),
                                 top: px(0),
-                                right: px(INSET),
-                                // Square, as the slot no longer is inside.
-                                aspect_ratio: Some(1.0),
+                                width: px(PICTURE),
+                                height: px(PICTURE),
                                 ..default()
                             },
                             Visibility::Hidden,
