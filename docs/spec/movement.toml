@@ -378,7 +378,7 @@ text = '''The button is in command grid slot 4 (row 1, second column), hotkey V 
 [[topic.rule]]
 id = "orders-to-group"
 tags = ["code"]
-text = '''An order counts as given to the group as one whenever two or more things are selected and the current group's switch is on, except `set_formation`, which always goes to each on its own. Each such order (not queued with Shift) makes a fresh group of what's selected, and each regiment leaves any group it was in for the new one, keeping the old one's facing; an order queued with Shift goes to the group it already has.'''
+text = '''An order counts as given to the group as one whenever two or more things are selected and the current group's switch is on, except `set_formation`, which always goes to each on its own. Each such order (not queued with Shift) makes a fresh group of what's selected, and each regiment leaves any group it was in for the new one; the fresh group starts with a facing as below ([group-facing](#group-facing)). An order queued with Shift goes to the group it already has, which takes it up when it's done with the orders before it (below).'''
 
 [[topic.rule]]
 id = "leaving-group"
@@ -398,7 +398,7 @@ text = '''The group's orders and timing:'''
 [[topic.rule]]
 id = "group-thing-orders"
 tags = ["code"]
-text = '''An order on a thing reaches each of its regiments as the same order on that thing, as it does without Group Behavior (above): a move onto a thing they can't attack still has each regiment head for the thing and stop within its own distance of it, and follow it on its own when it moves. What the group adds is the timing below, so they arrive together rather than each when it gets there, and each again when they follow.'''
+text = '''An order on a thing reaches each of its regiments as the same order on that thing, as it does without Group Behavior (above): a move onto a thing they can't attack still has each regiment stop within its own distance of the thing and follow it when it moves. What the group adds is the timing below, so they arrive together rather than each when it gets there, and each again when they follow, and that each heads for its place round the thing rather than the thing itself ([group-place-aim](#group-place-aim)).'''
 
 [[topic.rule]]
 id = "arrival-timing"
@@ -415,10 +415,37 @@ id = "group-places"
 tags = ["code", "data"]
 text = '''
 Each regiment has a place in the group, an offset from the group's centre in the group's own frame (sideways, and ahead along the way the group faces):
-- When all its regiments are in the same formation, regiment by regiment in group order they take the positions of that formation's `group_formation_ids` (`Game/group_formations.tgi`: AA's `group_aggressive` sets (0, 6), (±13.5, 6), (0, −6), (±13.5, −6));
-- otherwise each keeps where it stands from the group's centre, turned into the group's frame; one not taking part (below) is put at `GroupZoneRangeMin` from the centre in its own direction.
+- When all its regiments are in the same formation, regiment by regiment in group order they take the positions of that formation's `group_formation_ids` (`Game/group_formations.tgi`: AA's `group_aggressive` sets (0, 6), (±13.5, 6), (0, −6), (±13.5, −6)). Regiments beyond the last position (a group larger than the formation) are placed as in the next item.
+- Otherwise each keeps where it stands from the group's centre, turned into the group's frame; one not taking part (below) is put at `GroupZoneRangeMin` from the centre in its own direction.
 - The places are then recentred so their average is the centre.
+- They're worked out when the group is given an order (not when it gives the same order again, [group-resends-order](#group-resends-order)), when it finds itself in a fight, and when its regiments come to share a formation.
 '''
+
+[[topic.rule]]
+id = "group-facing"
+tags = ["code"]
+text = '''
+The way the group faces is a direction on the map, f; a place (x, y) in the group's frame lies x × (f.y, −f.x) + y × f from the centre on the map, so y is ahead and x sideways.
+- A move or guard on a place or a thing sets f when the group takes it up: the order's own facing if it carried one, else the direction from the group's centre to the order's point (the thing's position for an order on a thing). The centre here is the average of its regiments' positions, or, for a group that had finished its last order, the point it was put at then (below), so a queued move faces from the previous order's point to its own.
+- Every other order (an attack, a bombard) leaves f as it was, and the places are worked out with it.
+- A fresh group takes f from the group last made for the same selection group ([selection](selection.toml#control-groups): the saved group, or the player's one stand-in for unsaved selections), if that group is still there; a group is gone once it has no regiments. Otherwise it starts at (0, −1). The regiments' own facings and earlier groups play no part.
+'''
+
+[[topic.rule]]
+id = "group-place-aim"
+tags = ["code"]
+text = '''
+While the group is carrying out an order (not while it's in a fight, below), a regiment heads for its place rather than the order's own point: the order's point (or the thing's position, as it moves) plus its place laid onto the map as the group faces. A place that would fall outside the circle of the group's zone radius round that point is pulled in along the line to the point, to the first tile centre inside. It does so:
+- for any order on a place other than a bombard: a move, a guard;
+- for a move onto a thing it can't attack;
+- for an attack, a guard or a bombard on a thing, and a bombard on a place, only while the regiment stands outside that circle; inside it, it heads for the target itself.
+The group looks at this when it hands out the order and again at each of its once-a-second timing passes; a regiment whose aim changes is sent on afresh, and isn't timed that pass.
+'''
+
+[[topic.rule]]
+id = "group-order-done"
+tags = ["code"]
+text = '''A group's order is done when, at a timing pass, every one of its regiments is at rest or reforming. The group is then put at the order's point (its centre if the order was on a thing that is gone) and, unless the order was a stop or more orders are queued for it, every regiment is sent on a move to its place round that point. Then the group takes up its next queued order, if any, at its next look (once a second). A group whose order is on a thing that's gone, or whose order none of its regiments taking part can carry out, drops it the same way, at its centre.'''
 
 [[topic.rule]]
 id = "group-supply-zone-buffer"
@@ -440,8 +467,8 @@ Which regiments take part:
 - Whether the group is in a fight is decided by the first member taking part, in the group's order, that is engaged or under siege; the rest aren't looked at. It's in a fight if that member is:
   - engaged ([combat](combat.toml#engaged-and-under-siege)) with something other than what it was sent to attack. It counts unless it has an attack target and is engaging that target, or the regiment that target belongs to. Its attack target is the target of its attack order; while besieging a city, a defender of the city or the besieged target; failing those, while engaged, the first attack order in its queue whose target it can attack. So a group whose regiments are fighting what they were sent to attack goes on timing their arrival, while one drawn into fights on the way stops. A member fighting its own target ahead of one drawn into another fight keeps the group out of a fight;
   - or under siege. Only a lone unit in the group can be: a regiment as a whole never is.
-- While the group is in a fight it times nothing: it marks again and looks again at once, and timing resumes once it's out of the fight. Meanwhile it sends its regiments that aren't fighting to guard one that is, and gives its own order again when the fight ends ([When a move fails](#when-a-move-fails)).
-- A computer player switches Group Behavior on in a mode where the group times every moving regiment, marked or not.
+- The group looks for a fight once a second, at each timing pass and also while it has no order. When it finds one it marks again and goes into the fight, which it handles on the next tick and then once a second ([group-resends-order](#group-resends-order)); while in it, it times nothing and doesn't look for a fight again. The fight ends only as that rule says, whatever the regiments are fighting, and the group then goes back to its order and its timing.
+- A computer player gives every order that names two or more of its regiments as a group ([computer players](computer-players.toml#orders-as-person)), and in a mode where the group times every moving regiment, marked or not.
 '''
 
 [[topic]]
@@ -676,8 +703,9 @@ id = "group-resends-order"
 tags = ["code"]
 text = '''
 A group sends its order to all its regiments again, the failed one included, at two moments, and the failed one then plans afresh (failing again if nothing has changed):
-- when a fight the group was in ends. While it's in a fight, once a second, it goes through its regiments in group order. Each one taking part that isn't engaged or under siege itself is given a guard order on a regiment of the group that is (the last such in group order, not the nearest), or a stop order if it won't take that guard ([combat](combat.toml#guard-orders)). When a regiment's turn comes and no other regiment of the group is engaged or under siege, it and the rest are told to stop. The group then gives its own order to all of them again and goes back to timing ([Groups](#groups)). So a failed regiment taking part joins in its group's fights like the others, then gets the group's order again;
-- during a move or guard order, when its regiments come to share a formation they didn't share before (say all of them are switched to the same new one), since that changes their places in the group. It sends nothing again at any other time.
+- when a fight the group was in ends. While it's in a fight, once a second, it goes through its regiments in group order, passing over those not taking part and those engaged or under siege themselves. Each of the rest is given a guard order on a regiment of the group that is engaged or under siege (the last such in group order, not the nearest, and taking part or not), or a stop order if it won't take that guard ([combat](combat.toml#guard-orders)). If no regiment of the group is engaged or under siege, the fight is over: every regiment taking part that isn't is told to stop. Here a regiment fighting what it was sent to attack counts as engaged, unlike in the test that starts a fight ([who-takes-part](#who-takes-part)). So in a group A then B with only A engaged, B guards A; the fight goes on until neither is engaged. When it's over, the group gives its own order to all of them again and goes back to timing ([Groups](#groups)); with no order, it is put at its centre and its regiments sent to their places round it ([group-order-done](#group-order-done)). So a failed regiment taking part joins in its group's fights like the others, then gets the group's order again;
+- during a move or guard order, when its regiments come to share a formation they didn't share before (say all of them are switched to the same new one), since that changes their places in the group. With any other order, or none, the regiments are instead sent on moves to their new places round the group's centre; in a fight, nothing is sent. It sends nothing again at any other time.
+- The order it gives again is the one it's carrying out: its last order not queued with Shift, or the queued one it has since taken up. It's the same order on the same point or thing, each regiment again heading for its place round it ([group-place-aim](#group-place-aim)); the places are kept, turned to the facing worked out afresh. If the order was a move or guard on a thing that's gone, the group drops it instead ([group-order-done](#group-order-done)). Any other order on a thing, an attack on one now dead included, is given again as it was, and each regiment takes it as it would alone ([combat](combat.toml#attack-orders)).
 '''
 
 [[topic]]
@@ -812,7 +840,7 @@ Best: the less the side knows of a place, the better, before anything else: neve
 - `ExploreActorBaseValue` (40) for one around the regiment, `ExploreWaypointBaseValue` (0) for one around the explore point;
 - plus `ExploreDistanceMultiplier` (−1) × its distance from the explore point, so it keeps to the area the player picked;
 - plus `ExploreDotProductMultiplier` (20) × how nearly it lies the same way from the regiment as its last destination did (the cosine of the angle between the two, from −1 to 1), so it tends to keep heading the same way;
-- plus `ExploreFinishAreaBonus` (20) for a never-seen place in a part of the map whose neighbouring parts the side has wholly explored, to finish it off;
+- plus `ExploreFinishAreaBonus` (20) for a never-seen place whose region ([computer players](computer-players.toml#regions), the same regions for every side) has every neighbouring region on its island ([region-neighbours](computer-players.toml#region-neighbours)) wholly explored by the side: every tile of each seen by the side at least once. The place's own region isn't looked at, neighbours on another island are left out, and a region with no neighbours on its island always gets it. It finishes off a pocket of unseen ground;
 - plus a random amount from 0 to `ExploreFuzzyFactor` (20).
 '''
 
