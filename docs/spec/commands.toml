@@ -141,8 +141,8 @@ Pack (`pack`, slot 9) on a building that packs into a truck:
 
 [[topic.rule]]
 id = "open-menu-survives-state"
-tags = ["code", "guess"]
-text = '''A Deploy or Research menu that's open when the building's state takes the command away stays open: its entries are refreshed once a second and keep their own offered, greyed or hidden look, which ignores the building's state. Pressing one does nothing: the order reaches a building without that command and is dropped, with no message, nothing paid and nothing queued. The menu closes only through its Cancel or when nothing is selected.'''
+tags = ["code"]
+text = '''A Deploy or Research menu that's open when the building's state takes the command away stays open: its entries are refreshed once a second and keep their own offered, greyed or hidden look, which ignores the building's state. Pressing an entry is judged by the menu as usual ([deploy menus](#deploy-entry-press)): a press the menu refuses changes nothing, and one it lets through goes back to the building's commands, but the order reaches a building without that command and is dropped, with no message, nothing paid and nothing queued.'''
 
 [[topic.rule]]
 id = "unit-and-regiment-commands"
@@ -255,13 +255,20 @@ text = '''A battleship's list is a regiment (the amphibious regiment, or the Mar
 
 [[topic.rule]]
 id = "deploy-entry-press"
-tags = ["code"]
-text = '''Pressing an entry of a Deploy menu orders the recruit and leaves the menu open, so the same or another entry can be pressed again at once. The grid goes back to the building's commands only through the menu's Cancel or when nothing is selected. This holds for every building's Deploy menu, and whether the order is taken or refused (unaffordable, greyed, at a limit): a refused press changes nothing in the grid. The Research menu behaves the same.'''
+tags = ["code", "game"]
+text = '''
+Pressing an entry of a Deploy menu checks it first, for the player who pressed it:
+- if the entry isn't offered (greyed, or no longer offered since the menu was last refreshed), nothing happens and the menu stays open, with no message;
+- if the side can't afford it, the order isn't given: the player gets the usual "Insufficient funds" message ([recruiting](recruiting.toml#cost-limit-and-time)) and the menu stays open;
+- otherwise the recruit is ordered and the grid goes back to the building's commands, with the building still selected. Ordering another means pressing Deploy again.
+
+This holds for every building's Deploy menu. Limits aren't part of the check: a press that passes it orders the recruit and leaves the menu even when the order is then refused for a limit ([recruiting](recruiting.toml#cost-limit-and-time)). The Research menu works the same way ([research](research.toml#the-research-menu)).
+'''
 
 [[topic.rule]]
 id = "deploy-to-location-entry-press"
-tags = []
-text = '''Pressing an entry of a Deploy to Location menu instead closes the menu and starts aiming the delivery: [deliveries](deliveries.toml#aiming).'''
+tags = ["code"]
+text = '''Pressing an entry of a Deploy to Location menu is checked the same way, and a refused press likewise leaves the menu open. One that passes closes the menu and starts aiming the delivery: [deliveries](deliveries.toml#aiming).'''
 
 [[topic]]
 title = "Build menu"
@@ -310,7 +317,7 @@ text = '''Cancel on a site under construction is `construction_cancel` ("Cancel"
 [[topic.rule]]
 id = "menu-entry-keys"
 tags = ["code", "data"]
-text = '''A recruit's key (`ActorDataSelectCommand <template>` in the hotkey files) works only while its menu is open and the entry's button is showing. A key for an entry that isn't there does nothing. The amphibious regiment's key (`i`) is listed under Battleship. With an Infantry HQ selected it does nothing.'''
+text = '''A recruit's key (`ActorDataSelectCommand <template>` in the hotkey files) works only while its menu is open and the entry's button is showing, and then does exactly what clicking the entry does, checks and the return to the commands included ([deploy menus](#deploy-entry-press)). A key for an entry that isn't there does nothing. The amphibious regiment's key (`i`) is listed under Battleship. With an Infantry HQ selected it does nothing.'''
 
 [[topic]]
 title = "Hotkeys in tooltips"

@@ -98,7 +98,12 @@ text = '''A greyed item's tooltip is only `research_error_missing_requirements` 
 [[topic.rule]]
 id = "research-keys"
 tags = ["code", "data"]
-text = '''A research key (`PropertyDataSelectCommand <property>` in the hotkey files) works only while the item's button is showing in an open research menu.'''
+text = '''A research key (`PropertyDataSelectCommand <property>` in the hotkey files) works only while the item's button is showing in an open research menu, and then does exactly what clicking the item does.'''
+
+[[topic.rule]]
+id = "item-press"
+tags = ["code"]
+text = '''Pressing an item is checked first, like a Deploy menu entry ([commands](commands.toml#deploy-entry-press)): an item that isn't available (greyed, or done or under way since the menu was last refreshed) does nothing and leaves the menu open, with no message; one the side can't afford gets the "Insufficient funds" message below and leaves the menu open. Otherwise the research is ordered and the grid goes back to the building's commands, the building still selected.'''
 
 [[topic]]
 title = "Researching"
@@ -111,7 +116,7 @@ text = '''Ordering research is checked, paid in full at once from the stockpile 
 [[topic.rule]]
 id = "insufficient-funds"
 tags = ["code", "data"]
-text = '''An order the side can't afford is refused with the message "Insufficient funds for %s. Requires %s." (`research_error_affording`: the technology's name, then its cost). An order for an item that isn't available (by its key, say, when the slot is empty) is refused with "Could not research %s" (`research_error_generic`, the technology's name). Both are order-failure messages: `GENERIC_ERROR`, shown only to the player who gave the order, located at the building, and so with that kind's `error` sound (see [messages](messages.toml)). Neither shows in the tooltip. Nothing is taken or queued.'''
+text = '''An order the side can't afford is refused with the message "Insufficient funds for %s. Requires %s." (`research_error_affording`: the technology's name, then its cost). An order that reaches the building for an item that isn't available is refused with "Could not research %s" (`research_error_generic`, the technology's name). Both are order-failure messages: `GENERIC_ERROR`, shown only to the player who gave the order, located at the building, and so with that kind's `error` sound (see [messages](messages.toml)). Neither shows in the tooltip. Nothing is taken or queued.'''
 
 [[topic.rule]]
 id = "prerequisites-at-order"

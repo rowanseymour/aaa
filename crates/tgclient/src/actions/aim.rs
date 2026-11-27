@@ -125,7 +125,7 @@ pub fn aim(
         Res<ControlGroups>,
         Res<AimedFor>,
     ),
-    focus: Res<crate::Focus>,
+    (focus, log): (Res<crate::Focus>, Option<Res<crate::messages::MessageLog>>),
     (looks, menus): (Res<crate::waypoints::Looks>, Res<Looks>),
     sim: Res<Sim>,
     mut orders: ResMut<Orders>,
@@ -181,8 +181,17 @@ pub fn aim(
                 });
                 *page = Page::Orders;
             }
+            // Limits aren't checked until the order is given here.
             Err(e) => {
                 debug!("can't deliver {}: {e:?}", organization.template);
+                let log = log.as_deref();
+                if let Some(text) = super::press::recruit_refused(&sim.0, &menus, log, b, i, e) {
+                    failed.write(Failed {
+                        text,
+                        about: Some(About::Building(b)),
+                        at: None,
+                    });
+                }
                 *page = Page::Orders;
             }
             Ok(()) => *page = Page::Orders,
