@@ -40,6 +40,7 @@ impl World {
             let organization = &self.organizations[r];
             if !matches!(organization.order, Order::Move | Order::Pursue(_))
                 && organization.engaged.is_empty()
+                && !organization.hand_out
                 && !self.survivors(r).any(|u| self.units[u].moving())
             {
                 let before = organization.current_formation();
@@ -396,6 +397,8 @@ impl World {
         }
         let facing = normalised([there[0] - here[0], there[1] - here[1]]);
         let facing = facing.unwrap_or(organization.facing);
+        // It stops at once, not at its next look as for a new order.
+        self.drop_route(r);
         self.send(r, here, facing);
     }
 

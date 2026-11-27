@@ -270,6 +270,10 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         catchup_speed: game.catchup_speed().unwrap_or(defaults.catchup_speed),
         banner_catchup_floor: (game.banner_catchup_floor())
             .unwrap_or(defaults.banner_catchup_floor),
+        group_zone_range_min: (game.group_zone_range_min())
+            .unwrap_or(defaults.group_zone_range_min),
+        move_fail_seconds: (game.move_fail_seconds()).unwrap_or(defaults.move_fail_seconds),
+        formationless_states: game.formationless_states(),
         recruit_search_step: (game.recruit_search_step()).unwrap_or(defaults.recruit_search_step),
         siege_seconds: game.siege_seconds().unwrap_or(defaults.siege_seconds),
         kill_credit_seconds: (game.kill_credit_seconds()).unwrap_or(defaults.kill_credit_seconds),

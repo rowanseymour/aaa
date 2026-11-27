@@ -916,6 +916,18 @@ impl GameData {
         self.svar(|v| v.banner_min_catchup_speed)
     }
 
+    /// The longest a regiment's offset from the middle of several sent
+    /// together is cut to, if the data says.
+    pub fn group_zone_range_min(&self) -> Option<f32> {
+        self.svar(|v| v.group_zone_range_min)
+    }
+
+    /// The seconds after its order before which a regiment doesn't give up
+    /// a move, if the data says.
+    pub fn move_fail_seconds(&self) -> Option<f32> {
+        self.svar(|v| v.move_fail_seconds)
+    }
+
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub fn recruit_search_step(&self) -> Option<f32> {

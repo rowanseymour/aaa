@@ -30,11 +30,17 @@ impl World {
         )
     }
 
+    /// Whether the organization at `r` is doing something the data has
+    /// it keep no formation for, such as building.
+    pub(crate) fn formationless(&self, r: usize) -> bool {
+        (self.rules.formationless_states).contains(&Id::from(self.activity(r)))
+    }
+
     /// What the formation the organization at `r` is in at the moment
     /// gives it: its broken formation's while it has none.
     pub(crate) fn formation_effect(&self, r: usize) -> Option<&CombatEffect> {
         let organization = &self.organizations[r];
-        match organization.broken() {
+        match organization.broken() || self.formationless(r) {
             true => self.rules.broken_effects.get(&organization.template),
             false => {
                 let formation = organization

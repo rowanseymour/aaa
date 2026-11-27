@@ -28,6 +28,9 @@ const WAYS_TRIED: u8 = 3;
 /// How near a leg's end a unit taking it up has to be to skip it.
 const LEG_REACH: f32 = 0.1;
 
+/// The least speed a regiment hands its members that has them move.
+const REGIMENT_SPEED_MIN: f32 = 0.1;
+
 /// How far to the side of its leg a unit gets before making for it again.
 const OFF_LINE: f32 = 1.0;
 
@@ -48,10 +51,6 @@ const DETOUR_CATCHING_UP: f32 = 4.0;
 /// How far at a time a member pulls a point of its route it can't stand
 /// on back towards its leader's.
 const PULL_BACK: f32 = 0.5;
-
-/// How many times a member finds no way to a point of its copy of its
-/// leader's route before it gives the point up.
-const POINT_TRIES: u8 = 3;
 
 impl Trailer {
     pub(crate) fn new(trailer: &tgmap::Trailer, position: [f32; 2], facing: [f32; 2]) -> Trailer {
@@ -136,6 +135,22 @@ impl Unit {
         left
     }
 
+    /// How far it has left to go along its leader's route: to the leader's
+    /// point its next waypoint was made from, and on along the leader's
+    /// points from there; on a way of its own, along its path.
+    fn left_along_leaders(&self) -> f32 {
+        if self.sources.is_empty() {
+            return self.route_left();
+        }
+        let mut at = self.position;
+        let mut left = 0.0;
+        for &p in self.sources.iter().rev() {
+            left += crate::distance(at, p);
+            at = p;
+        }
+        left
+    }
+
     /// Sets it off along `path`, next waypoint last, to stop at its end.
     pub(crate) fn take(&mut self, path: Vec<[f32; 2]>, exact: bool) {
         // Being sent somewhere is a new order, which bombarding gives way to.
@@ -150,7 +165,7 @@ impl Unit {
         self.pace = 1.0;
         self.detour = false;
         self.sources.clear();
-        self.point_tries = 0;
+        self.returning = false;
     }
 
     /// Passes its next waypoint.
@@ -159,7 +174,6 @@ impl Unit {
             self.from = next;
         }
         self.sources.truncate(self.path.len());
-        self.point_tries = 0;
     }
 
     /// Stops it where it is, with nowhere left to go.
@@ -170,7 +184,6 @@ impl Unit {
         self.pace = 1.0;
         self.detour = false;
         self.sources.clear();
-        self.point_tries = 0;
     }
 
     /// Stands it at `at` facing `facing` as if just made: still, with
@@ -314,9 +327,6 @@ impl Unit {
             true => LOOK_SNAPPED,
             false => LOOK,
         };
-        if self.turn_radius <= 0.0 {
-            return;
-        }
         if self.path.len() == 1 && !leg.snapped && self.too_tight(next) {
             self.facing = leg.heading;
             self.leg = Some(Leg {
@@ -339,7 +349,10 @@ impl Unit {
         }
         // At 45°, or as much less as turning in and back out again leaves
         // room for.
-        let room = 1.0 - aside.abs() / (2.0 * self.turn_radius);
+        let room = match self.turn_radius > 0.0 {
+            true => 1.0 - aside.abs() / (2.0 * self.turn_radius),
+            false => -1.0,
+        };
         let angle = libm::acosf(room.max(-1.0)).min(FRAC_PI_4);
         let along = aside.abs() / libm::tanf(angle);
         self.from = self.position;
@@ -388,19 +401,39 @@ impl World {
     /// the data names it: engaged, or targeted while another engages it
     /// and it doesn't engage back.
     pub fn fight_state(&self, r: usize) -> Option<&'static str> {
-        match self.organizations[r].engaged.is_empty() {
+        let organization = &self.organizations[r];
+        match organization.engaged.is_empty() {
             false => Some(tgmap::ENGAGED),
-            true => self.engagers(r).next().map(|_| tgmap::TARGETED),
+            true => organization.targeted.then_some(tgmap::TARGETED),
         }
     }
 
-    /// What the organization at `r` adds to each member's top speed past
-    /// the member's own properties: its formation's, and its state's in a
-    /// fight.
-    fn handed_down_speed(&self, r: usize) -> f32 {
-        let formation = self.formation_effect(r).map_or(0.0, |e| e.speed);
+    /// Has each organization check whether it's targeted, once a second
+    /// and whenever what it's doing changes.
+    pub(crate) fn keep_targeted(&mut self) {
+        for r in 0..self.organizations.len() {
+            let doing = self.activity(r);
+            let organization = &self.organizations[r];
+            let beat = (self.ticks + r as u64).is_multiple_of(crate::SECOND);
+            if !beat && organization.checked_as == Some(doing) {
+                continue;
+            }
+            let targeted = organization.engaged.is_empty() && self.engagers(r).next().is_some();
+            let organization = &mut self.organizations[r];
+            (organization.targeted, organization.checked_as) = (targeted, Some(doing));
+        }
+    }
+
+    /// What the organization at `r` adds to the top speed of its member
+    /// at `u` past the member's own properties: its formation's, and its
+    /// state's in a fight, each if the member is of the kind it needs.
+    fn handed_down_speed(&self, r: usize, u: usize) -> f32 {
+        let formation = self.formation_effect(r);
         let state = (self.fight_state(r)).and_then(|p| self.rules.combat_effects.get(&Id::from(p)));
-        formation + state.map_or(0.0, |e| e.speed)
+        (formation.into_iter().chain(state))
+            .filter(|e| self.qualifies(&self.units[u].template, &e.requires))
+            .map(|e| e.speed)
+            .sum()
     }
 
     /// The unit at `u`'s top speed: its own, times what its properties and
@@ -425,15 +458,14 @@ impl World {
     /// How fast the unit at `u` can go now: its top speed, with what its
     /// organization hands down.
     pub fn unit_speed(&self, u: usize) -> f32 {
-        self.top_speed(u, self.handed_down_speed(self.units[u].organization))
+        self.top_speed(u, self.handed_down_speed(self.units[u].organization, u))
     }
 
     /// How fast the organization at `r` moves left to itself: as fast as
     /// its slowest member present can, whatever its group would have.
     pub fn unhurried_speed(&self, r: usize) -> f32 {
-        let handed = self.handed_down_speed(r);
         let present = (self.organizations[r].units.iter()).filter(|&&u| self.units[u].alive());
-        let slowest = (present.map(|&u| self.top_speed(u, handed))).fold(f32::INFINITY, f32::min);
+        let slowest = (present.map(|&u| self.unit_speed(u))).fold(f32::INFINITY, f32::min);
         match slowest.is_finite() {
             true => slowest,
             false => self.organizations[r].speed,
@@ -478,6 +510,7 @@ impl World {
             return;
         }
         let r = &mut self.organizations[organization];
+        let on_its_way = r.route_end.is_some();
         r.settled = None;
         if far {
             r.travelling = true;
@@ -486,7 +519,21 @@ impl World {
         r.position = target;
         r.facing = facing;
         r.turn_to = ordered.then_some(facing);
-        self.take_places(organization);
+        (r.tries, r.sent, r.given_speed) = (0, self.ticks, f32::INFINITY);
+        // One already on its way hands out the new route at its next look.
+        match on_its_way && far {
+            true => r.hand_out = true,
+            false => self.take_places(organization),
+        }
+    }
+
+    /// Leaves the organization at `r` no longer on its way along a route.
+    pub(crate) fn drop_route(&mut self, r: usize) {
+        let organization = &mut self.organizations[r];
+        organization.route_end = None;
+        organization.route.clear();
+        organization.heading = None;
+        organization.hand_out = false;
     }
 
     /// Has the organization at `organization`, whose move found no route,
@@ -494,10 +541,10 @@ impl World {
     /// to the `facing` the move was given, if any.
     fn stay(&mut self, organization: usize, facing: Option<[f32; 2]>) {
         let here = self.standing_point(organization);
+        self.drop_route(organization);
         let r = &mut self.organizations[organization];
         r.position = here;
         r.travelling = false;
-        r.route_end = None;
         r.turn_to = None;
         if let Some(facing) = facing {
             r.facing = facing;
@@ -517,7 +564,10 @@ impl World {
             r.formation = formation;
             // An engaged organization keeps to its combat formation for now.
             if r.current_formation() == formation {
-                self.take_places(organization);
+                match r.route_end.is_some() {
+                    true => r.hand_out = true,
+                    false => self.take_places(organization),
+                }
             }
         }
         Ok(())
@@ -525,16 +575,18 @@ impl World {
 
     /// Sends each of an organization's members to its place in the
     /// formation. One setting off along a route hands its leader the way
-    /// to its place, facing along the route's last leg, and each other
-    /// member a copy of it fitted to its place.
+    /// to its place, facing along the route's last leg once there, and
+    /// each other member a copy of it fitted to its place; on the way it
+    /// faces along the leg its leader is on.
     pub(crate) fn take_places(&mut self, organization: usize) {
+        self.organizations[organization].hand_out = false;
         let r = &self.organizations[organization];
         // A move to unpack has to end right there.
         let exact = r.unpack_at.is_some();
         let leader = (self.pacer(organization))
             .map(|p| r.units[p])
             .filter(|_| r.travelling);
-        let mut places = self.formation_places(organization);
+        let mut places = self.destination_places(organization);
         let lead = leader.and_then(|l| places.iter().find(|(u, _)| *u == l).copied());
         let route = lead
             .and_then(|(l, place)| self.plan(l, place, exact))
@@ -546,10 +598,21 @@ impl World {
             && let Some(facing) = normalised([end[0] - before[0], end[1] - before[1]])
         {
             self.organizations[organization].facing = facing;
-            places = self.formation_places(organization);
+            places = self.destination_places(organization);
         }
-        self.organizations[organization].route_end = route.first().copied();
-        let facing = self.organizations[organization].facing;
+        let first_leg = (lead.zip(route.last())).and_then(|((l, _), &next)| {
+            let at = self.units[l].position;
+            normalised([next[0] - at[0], next[1] - at[1]])
+        });
+        let r = &mut self.organizations[organization];
+        r.route_end = route.first().copied();
+        r.route.clone_from(&route);
+        r.heading = first_leg.or(route.first().map(|_| r.facing));
+        // Each plan's a try, but for one moved onto something.
+        if !route.is_empty() && r.follow.is_none() {
+            r.tries = r.tries.saturating_add(1);
+        }
+        let facing = r.facing;
         if let Some((l, place)) = lead {
             match route.is_empty() {
                 false => {
@@ -576,14 +639,16 @@ impl World {
     /// organization at `r` to the way it was sent to face, if any, and
     /// sends each member to its place from where it stands.
     fn end_route(&mut self, r: usize) {
+        self.drop_route(r);
         let organization = &mut self.organizations[r];
-        organization.route_end = None;
         organization.ordered_speed = None;
+        organization.tries = 0;
         if let Some(facing) = organization.turn_to.take() {
             organization.facing = facing;
         }
         let facing = organization.facing;
         let exact = organization.unpack_at.is_some();
+        let alone = self.lone(r);
         for (u, place) in self.formation_places(r) {
             let unit = &self.units[u];
             if !unit.alive() || unit.closing.is_some() {
@@ -593,7 +658,9 @@ impl World {
                 true => {
                     let unit = &mut self.units[u];
                     unit.halt();
-                    unit.facing = facing;
+                    if !alone {
+                        unit.facing = facing;
+                    }
                     unit.end_facing = facing;
                 }
                 false => self.take_place(u, place, facing, exact),
@@ -601,51 +668,65 @@ impl World {
         }
     }
 
-    /// Has each organization on its way along a route look, about once a
-    /// second: once its leader is there it arrives; until then, a member
-    /// that's joined it, or come back inside its control zone, is handed a
-    /// copy of what's left of the route. A leader stopped short, as by a
-    /// fight, leaves it no longer on its way.
-    pub(crate) fn keep_routes(&mut self) {
+    /// Has each organization on its way along a route follow its leader:
+    /// as the leader passes a point of the route it drops it from its own
+    /// copy and turns at once to face along the next leg.
+    fn follow_leaders(&mut self) {
         for r in 0..self.organizations.len() {
-            let Some(end) = self.organizations[r].route_end else {
+            if self.organizations[r].route_end.is_none() {
+                continue;
+            }
+            let Some(l) = self.pacer(r).map(|p| self.organizations[r].units[p]) else {
                 continue;
             };
+            let left = self.units[l].path.len();
+            let organization = &mut self.organizations[r];
+            while organization.route.len() > left {
+                let passed = organization.route.pop();
+                if let (Some(a), Some(&b)) = (passed, organization.route.last())
+                    && let Some(heading) = normalised([b[0] - a[0], b[1] - a[1]])
+                {
+                    organization.heading = Some(heading);
+                }
+            }
+        }
+    }
+
+    /// Has each organization on its way along a route look, about once a
+    /// second: one given an order on the way hands out its new route;
+    /// once its own position is where it was sent it arrives; with its
+    /// leader stopped short it sends the leader again, giving up the move
+    /// once it's tried enough for long enough. Until then, a member that's
+    /// joined it, or come back inside its control zone, is handed a copy
+    /// of what's left of the route, and one cut off from it makes its way
+    /// back. A leader stopped short to fight leaves it no longer on its
+    /// way.
+    pub(crate) fn keep_routes(&mut self) {
+        self.follow_leaders();
+        for r in 0..self.organizations.len() {
+            if self.organizations[r].route_end.is_none() {
+                continue;
+            }
             if !(self.ticks + r as u64).is_multiple_of(u64::from(LOOK)) {
+                continue;
+            }
+            if self.organizations[r].hand_out {
+                self.take_places(r);
                 continue;
             }
             let Some(l) = self.pacer(r).map(|p| self.organizations[r].units[p]) else {
                 continue;
             };
             if self.units[l].goal.is_none() {
-                // One taking over from a leader lost on the way ends at
-                // its own place.
-                let at = self.units[l].position;
-                let own = self.formation_places(r).into_iter().find(|&(u, _)| u == l);
-                match within(at, end, ARRIVAL_REACH)
-                    || own.is_some_and(|(_, p)| within(at, p, ARRIVAL_REACH))
-                {
-                    true => self.end_route(r),
-                    false => {
-                        let organization = &mut self.organizations[r];
-                        organization.route_end = None;
-                        // Stopped short of the end for good, not to fight.
-                        if organization.resume.is_none() {
-                            organization.ordered_speed = None;
-                        }
-                    }
-                }
-                continue;
-            }
-            if self.organizations[r].broken() {
+                self.leader_stopped(r, l);
                 continue;
             }
             let organization = &self.organizations[r];
             let reach = organization.control(&self.rules.guard_rules);
             let zone = self.pathing.zone(self.units[l].position, reach);
             let exact = organization.unpack_at.is_some();
-            let mut route: Option<Vec<[f32; 2]>> = None;
-            for (u, place) in self.formation_places(r) {
+            let route = organization.route.clone();
+            for (u, place) in self.destination_places(r) {
                 let unit = &self.units[u];
                 if u == l || !unit.alive() || unit.closing.is_some() {
                     continue;
@@ -655,16 +736,100 @@ impl World {
                     None => true,
                     Some(was) => inside && !was,
                 };
-                if due {
-                    let route = route.get_or_insert_with(|| self.units[l].path.clone());
-                    if !route.is_empty() {
-                        let route = route.clone();
-                        self.take_copy(r, l, u, &route, (place, exact));
-                    }
+                if due && !route.is_empty() {
+                    self.take_copy(r, l, u, &route, (place, exact));
                 }
-                self.units[u].with = Some(inside);
+                let unit = &mut self.units[u];
+                unit.with = Some(inside);
+                // One with no zone cuts none off.
+                if !inside && reach > 0.0 {
+                    unit.returning = true;
+                }
             }
         }
+    }
+
+    /// Has the organization at `r`, whose leader at `l` has stopped, arrive
+    /// if it's where it was sent, or else send the leader again, until
+    /// it's tried enough times for long enough.
+    fn leader_stopped(&mut self, r: usize, l: usize) {
+        let organization = &self.organizations[r];
+        if within(
+            self.regiment_position(r),
+            organization.position,
+            ARRIVAL_REACH,
+        ) {
+            self.end_route(r);
+            return;
+        }
+        if organization.resume.is_some() || !organization.engaged.is_empty() {
+            // Stopped short to fight, which takes the move up again after.
+            self.organizations[r].route_end = None;
+            return;
+        }
+        let given = (self.ticks - organization.sent) as f32 * TICK;
+        let tried = organization.tries >= WAYS_TRIED && given >= self.rules.move_fail_seconds;
+        let exact = organization.unpack_at.is_some();
+        let own = self
+            .destination_places(r)
+            .into_iter()
+            .find(|&(u, _)| u == l);
+        let route = match tried {
+            true => None,
+            false => own.and_then(|(_, place)| self.plan(l, place, exact)),
+        };
+        let Some(route) = route.filter(|route| !route.is_empty()) else {
+            let turn_to = self.organizations[r].turn_to;
+            self.organizations[r].ordered_speed = None;
+            self.stay(r, turn_to);
+            return;
+        };
+        let facing = self.organizations[r].facing;
+        let organization = &mut self.organizations[r];
+        organization.tries = organization.tries.saturating_add(1);
+        organization.route_end = route.first().copied();
+        organization.route.clone_from(&route);
+        let unit = &mut self.units[l];
+        unit.take(route, exact);
+        unit.end_facing = facing;
+    }
+
+    /// Where the organization at `r` is: on its way, where its own
+    /// position, trailing its leader, has its formation's middle; else
+    /// where it stands or was sent.
+    pub fn regiment_position(&self, r: usize) -> [f32; 2] {
+        let organization = &self.organizations[r];
+        if organization.route_end.is_none() {
+            return organization.position;
+        }
+        let at = organization.banner.at;
+        let lead = self.pacer(r).filter(|_| !self.unorganized(r));
+        let offset = lead.and_then(|p| self.offset(r, p)).unwrap_or([0.0, 0.0]);
+        let [x, y] = tgmap::from_local([0.0, 0.0], self.regiment_facing(r), offset);
+        [at[0] - x, at[1] - y]
+    }
+
+    /// The longest an organization's offset from the middle of several
+    /// sent to a place together is cut to.
+    pub fn group_zone_range_min(&self) -> f32 {
+        self.rules.group_zone_range_min
+    }
+
+    /// The way the organization at `r` faces: on its way, along the leg
+    /// its leader is on.
+    pub fn regiment_facing(&self, r: usize) -> [f32; 2] {
+        let organization = &self.organizations[r];
+        organization.heading.unwrap_or(organization.facing)
+    }
+
+    /// The place at `p` in the formation of the organization at `r`, from
+    /// its middle with 0,1 straight ahead.
+    fn offset(&self, r: usize, p: usize) -> Option<[f32; 2]> {
+        let organization = &self.organizations[r];
+        let formation = organization
+            .formations
+            .get(organization.current_formation())?;
+        formation.offsets.get(p).copied()
     }
 
     /// Sets the member at `u` of the organization at `r` off along a copy
@@ -674,8 +839,10 @@ impl World {
     /// member's place is from the leader's, laid along the point's own
     /// heading, and all but the last slid to meet the next leg's line, so
     /// its legs run alongside the leader's; without one, the route is
-    /// moved bodily by where the member stands from the leader. A point
-    /// it can't drive to straight is pulled back towards the leader's.
+    /// moved bodily by where the member stands from the leader, and one
+    /// away from the regiment is sent on its own to the route's first
+    /// point, moved by where it last stood from the leader. A point it
+    /// can't drive to straight is pulled back towards the leader's.
     fn take_copy(
         &mut self,
         r: usize,
@@ -694,11 +861,27 @@ impl World {
             headings.push(normalised([p[0] - from[0], p[1] - from[1]]).unwrap_or(last));
             from = p;
         }
-        let broken = organization.broken_places.len() == organization.units.len()
-            && (organization.routing() || organization.chasing());
         let unit = &self.units[u];
-        let mut moved: Vec<[f32; 2]> = match broken {
+        let mut moved: Vec<[f32; 2]> = match self.unorganized(r) {
             true => {
+                let stood = |m: usize| {
+                    let p = organization.units.iter().position(|&x| x == m);
+                    p.and_then(|p| organization.broken_places.get(p)).copied()
+                };
+                let reach = organization.control(&self.rules.guard_rules);
+                let away = !self
+                    .pathing
+                    .zone(leader.position, reach)
+                    .holds(unit.position);
+                if let (true, Some(&first), Some(a), Some(b)) =
+                    (away, points.first(), stood(u), stood(l))
+                {
+                    let to = [first[0] + a[0] - b[0], first[1] + a[1] - b[1]];
+                    let (facing, exact) = (self.regiment_facing(r), exact && points.len() == 1);
+                    self.take_place(u, to, facing, exact);
+                    self.units[u].with = Some(false);
+                    return;
+                }
                 let [dx, dy] = [
                     unit.position[0] - leader.position[0],
                     unit.position[1] - leader.position[1],
@@ -755,9 +938,8 @@ impl World {
     /// Has the member at `u`, on a copy of its leader's route, look at the
     /// way to its next point: one it can't drive to straight it pulls
     /// back towards the leader's point it was made from, and goes to the
-    /// first spot back that it can. With none, that's a try at it, and it
-    /// stands until it next looks; after [`POINT_TRIES`] the point counts
-    /// as passed, or for its last, unless it's there, its move fails.
+    /// first spot back that it can. With none, the point counts as passed
+    /// at once, or for its last, unless it's there, its move fails.
     fn check_point(&mut self, u: usize) {
         let unit = &self.units[u];
         let (Some(&next), Some(&source)) = (unit.path.last(), unit.sources.last()) else {
@@ -786,16 +968,9 @@ impl World {
             (unit.from, unit.leg) = (at, None);
             return;
         }
-        unit.point_tries += 1;
-        if unit.point_tries < POINT_TRIES {
-            unit.pace = 0.0;
-            return;
-        }
         match unit.path.len() == 1 && !within(at, next, ARRIVAL_REACH) {
-            true => {
-                unit.halt();
-                unit.facing = unit.end_facing;
-            }
+            // Failing, it keeps its facing.
+            true => unit.halt(),
             false => {
                 unit.pass();
                 (unit.from, unit.leg) = (at, None);
@@ -833,13 +1008,39 @@ impl World {
             .find(|&p| path::clear(&self.pathing, domain, from, p))
     }
 
-    /// Where each of an organization's members has its place, by unit.
+    /// Whether the organization at `r` is without an organized formation,
+    /// its members keeping where they stood from the leader as it broke.
+    pub(crate) fn unorganized(&self, r: usize) -> bool {
+        let r = &self.organizations[r];
+        (r.routing() || r.chasing()) && r.broken_places.len() == r.units.len()
+    }
+
+    /// Where each of an organization's members has its place, by unit: set
+    /// out from where it is and turned the way it faces, which on its way
+    /// is where its position trailing its leader is.
     pub(crate) fn formation_places(&self, organization: usize) -> Vec<(usize, [f32; 2])> {
+        let at = self.regiment_position(organization);
+        self.places_at(organization, at, self.regiment_facing(organization))
+    }
+
+    /// Where each of an organization's members has its place once it's
+    /// where it's sent, facing the way it will there.
+    pub(crate) fn destination_places(&self, organization: usize) -> Vec<(usize, [f32; 2])> {
         let r = &self.organizations[organization];
-        let facing = r.facing;
-        let [x, y] = r.position;
-        let broken = (r.routing() || r.chasing()) && r.broken_places.len() == r.units.len();
-        match broken {
+        self.places_at(organization, r.position, r.facing)
+    }
+
+    /// Where each of an organization's members has its place with the
+    /// organization at `at` facing `facing`.
+    fn places_at(
+        &self,
+        organization: usize,
+        at: [f32; 2],
+        facing: [f32; 2],
+    ) -> Vec<(usize, [f32; 2])> {
+        let r = &self.organizations[organization];
+        let [x, y] = at;
+        match self.unorganized(organization) {
             // Without a formation each keeps where it stood from the
             // leader, turning with nothing.
             true => (r.units.iter())
@@ -848,7 +1049,7 @@ impl World {
                 .collect(),
             false => (r.units.iter())
                 .zip(&r.formations[r.current_formation()].offsets)
-                .map(|(&u, &offset)| (u, tgmap::from_local(r.position, facing, offset)))
+                .map(|(&u, &offset)| (u, tgmap::from_local(at, facing, offset)))
                 .collect(),
         }
     }
@@ -1036,9 +1237,7 @@ impl World {
             return (regiment + (most - regiment).max(0.0) * share) / regiment;
         }
         let along = leader.leg.map_or(leader.facing, |l| l.heading);
-        let broken = organization.broken_places.len() == organization.units.len()
-            && (organization.routing() || organization.chasing());
-        let local = match broken {
+        let local = match self.unorganized(r) {
             // Without a formation each keeps where it stood from the leader.
             true => {
                 let ([px, py], [lx, ly]) = (
@@ -1074,9 +1273,10 @@ impl World {
                 d
             }
             false => {
-                let d = unit.route_left() - leader.route_left();
+                // Both measured along the leader's route.
+                let d = unit.left_along_leaders() - leader.route_left();
                 let behind = left as f32 - leads as f32;
-                match d.signum() == behind.signum() {
+                match d == 0.0 || d.signum() == behind.signum() {
                     true => d,
                     false => behind / 2.0,
                 }
@@ -1090,29 +1290,61 @@ impl World {
     }
 
     /// The place in the organization at `r` of the member the rest keep
-    /// their places from: its leader, or while it has none present, the
-    /// first of its members that is.
+    /// their places from: its leader whenever that's present, else the one
+    /// that took over, else the one that takes over now.
     pub(crate) fn pacer(&self, r: usize) -> Option<usize> {
         let organization = &self.organizations[r];
         let present = |&p: &usize| self.units[organization.units[p]].alive();
         (organization.leader.filter(present))
+            .or(organization.pacer.filter(present))
+            .or_else(|| self.next_pacer(r))
+    }
+
+    /// Who takes over leading the organization at `r` from a leader gone:
+    /// the first of its members, in its layout's order, that's with it,
+    /// and failing that the first present at all.
+    fn next_pacer(&self, r: usize) -> Option<usize> {
+        let organization = &self.organizations[r];
+        let present = |&p: &usize| self.units[organization.units[p]].alive();
+        let with = |p: &usize| present(p) && self.units[organization.units[*p]].with != Some(false);
+        (0..organization.units.len())
+            .find(with)
             .or_else(|| (0..organization.units.len()).find(present))
     }
 
-    /// Has each regiment's member on its way to its place look, on its
-    /// beat, at how far out of place it is while its leader drives, and
-    /// keep the pace that brings it back. With the leader standing, or
-    /// going after a target of its own, it goes at the regiment's speed:
-    /// its place from the leader is then no guide to the place it's
-    /// making for.
-    fn keep_places(&mut self, tops: &[f32], handed: &[f32]) {
+    /// Has each organization keep who leads it: the member in its leader's
+    /// place whenever there is one, else whoever took over from it, until
+    /// that one goes too.
+    pub(crate) fn keep_pacers(&mut self) {
+        for r in 0..self.organizations.len() {
+            let pacer = self.pacer(r);
+            self.organizations[r].pacer = pacer;
+        }
+    }
+
+    /// Has each regiment's member on its way to its place along a copy of
+    /// its leader's route set its pace as it takes up a leg and on its
+    /// beat: the pace that brings it back to its place. One well ahead of
+    /// its place waits for it while the leader drives, and with the leader
+    /// stopped its move ends there.
+    fn keep_places(&mut self, tops: &[f32]) {
         for u in 0..self.units.len() {
             let unit = &self.units[u];
             if !unit.alive() || unit.goal.is_none() || unit.closing.is_some() {
                 self.units[u].pace = 1.0;
                 continue;
             }
-            if !(self.ticks + u as u64).is_multiple_of(u64::from(LOOK)) {
+            let fresh = unit.leg.is_none();
+            if fresh {
+                self.units[u].take_leg();
+            }
+            let unit = &self.units[u];
+            let beat = (self.ticks + u as u64).is_multiple_of(u64::from(LOOK));
+            if !(beat || fresh && unit.leg.is_some()) {
+                continue;
+            }
+            if unit.sources.is_empty() {
+                self.units[u].pace = 1.0;
                 continue;
             }
             let r = unit.organization;
@@ -1126,51 +1358,86 @@ impl World {
                 let leader = &self.units[organization.units[lp]];
                 leader.moving() && leader.closing.is_none()
             });
-            let pace = match driving {
-                true => self.place_pace(r, u, tops[r], self.top_speed(u, handed[r])),
-                false => 1.0,
-            };
-            self.units[u].pace = pace;
-            self.check_point(u);
+            let pace = self.place_pace(r, u, tops[r], self.unit_speed(u));
+            let facing = self.regiment_facing(r);
+            let unit = &mut self.units[u];
+            match (pace > 0.0, driving) {
+                (true, _) | (false, true) => unit.pace = pace,
+                (false, false) => {
+                    unit.halt();
+                    unit.facing = facing;
+                    continue;
+                }
+            }
+            if beat {
+                self.check_point(u);
+            }
+        }
+    }
+
+    /// The speed the organization at `r` hands its members: its own, none
+    /// while it waits for the rest of its group or below
+    /// [`REGIMENT_SPEED_MIN`], and for a unit on its own, no more than it
+    /// was last given, a rise in its top speed waiting for its next move.
+    fn handed_speed(&mut self, r: usize) -> f32 {
+        let mut speed = match self.waiting_for_group(r) {
+            true => 0.0,
+            false => self.regiment_speed(r),
+        };
+        if self.lone(r) {
+            let organization = &mut self.organizations[r];
+            speed = speed.min(organization.given_speed);
+            organization.given_speed = speed;
+        }
+        match speed < REGIMENT_SPEED_MIN {
+            true => 0.0,
+            false => speed,
         }
     }
 
     /// Moves every unit on along its path. One that's run out of path
     /// short of where it was to stop finds another way from where it is,
-    /// until it's tried enough; once done it faces as it was told to.
-    /// Regiments' members keep their places on the way.
+    /// until it's tried enough. One that's arrived faces its regiment's
+    /// way, or as it came for a unit on its own; one that's given up keeps
+    /// its facing. Regiments' members keep their places on the way, and
+    /// one making its way back to its regiment goes at its catch-up speed.
     pub(crate) fn travel(&mut self) {
         let waiting: Vec<bool> = (0..self.organizations.len())
             .map(|r| self.waiting_for_group(r))
             .collect();
         let tops: Vec<f32> = (0..self.organizations.len())
-            .map(|r| self.regiment_speed(r))
+            .map(|r| self.handed_speed(r))
             .collect();
-        let handed: Vec<f32> = (0..self.organizations.len())
-            .map(|r| self.handed_down_speed(r))
-            .collect();
-        self.keep_places(&tops, &handed);
+        self.keep_places(&tops);
         for u in 0..self.units.len() {
             let limit = self.speed_limit(u).unwrap_or(f32::INFINITY);
-            let own = self.top_speed(u, handed[self.units[u].organization]);
+            let r = self.units[u].organization;
+            let own = self.unit_speed(u);
+            let facing = self.regiment_facing(r);
+            let alone = self.lone(r);
             let unit = &mut self.units[u];
             unit.previous = unit.position;
             if unit.in_air() {
                 continue;
             }
             // One waiting for the rest of its group stands, not turning.
-            if waiting[unit.organization] {
+            if waiting[r] {
                 unit.speed = 0.0;
                 continue;
             }
-            unit.drive(tops[unit.organization].min(limit), own);
+            let top = match unit.returning {
+                true => self.rules.catchup_speed * own,
+                false => tops[r],
+            };
+            unit.drive(top.min(limit), own);
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {
                     true => EXACT_REACH,
                     false => ARRIVAL_REACH,
                 };
                 let (exact, ways) = (unit.exact, unit.ways);
-                let again = match within(unit.position, goal, reach) || ways >= WAYS_TRIED {
+                let there = within(unit.position, goal, reach);
+                let again = match there || ways >= WAYS_TRIED {
                     true => Vec::new(),
                     false => self.plan(u, goal, exact).unwrap_or_default(),
                 };
@@ -1178,7 +1445,9 @@ impl World {
                 match again.is_empty() {
                     true => {
                         unit.goal = None;
-                        unit.facing = unit.end_facing;
+                        if there && !alone {
+                            unit.facing = facing;
+                        }
                     }
                     false => {
                         // Trying another way is the same move.
@@ -1202,7 +1471,11 @@ impl World {
     pub(crate) fn keep_banners(&mut self) {
         for r in 0..self.organizations.len() {
             if (self.ticks + r as u64).is_multiple_of(crate::SECOND) {
-                self.organizations[r].banner.aim = self.leader_position(r);
+                let leader = self
+                    .pacer(r)
+                    .map(|p| self.units[self.organizations[r].units[p]].position);
+                self.organizations[r].banner.aim =
+                    leader.unwrap_or_else(|| self.leader_position(r));
             }
             let catchup = self.rules.catchup_speed * self.regiment_speed(r);
             let pace = catchup.max(self.rules.banner_catchup_floor);
@@ -1237,7 +1510,7 @@ mod tests {
 
     use tgmap::{Domain, Obstacle, Pathing, Shape, Tile};
 
-    use crate::{ARRIVAL_REACH, Command, Sides, Unit, World, distance, path, within};
+    use crate::{ARRIVAL_REACH, Command, Sides, Unit, World, distance, normalised, path, within};
 
     #[test]
     fn units_stood_somewhere_afresh_keep_nothing_of_what_they_were_doing() {
@@ -1251,6 +1524,7 @@ mod tests {
         )
         .unwrap();
         run(&mut w, 1.0);
+        w.organizations[0].route_end = None;
         let u = &mut w.units[0];
         u.target = Some(crate::Target::Unit(1));
         u.shot = Some((3, 0));
@@ -1353,6 +1627,7 @@ mod tests {
         w.organizations[1]
             .engaged
             .push(crate::Piece::Organization(0));
+        w.keep_targeted();
         assert!((w.regiment_speed(0) - 2.3).abs() < 1e-5);
         w.organizations[0]
             .engaged
@@ -1434,9 +1709,10 @@ mod tests {
         assert!(near(u.position, [10.0 + 0.2 * sin, 10.0 + 0.2 * cos]));
         run(&mut w, 2.0);
         assert!(w.units[0].position[1] > 10.5, "it swings wide");
-        run(&mut w, 20.0);
+        while w.units[0].moving() {
+            w.tick();
+        }
         let u = &w.units[0];
-        assert!(!u.moving());
         // Left to the side of where it was going, but near enough.
         assert!(!near(u.position, [20.0, 10.0]));
         assert!(
@@ -1590,9 +1866,9 @@ mod tests {
 
     #[test]
     fn a_member_well_ahead_of_its_place_waits_for_it() {
-        let mut w = moved_with_the_right_hand_man_at([11.0, 18.0]);
-        // Once it's looked, its place, beside the leader, is well behind
-        // it, so it stands.
+        let mut w = moved_with_the_right_hand_man_at([11.0, 22.0]);
+        // From the moment it takes up its leg its place, beside the
+        // leader, is well behind it, so it stands.
         run(&mut w, 1.5);
         let stood = w.units[1].position;
         run(&mut w, 1.0);
@@ -1965,5 +2241,427 @@ mod tests {
             "{:?}",
             w.units[1].facing
         );
+    }
+    fn move_to(w: &mut World, to: [f32; 2]) {
+        w.apply(
+            7,
+            Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_regiment_faces_along_the_leg_its_leader_is_on() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        for x in 0..15 {
+            pathing.set_blocked(Tile::new(x, 8));
+        }
+        let mut w = world(pathing);
+        move_to(&mut w, [10.0, 30.0]);
+        let r = &w.organizations[0];
+        let leader = &w.units[0];
+        let next = *leader.path.last().unwrap();
+        let first = normalised([next[0] - leader.position[0], next[1] - leader.position[1]]);
+        // It sets off facing along the first leg, its places turned with it.
+        assert_eq!(r.heading, first);
+        assert_ne!(Some(r.facing), first);
+        let mut headings = vec![w.regiment_facing(0)];
+        for _ in 0..400 {
+            w.tick();
+            let r = &w.organizations[0];
+            if r.route_end.is_none() {
+                break;
+            }
+            if headings.last() != Some(&w.regiment_facing(0)) {
+                headings.push(w.regiment_facing(0));
+            }
+        }
+        assert!(headings.len() >= 3, "{headings:?}");
+        // There, it faces along the last leg.
+        assert_eq!(w.organizations[0].heading, None);
+        assert_eq!(Some(&w.organizations[0].facing), headings.last());
+    }
+
+    #[test]
+    fn a_regiments_places_are_set_out_from_its_trailing_position_on_the_way() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        move_to(&mut w, [10.0, 30.0]);
+        run(&mut w, 3.0);
+        let r = &w.organizations[0];
+        let at = w.regiment_position(0);
+        // The leader's place is 1 to the left of the regiment's position,
+        // which trails it rather than standing where it was sent.
+        let [(_, leads), (_, right)] = w.formation_places(0)[..] else {
+            panic!();
+        };
+        assert!(near(leads, [at[0] - 1.0, at[1]]));
+        assert!(near(right, [at[0] + 1.0, at[1]]));
+        assert!(distance(at, r.position) > 5.0);
+        assert!(distance(leads, w.units[0].position) < 4.0);
+    }
+
+    #[test]
+    fn a_regiment_arrives_once_its_own_position_is_where_it_was_sent() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        move_to(&mut w, [10.0, 20.0]);
+        while w.units[0].moving() {
+            w.tick();
+        }
+        // The leader's there, but the regiment's position, trailing it,
+        // isn't yet.
+        assert!(w.organizations[0].route_end.is_some());
+        run(&mut w, 3.0);
+        assert!(w.organizations[0].route_end.is_none());
+        assert!(within(w.regiment_position(0), [10.0, 20.0], ARRIVAL_REACH));
+    }
+
+    #[test]
+    fn a_regiment_whose_leader_stops_short_sends_it_again_then_gives_up() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        move_to(&mut w, [10.0, 70.0]);
+        run(&mut w, 1.0);
+        assert_eq!(w.organizations[0].tries, 1);
+        let look = crate::LOOK as f32 * crate::TICK;
+        // Its leader stops short, and is sent on again at its next look.
+        for tries in [2, 3] {
+            w.units[0].halt();
+            run(&mut w, look);
+            assert_eq!(w.organizations[0].tries, tries);
+            assert!(w.units[0].moving());
+        }
+        // Tried three times, it gives up only once 5 seconds have gone by
+        // since the order, resting where it stands.
+        run(&mut w, 2.0);
+        w.units[0].halt();
+        run(&mut w, look);
+        let r = &w.organizations[0];
+        assert!(r.route_end.is_none() && !r.travelling);
+        assert!(distance(r.position, [10.0, 70.0]) > 10.0);
+    }
+
+    #[test]
+    fn a_regiment_speed_below_a_tenth_stops_its_members() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        move_to(&mut w, [10.0, 20.0]);
+        w.organizations[0].ordered_speed = Some(0.09);
+        run(&mut w, 2.0);
+        assert!(near(w.units[0].position, [9.0, 10.0]));
+        assert!(near(w.units[1].position, [11.0, 10.0]));
+        w.organizations[0].ordered_speed = Some(0.1);
+        run(&mut w, 2.0);
+        assert!(w.units[0].position[1] > 10.1);
+    }
+
+    #[test]
+    fn a_unit_on_its_own_speeds_up_only_at_its_next_move() {
+        let mut w = vehicle(0.0, 0.0, None);
+        w.units[0].template = "tank".into();
+        move_to(&mut w, [10.0, 30.0]);
+        run(&mut w, 1.0);
+        let faster = speeding(1.0);
+        w.rules.formation_effects.insert("lone".into(), faster);
+        let y = w.units[0].position[1];
+        run(&mut w, 1.0);
+        assert!((w.units[0].position[1] - y - 2.0).abs() < 1e-3);
+        // Slowed, it drops at once.
+        w.rules
+            .formation_effects
+            .insert("lone".into(), speeding(-0.5));
+        let y = w.units[0].position[1];
+        run(&mut w, 1.0);
+        assert!((w.units[0].position[1] - y - 1.0).abs() < 1e-3);
+        w.rules
+            .formation_effects
+            .insert("lone".into(), speeding(1.0));
+        move_to(&mut w, [10.0, 40.0]);
+        run(&mut w, 0.5);
+        let y = w.units[0].position[1];
+        run(&mut w, 1.0);
+        assert!((w.units[0].position[1] - y - 4.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_regiment_doing_what_has_no_formation_holds_its_broken_formations_speed() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        (w.rules.formation_effects).insert("line".into(), speeding(-0.25));
+        w.rules
+            .broken_effects
+            .insert("squad".into(), speeding(0.25));
+        (w.rules.formationless_states).insert("mind_exhausted".into());
+        assert_eq!(w.regiment_speed(0), 1.5);
+        // Exhausted, even while it's engaged.
+        w.organizations[0].mind = crate::Mind::Exhausted;
+        (w.organizations[0].engaged).push(crate::Piece::Organization(0));
+        assert_eq!(w.regiment_speed(0), 2.5);
+    }
+
+    #[test]
+    fn a_regiment_finds_it_is_targeted_at_its_next_check() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(Vec::new()), soldier(Vec::new())],
+            at_war(),
+        );
+        (w.rules.combat_effects).insert(tgmap::TARGETED.into(), speeding(-0.1));
+        while w.ticks % crate::SECOND != 1 {
+            w.tick();
+        }
+        w.organizations[1]
+            .engaged
+            .push(crate::Piece::Organization(0));
+        w.tick();
+        assert_eq!(w.regiment_speed(0), 2.0);
+        run(&mut w, 1.0);
+        assert!((w.regiment_speed(0) - 1.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn what_a_regiment_hands_down_reaches_only_members_of_the_kind_it_needs() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.units[0].template = "tank".into();
+        w.rules.kinds.insert("tank".into(), kind(&["tank"]));
+        let mut tanks = speeding(0.5);
+        tanks.requires = vec!["tank".into()];
+        w.rules
+            .formation_effects
+            .insert("line".into(), tanks.clone());
+        assert_eq!((w.unit_speed(0), w.unit_speed(1)), (4.5, 2.0));
+        // So do the properties it holds for a time, but for a special
+        // operation's, which reach every member.
+        w.rules.formation_effects.clear();
+        w.rules.combat_effects.insert("diesel".into(), tanks);
+        let held = |by| crate::Held {
+            property: "diesel".into(),
+            until: u64::MAX,
+            by,
+        };
+        w.organizations[0].properties.push(held(None));
+        assert_eq!((w.unit_speed(0), w.unit_speed(1)), (4.5, 2.0));
+        w.organizations[0].properties = vec![held(Some(7))];
+        assert_eq!((w.unit_speed(0), w.unit_speed(1)), (4.5, 3.0));
+    }
+
+    #[test]
+    fn a_member_well_ahead_of_its_place_ends_its_move_once_its_leader_has_stopped() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        let r = &mut w.organizations[0];
+        (r.route_end, r.facing, r.ordered_speed) = (Some([10.0, 20.0]), [1.0, 0.0], Some(0.15));
+        // Its leader stands, and it's level with the leader's point.
+        w.units[1].take(vec![[11.0, 20.0]], false);
+        w.units[1].position = [11.0, 20.0 - 1e-3];
+        w.units[1].sources = vec![[11.0, 20.0 - 1e-3]];
+        w.tick();
+        let unit = &w.units[1];
+        assert!(unit.goal.is_none() && !unit.moving());
+        assert_eq!(unit.facing, [1.0, 0.0]);
+    }
+
+    #[test]
+    fn a_member_cut_off_from_its_moving_regiment_makes_its_way_back_at_its_catchup_speed() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        w.organizations[0].control_range = 4.0;
+        w.units[1].position = [11.0, 2.0];
+        move_to(&mut w, [10.0, 60.0]);
+        run(&mut w, 2.0);
+        let unit = &w.units[1];
+        assert!(unit.returning);
+        assert!((unit.speed - 1.75 * 2.0).abs() < 1e-4, "{}", unit.speed);
+        // Back with it, it's handed the regiment's speed with a fresh copy.
+        run(&mut w, 10.0);
+        let unit = &w.units[1];
+        assert!(!unit.returning && unit.with == Some(true));
+        assert!((unit.speed - 2.0).abs() < 1e-4, "{}", unit.speed);
+    }
+
+    /// The regiment routing, each member keeping where it stood from the
+    /// leader: the right-hand man 2 to his right.
+    fn routing(w: &mut World) {
+        let r = &mut w.organizations[0];
+        r.mind = crate::Mind::Routing {
+            to: None,
+            until: u64::MAX,
+            retry: u64::MAX,
+        };
+        r.broken_places = vec![[0.0, 0.0], [2.0, 0.0]];
+        (r.control_range, r.travelling, r.position) = (4.0, true, [10.0, 30.0]);
+    }
+
+    #[test]
+    fn a_member_away_from_a_regiment_with_no_formation_makes_for_the_routes_first_point() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        routing(&mut w);
+        w.units[1].position = [30.0, 10.0];
+        w.take_places(0);
+        // Not a copy of the route, but a way of its own to the first point
+        // moved by where it stood from the leader.
+        let unit = &w.units[1];
+        assert!(unit.sources.is_empty());
+        assert_eq!(unit.goal, Some([12.0, 30.0]));
+    }
+
+    #[test]
+    fn a_member_joining_a_regiment_with_no_formation_is_handed_a_copy() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        routing(&mut w);
+        w.take_places(0);
+        w.units[1].halt();
+        w.units[1].with = None;
+        run(&mut w, crate::LOOK as f32 * crate::TICK);
+        assert!(!w.units[1].sources.is_empty());
+    }
+
+    #[test]
+    fn a_member_finding_no_way_to_its_points_gives_them_up_at_once() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // A wall right across the member's line, reaching to the leader's.
+        for x in 4..6 {
+            pathing.set_blocked(Tile::new(x, 10));
+        }
+        let mut w = world(pathing);
+        w.organizations[0].travelling = true;
+        w.units[0].position = [9.0, 25.0];
+        let route = vec![[9.0, 30.0], [9.0, 24.0]];
+        w.units[1].position = [11.0, 16.0];
+        w.take_copy(0, 0, 1, &route, ([11.0, 30.0], false));
+        // Nothing back towards the leader's point is clear, so it's
+        // passed at once, and its last, out of reach too, ends its move
+        // where it stands, as it faces.
+        let unit = &w.units[1];
+        assert!(unit.goal.is_none() && !unit.moving());
+        assert_eq!(unit.facing, [0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_unit_that_turns_at_once_turns_back_in_to_its_line() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        let unit = &mut w.units[1];
+        unit.take(vec![[11.0, 40.0]], false);
+        // Held to the leader's heading, north, 3 off its line.
+        unit.from = [11.0, 10.0];
+        unit.position = [14.0, 12.0];
+        for _ in 0..=crate::LOOK {
+            w.units[1].drive(2.0, 2.0);
+        }
+        // It turns in at 45 degrees, to a point on its line.
+        let unit = &w.units[1];
+        let f = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(near(unit.facing, [-f, f]), "{:?}", unit.facing);
+        assert_eq!(unit.path.len(), 2);
+        assert!((unit.path[1][0] - 11.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn members_face_their_regiments_way_on_arriving_and_units_on_their_own_as_they_came() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.organizations[0].heading = Some([1.0, 0.0]);
+        w.organizations[0].route_end = Some([10.0, 20.0]);
+        w.units[1].take(vec![[11.0, 10.5]], false);
+        run(&mut w, 1.0);
+        assert_eq!(w.units[1].facing, [1.0, 0.0]);
+        let mut w = vehicle(0.0, 0.0, None);
+        w.units[0].template = "tank".into();
+        w.apply(
+            7,
+            Command::Move {
+                organization: 0,
+                to: [20.0, 10.0],
+            },
+        )
+        .unwrap();
+        w.organizations[0].facing = [0.0, -1.0];
+        run(&mut w, 10.0);
+        assert!(
+            near(w.units[0].facing, [1.0, 0.0]),
+            "{:?}",
+            w.units[0].facing
+        );
+    }
+
+    #[test]
+    fn a_unit_that_gives_up_its_move_keeps_its_facing() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        for x in 0..20 {
+            pathing.set_blocked(Tile::new(x, 8));
+        }
+        let mut w = world(pathing);
+        w.organizations[0].facing = [1.0, 0.0];
+        w.units[1].take(vec![[11.0, 10.5]], false);
+        w.units[1].goal = Some([11.0, 30.0]);
+        w.units[1].ways = super::WAYS_TRIED;
+        run(&mut w, 1.0);
+        let unit = &w.units[1];
+        assert!(unit.goal.is_none());
+        assert_eq!(unit.facing, [0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_new_order_on_the_way_takes_effect_at_the_regiments_next_look() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        move_to(&mut w, [10.0, 60.0]);
+        run(&mut w, 1.0);
+        while (w.ticks + 1).is_multiple_of(u64::from(crate::LOOK)) {
+            w.tick();
+        }
+        move_to(&mut w, [60.0, 10.0]);
+        let old = w.units[1].path.clone();
+        w.tick();
+        assert_eq!(w.units[1].path, old);
+        assert!(w.underway(0));
+        run(&mut w, crate::LOOK as f32 * crate::TICK);
+        assert_ne!(w.units[1].path, old);
+        let place = w.destination_places(0)[0].1;
+        assert_eq!(w.organizations[0].route_end, Some(place));
+        assert!(distance(place, [60.0, 10.0]) < 1.1);
+    }
+
+    #[test]
+    fn a_member_sets_its_pace_as_it_takes_up_a_leg() {
+        let mut w = moved_with_the_right_hand_man_at([11.0, 2.0]);
+        w.tick();
+        // Well behind, it's going faster than the regiment from the off.
+        assert!(w.units[1].pace > 1.0, "{}", w.units[1].pace);
+    }
+
+    #[test]
+    fn a_member_as_far_along_its_leaders_route_as_the_leader_keeps_its_pace() {
+        let leads = vec![[9.0, 40.0], [9.0, 30.0]];
+        // A point behind, its own copy longer than the leader's, but as
+        // far from the leader's points.
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        w.units[0].path = leads.clone();
+        w.units[1].path = vec![[11.0, 40.0], [11.0, 30.0], [11.0, 12.0]];
+        w.units[1].sources = vec![[9.0, 40.0], [9.0, 30.0], [9.0, 10.0]];
+        w.units[1].position = [9.0, 10.0];
+        let pace = w.place_pace(0, 1, 2.0, 2.0);
+        assert!((pace - 1.0).abs() < 1e-4, "{pace}");
+    }
+
+    #[test]
+    fn a_regiment_whose_leader_falls_is_led_by_the_first_member_still_with_it() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        let third = w.units[1].clone();
+        w.units.push(third);
+        w.organizations[0].units.push(2);
+        let offsets = &mut w.organizations[0].formations[0].offsets;
+        offsets.push([3.0, 0.0]);
+        w.organizations[0].leader = Some(0);
+        w.keep_pacers();
+        assert_eq!(w.organizations[0].pacer, Some(0));
+        w.units[0].die(0);
+        w.units[1].with = Some(false);
+        w.keep_pacers();
+        assert_eq!(w.organizations[0].pacer, Some(2));
+        // It keeps the lead once the straggler's back.
+        w.units[1].with = Some(true);
+        w.keep_pacers();
+        assert_eq!(w.organizations[0].pacer, Some(2));
+        // Until its leader's place is filled again.
+        w.units[0].died = None;
+        w.units[0].health = 1.0;
+        w.keep_pacers();
+        assert_eq!(w.pacer(0), Some(0));
     }
 }

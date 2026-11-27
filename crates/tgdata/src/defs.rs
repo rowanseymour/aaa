@@ -619,6 +619,9 @@ pub struct ActorState {
     /// offers.
     #[serde(rename = "type")]
     pub kind: Option<String>,
+    /// The formation a regiment doing this is in, such as `BROKEN` for
+    /// none.
+    pub formation_required: Option<String>,
     /// The shared [`Property`]s it gives what's in it.
     #[serde(default)]
     pub property: Vec<PropertyRef>,
@@ -1600,6 +1603,13 @@ pub struct SVars {
     /// The least a regiment's banner goes a second catching up with its
     /// leader.
     pub banner_min_catchup_speed: Option<f32>,
+    /// The longest a regiment's offset from the middle of several sent
+    /// together is cut to, and the least its group's zone reaches.
+    pub group_zone_range_min: Option<f32>,
+    /// The seconds after its order before which a regiment doesn't give up
+    /// a move it keeps failing to finish.
+    #[serde(rename = "CAIMoveMinSecondsBeforeFail")]
+    pub move_fail_seconds: Option<f32>,
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub recruit_search_radius_small: Option<f32>,

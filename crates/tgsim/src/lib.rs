@@ -399,6 +399,31 @@ pub struct Organization {
     /// ends, at which the regiment turns and its members make for their
     /// places.
     pub route_end: Option<[f32; 2]>,
+    /// While it's on its way, its own copy of the route its leader was
+    /// handed, next point last, which it drops points from as the leader
+    /// passes them.
+    pub route: Vec<[f32; 2]>,
+    /// While it's on its way, the way it faces: along the leg its leader
+    /// is on.
+    pub heading: Option<[f32; 2]>,
+    /// How many times it's planned its move or sent its leader again.
+    pub tries: u8,
+    /// The tick it was given the move it's on.
+    pub sent: u64,
+    /// Whether it hands its members fresh routes at its next look, for an
+    /// order given while it was on its way.
+    pub hand_out: bool,
+    /// Whether, when it last checked, another regiment was engaging it
+    /// without its engaging back.
+    pub targeted: bool,
+    /// For one on its own, the speed it was last given, which a rise in
+    /// its top speed doesn't take it past until its next move.
+    pub given_speed: f32,
+    /// The place in `units` of the member the rest follow on the move:
+    /// its leader while that's present, else the one that took over.
+    pub pacer: Option<usize>,
+    /// What it was doing when it last checked whether it's targeted.
+    pub checked_as: Option<&'static str>,
     /// The way it was sent to face, which it turns to once there, rather
     /// than along its route's last leg.
     pub turn_to: Option<[f32; 2]>,
@@ -647,11 +672,13 @@ pub struct Unit {
     /// On a copy of its leader's route, the leader's point each of its
     /// waypoints was made from, the next last; empty on a way of its own.
     sources: Vec<[f32; 2]>,
-    /// How many times it's found no way to its next waypoint.
-    point_tries: u8,
     /// Whether it was inside its moving regiment's control zone when the
     /// regiment last looked; `None` for one that's joined since.
     with: Option<bool>,
+    /// Whether it's making its way back to its moving regiment after
+    /// being cut off from it, which it does at its catch-up speed until
+    /// it's handed another.
+    returning: bool,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -1355,7 +1382,9 @@ impl World {
     /// fighting before it carries on.
     pub fn underway(&self, organization: usize) -> bool {
         let r = &self.organizations[organization];
-        r.resume.is_some() || self.survivors(organization).any(|u| self.units[u].moving())
+        r.resume.is_some()
+            || r.hand_out
+            || self.survivors(organization).any(|u| self.units[u].moving())
     }
 
     /// Whether an organization has lost every member, which one still being
@@ -1407,6 +1436,8 @@ impl World {
 
     /// Plays one [`TICK`].
     pub fn tick(&mut self) {
+        self.keep_pacers();
+        self.keep_targeted();
         self.travel();
         self.keep_banners();
         self.keep_routes();
@@ -1548,7 +1579,7 @@ digest!(Organization {
     id, template, number, owner, units, speed, position, banner, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
-    guard, arriving, terrain_properties, settled, travelling, route_end, turn_to, entrenched, morale, morale_max,
+    guard, arriving, terrain_properties, settled, travelling, route_end, route, heading, tries, sent, hand_out, targeted, given_speed, pacer, checked_as, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
     chased, follow, build, mending, explore, queue,
 } skip {
@@ -1587,7 +1618,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, sources, with, returning, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
     health_factor,
     fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
@@ -2027,7 +2058,7 @@ mod tests {
         let played = format!("{}\n{}", snapshot(&battle), snapshot(&towing));
         assert_eq!(
             fingerprint(&[&battle, &towing]),
-            0x6906730b52272f27,
+            0xb7212e47f3b71ea9,
             "{played}"
         );
     }
