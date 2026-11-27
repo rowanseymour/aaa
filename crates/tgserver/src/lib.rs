@@ -249,6 +249,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         airfields: game.airfields(),
         aircraft: game.aircraft(),
         denizen_siege_rate: (game.denizen_siege_rate()).unwrap_or(defaults.denizen_siege_rate),
+        film_speed: game.film_speed().unwrap_or(defaults.film_speed),
         falls: game.falls(),
         recruit_times: game.recruit_times(),
         research_lists: game.research_lists(),

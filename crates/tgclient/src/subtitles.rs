@@ -40,9 +40,13 @@ impl Plugin for SubtitlesPlugin {
     }
 }
 
-/// A line of speech started playing.
+/// A line of speech started playing, or would have but for being
+/// `played`.
 #[derive(Message)]
-pub(crate) struct Started(pub(crate) Id);
+pub(crate) struct Started {
+    pub(crate) audio: Id,
+    pub(crate) played: bool,
+}
 
 /// The panel's text box, in the layouts' pixels, and the font it's in.
 #[derive(Resource)]
@@ -54,12 +58,13 @@ struct Panel {
     showing: Option<Showing>,
 }
 
-/// A subtitle on screen: its parts, the one showing, and how long that
-/// one has left.
+/// A subtitle on screen: its parts, the one showing, how long that one
+/// has left, and whether its line is playing rather than unplayed.
 struct Showing {
     parts: Vec<Part>,
     at: usize,
     left: f32,
+    played: bool,
 }
 
 /// Some of a subtitle's text, shown for its share of the subtitle's time.
@@ -210,7 +215,7 @@ fn start(
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
 ) {
-    let Some(Started(audio)) = started.read().last() else {
+    let Some(Started { audio, played }) = started.read().last() else {
         return;
     };
     // A line that names no audio does nothing, leaving the one playing.
@@ -230,9 +235,11 @@ fn start(
         Some(key) => strings.get(key).cloned().unwrap_or_default(),
         None => subtitle.text.clone(),
     };
-    let length = match subtitle.duration > 0.0 {
-        true => Some(subtitle.duration),
-        false => (audio.files.first()).and_then(|f| game.audio_seconds(f)),
+    let length = match (*played, subtitle.duration > 0.0) {
+        // One that can't be played shows for its noted length, at once.
+        (false, _) => subtitle.noted,
+        (true, true) => Some(subtitle.duration),
+        (true, false) => (audio.files.first()).and_then(|f| game.audio_seconds(f)),
     };
     let Some(length) = length.filter(|l| *l > 0.0) else {
         warn!("{}: no length for its subtitle", audio.files.join(", "));
@@ -244,7 +251,13 @@ fn start(
     let parts = parts(&text, lines, fits, length);
     if let Some(first) = parts.first() {
         let left = first.seconds;
-        panel.showing = Some(Showing { parts, at: 0, left });
+        let played = *played;
+        panel.showing = Some(Showing {
+            parts,
+            at: 0,
+            left,
+            played,
+        });
     }
     if crate::curtains::interface_up(sim, fixed) && log.post(KIND, text, None, time.elapsed_secs())
     {
@@ -269,8 +282,13 @@ fn show(
     real: Res<Time<Real>>,
     mut words: Query<(&mut Text, &mut Visibility), With<Words>>,
 ) {
-    let paused = orders.is_some_and(|o| o.paused());
-    if !shown(&log) {
+    let paused = orders.as_ref().is_some_and(|o| o.paused());
+    let skipping = orders.is_some_and(|o| o.skipping());
+    let letterboxed = !crate::curtains::interface_up(sim, fixed);
+    // Hurrying a scene on under the letterbox stops the line playing,
+    // and its subtitle goes with it.
+    let hushed = skipping && letterboxed && panel.showing.as_ref().is_some_and(|s| s.played);
+    if !shown(&log) || hushed {
         panel.showing = None;
     }
     if let Some(showing) = &mut panel.showing
@@ -293,7 +311,6 @@ fn show(
         panel.showing = None;
     }
     let part = panel.showing.as_ref().map(|s| s.parts[s.at].text.as_str());
-    let letterboxed = !crate::curtains::interface_up(sim, fixed);
     for (mut text, mut visibility) in &mut words {
         let says = part.unwrap_or_default();
         if text.0 != says {

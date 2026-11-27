@@ -2,6 +2,7 @@
 //! moment it's decided, or that it's ended with its host going.
 
 use bevy::prelude::*;
+use bevy::ui_widgets::Activate;
 use tgsim::Outcome;
 
 use crate::confirm::{self, ask, nothing, offer};
@@ -80,6 +81,7 @@ fn tell(
     mut commands: Commands,
     sim: Res<Sim>,
     local: Res<Local>,
+    orders: Option<Res<Orders>>,
     words: Res<Words>,
     mut told: ResMut<Told>,
 ) {
@@ -92,6 +94,16 @@ fn tell(
         Outcome::Lost => false,
     };
     told.side = Some(side);
+    // Decided during a scripted scene, alone or as host, the mission
+    // ends at once, with nothing asked.
+    if sim.0.triggers.cutscene && orders.is_none_or(|o| o.hosts()) {
+        let ending = commands
+            .spawn(DespawnOnExit(Screen::Match))
+            .observe(crate::leaving::end_mission)
+            .id();
+        commands.trigger(Activate { entity: ending });
+        return;
+    }
     let message = if won { &words.won } else { &words.lost };
     let asked = ask(&mut commands, Screen::Match, message.clone());
     offer(
@@ -143,7 +155,6 @@ fn tell_host_gone(
 mod tests {
     use super::*;
     use bevy::state::app::StatesPlugin;
-    use bevy::ui_widgets::Activate;
     use tgmap::{Domain, Pathing};
     use tgsim::{Sides, World};
 
@@ -191,6 +202,23 @@ mod tests {
         assert_eq!(
             shown(&mut app),
             ["End Mission", "Keep Playing", "Mission Won"]
+        );
+    }
+
+    #[test]
+    fn decided_during_a_scripted_scene_the_mission_ends_unasked() {
+        let mut app = app();
+        let mut sim = app.world_mut().resource_mut::<Sim>();
+        sim.0.triggers.cutscene = true;
+        sim.0.win(1);
+        app.update();
+        assert!(shown(&mut app).is_empty(), "no dialog");
+        app.update();
+        let screen = app.world().resource::<State<Screen>>();
+        assert_eq!(
+            *screen.get(),
+            Screen::MainMenu,
+            "left, with no match loaded"
         );
     }
 

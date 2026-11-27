@@ -28,6 +28,8 @@ pub struct Vfx {
     /// A temporary one is created off screen too.
     pub never_discard: bool,
     pub night_only: bool,
+    /// It shows while a scripted scene plays.
+    pub in_cutscenes: bool,
     /// The same size on screen however far the camera is.
     pub constant_screen_size: bool,
     /// It runs in real time rather than game time.
@@ -294,6 +296,7 @@ fn vfx(v: defs::Vfx, model: Option<String>, texture: Option<String>) -> Vfx {
         attached_scale: v.attached_scale.unwrap_or(0.0),
         never_discard: v.never_discard_temporary.unwrap_or(false),
         night_only: v.nightonly.unwrap_or(false),
+        in_cutscenes: v.show_in_cutscene.unwrap_or(true),
         constant_screen_size: v.constant_screen_size.unwrap_or(false),
         real_time: v.force_real_time.unwrap_or(false),
         random_orientation: flagged.or(v.random_orientation) == Some(true),
@@ -575,6 +578,7 @@ mod tests {
                 attached_scale: 0.0,
                 never_discard: false,
                 night_only: false,
+                in_cutscenes: true,
                 constant_screen_size: false,
                 real_time: false,
                 random_orientation: true,

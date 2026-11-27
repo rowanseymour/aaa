@@ -163,6 +163,16 @@ fn toggle(
     if !(escape || button) || !loading.is_empty() {
         return;
     }
+    // While a scripted scene plays, Escape hurries it on or stops
+    // hurrying it, and the menu doesn't open.
+    let film = sim.as_ref().is_some_and(|s| s.0.triggers.cutscene);
+    if film && !menu.open {
+        if escape {
+            let skip = !orders.skipping();
+            orders.into_inner().act(Action::Skip(skip));
+        }
+        return;
+    }
     if menu.open {
         // The menu covers its button.
         if escape {

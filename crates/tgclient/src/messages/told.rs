@@ -254,11 +254,14 @@ pub fn tell(
     }
     let notices = sim.0.take_notices();
     let now = time.elapsed_secs();
+    // A scripted scene raises no game events, nor their sounds.
+    let film = sim.0.triggers.cutscene;
     for notice in notices {
-        if let Some(sound) = sound(&notice, local.0) {
+        if let Some(sound) = sound(&notice, local.0).filter(|_| !film) {
             sounds.interface(&time, sound);
         }
         let posted = match told(&sim.0, local.0, &leaders, &log.look, notice) {
+            Some(Told::Event(..)) if film => false,
             Some(Told::Event(event, with, place)) => log.event(event, &with, place, now),
             Some(Told::Line(kind, text, place)) => log.post(kind, text, place, now),
             Some(Told::Words(kind, words)) => log.post(kind, words, None, now),

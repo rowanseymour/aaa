@@ -197,6 +197,15 @@ impl Orders {
         }
     }
 
+    /// Whether the match is hosted here, for the game alone or for others
+    /// too.
+    pub(crate) fn hosts(&self) -> bool {
+        match &self.host {
+            Hosted::Here(_) => true,
+            Hosted::Shared { host, .. } => host.is_some(),
+        }
+    }
+
     /// The players the game was let in to a multiplayer match to give the
     /// orders of; `None` for a match it plays alone, where it gives
     /// anyone's.
@@ -411,7 +420,11 @@ impl Orders {
             debug!("not asked of the match's host: {action:?}");
             return;
         }
-        let clock = matches!(action, Action::Pause(_) | Action::Speed(_)).then(|| action.clone());
+        let clock = matches!(
+            action,
+            Action::Pause(_) | Action::Speed(_) | Action::Skip(_)
+        )
+        .then(|| action.clone());
         // A host that's gone is found so as the match is next played.
         if self.client.ask(action).is_ok() {
             self.asked.extend(clock.map(|c| (self.client.asked(), c)));
@@ -444,6 +457,16 @@ impl Orders {
             _ => None,
         });
         asked.unwrap_or(self.speed())
+    }
+
+    /// Whether a scripted scene is being hurried on, once what's been
+    /// asked is carried out.
+    pub(crate) fn skipping(&self) -> bool {
+        let asked = self.asked.iter().rev().find_map(|(_, a)| match a {
+            Action::Skip(skip) => Some(*skip),
+            _ => None,
+        });
+        asked.unwrap_or(self.client.schedule().skipping())
     }
 
     /// What the match was set up from.
@@ -514,7 +537,9 @@ impl Orders {
     /// One made by a profile is first named after it, for every machine.
     fn think(&mut self, world: &World) {
         let held = self.status().is_some_and(|s| s.held);
-        if self.computers.sides.is_empty() || held || self.paused() || self.waiting() {
+        // Nor while a scripted scene plays.
+        let film = world.triggers.cutscene;
+        if self.computers.sides.is_empty() || held || film || self.paused() || self.waiting() {
             return;
         }
         let Computers {

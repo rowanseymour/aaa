@@ -120,7 +120,12 @@ pub(crate) fn show_focus(
     let t = fixed.overstep_fraction();
     let mut wanted = Vec::new();
     let mut square = None;
-    match *focus {
+    // A scripted scene shows no marks.
+    let focus = match sim.0.triggers.cutscene {
+        true => Focus::Nothing,
+        false => *focus,
+    };
+    match focus {
         Focus::Nothing => {}
         Focus::Organization(r) => {
             let material = &marks.rings[tint(&sim.0, local.0, sim.0.organizations[r].owner)];
@@ -225,7 +230,9 @@ pub(crate) fn show_health(
     mut bars: Query<(&mut Node, &mut ImageNode, &mut Visibility), With<HealthBar>>,
 ) {
     let mut wanted = Vec::new();
-    if let Ok((camera, transform)) = cameras.single() {
+    // A scripted scene shows no bars.
+    let camera = cameras.single().ok().filter(|_| !sim.0.triggers.cutscene);
+    if let Some((camera, transform)) = camera {
         // This frame's camera, which moves after transforms propagate.
         let global = GlobalTransform::from(*transform);
         let toward = (transform.back().as_vec3() * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();

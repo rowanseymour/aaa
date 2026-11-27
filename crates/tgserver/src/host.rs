@@ -271,9 +271,10 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
             };
             speaker && sayable(words)
         }
-        // The speed is the host's to set, and names and what pausing came
-        // to its to give.
+        // The speed, and hurrying a scripted scene on, are the host's to
+        // set, and names and what pausing came to its to give.
         Action::Speed(_)
+        | Action::Skip(_)
         | Action::Win(_)
         | Action::Lose(_)
         | Action::Raise { .. }
@@ -729,6 +730,10 @@ impl<L: Link> Host<L> {
     /// A side whose person leaves is the computer's from the turn after.
     /// One made by a profile chosen at launch is first named after it.
     fn think(&mut self) -> Vec<Action> {
+        // Computer players give no orders while a scripted scene plays.
+        if self.world.triggers.cutscene {
+            return Vec::new();
+        }
         let theirs: Vec<u32> = (tgmap::sides(&self.world.sides.players))
             .map(|p| p.id)
             .filter(|&p| !self.seated(p) && self.world.outcome(p) == Outcome::Playing)

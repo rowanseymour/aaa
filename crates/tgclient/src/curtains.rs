@@ -17,7 +17,10 @@ impl Plugin for CurtainsPlugin {
         app.init_resource::<Overridden>()
             .add_systems(OnEnter(Screen::Match), spawn)
             .add_systems(First, restore_interface)
-            .add_systems(Update, draw.run_if(in_state(Screen::Match)))
+            .add_systems(
+                Update,
+                (draw, cover, show_skipping).run_if(in_state(Screen::Match)),
+            )
             .add_systems(
                 PostUpdate,
                 hide_interface
@@ -37,6 +40,16 @@ struct Bar {
 #[derive(Component)]
 struct Fade;
 
+/// What the screen shows instead of the map while a scripted scene is
+/// hurried on.
+#[derive(Component)]
+struct Skipping;
+
+/// What covers the interface while a scripted scene plays, so that its
+/// clicks do nothing.
+#[derive(Component)]
+struct Cover;
+
 /// The interface's own visibility, kept while the letterbox overrides it.
 #[derive(Resource, Default)]
 struct Overridden(Vec<(Entity, Visibility)>);
@@ -55,6 +68,19 @@ fn shown(slide: Option<Slide>, ticks: f32) -> f32 {
 /// until its bars have gone after it's switched off.
 fn letterboxed(slide: Option<Slide>, ticks: f32) -> bool {
     slide.is_some_and(|s| s.on || s.shown(ticks) > 0.0)
+}
+
+/// Whether the letterbox hides the interface now.
+pub(crate) fn hides_interface(sim: &Sim, fixed: &Time<Fixed>) -> bool {
+    letterboxed(sim.0.triggers.letterbox, now(sim, fixed))
+}
+
+/// Whether the player's clicks on the map and hotkeys are heard: not
+/// while the letterbox hides the interface, nor while a scripted scene
+/// plays.
+pub(crate) fn input_free(sim: Option<Res<Sim>>, fixed: Res<Time<Fixed>>) -> bool {
+    let film = sim.as_ref().is_some_and(|s| s.0.triggers.cutscene);
+    !film && interface_up(sim, fixed)
 }
 
 /// Whether the interface is up for the player to use, with the map's
@@ -87,6 +113,30 @@ fn spawn(mut commands: Commands, loaded: Res<Loaded>) {
         height: percent(100),
         ..default()
     };
+    let waiting = (loaded.game.strings().get("ui_skipping_cutscene").cloned())
+        .unwrap_or_else(|| "Please wait while advancing cutscene...".to_string());
+    commands.spawn((
+        Skipping,
+        Node {
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..full.clone()
+        },
+        BackgroundColor(Color::BLACK),
+        GlobalZIndex(layer::PAGE),
+        crate::ui::Covers,
+        Visibility::Hidden,
+        DespawnOnExit(Screen::Match),
+        children![crate::ui::text(waiting, crate::ui::Font::Body)],
+    ));
+    commands.spawn((
+        Cover,
+        full.clone(),
+        GlobalZIndex(layer::FILM),
+        crate::ui::Covers,
+        Visibility::Hidden,
+        DespawnOnExit(Screen::Match),
+    ));
     commands.spawn((
         full.clone(),
         GlobalZIndex(layer::CURTAINS),
@@ -99,6 +149,24 @@ fn spawn(mut commands: Commands, loaded: Res<Loaded>) {
             (Fade, full, BackgroundColor(Color::NONE), Pickable::IGNORE),
         ],
     ));
+}
+
+/// Shows only the wait while a scripted scene is hurried on.
+fn show_skipping(
+    orders: Option<Res<crate::Orders>>,
+    mut screens: Query<&mut Visibility, With<Skipping>>,
+) {
+    let skipping = orders.is_some_and(|o| o.skipping());
+    for mut visibility in &mut screens {
+        visibility.set_if_neq(crate::ui::visible(skipping));
+    }
+}
+
+/// Covers the interface while a scripted scene plays.
+fn cover(sim: Res<Sim>, mut covers: Query<&mut Visibility, With<Cover>>) {
+    for mut visibility in &mut covers {
+        visibility.set_if_neq(crate::ui::visible(sim.0.triggers.cutscene));
+    }
 }
 
 fn draw(

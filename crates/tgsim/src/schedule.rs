@@ -24,6 +24,9 @@ pub enum Action {
     /// Has the match play this many times as fast; nothing unless it's
     /// one of [`SPEEDS`].
     Speed(f32),
+    /// Hurries a scripted scene on, or stops hurrying it; nothing while
+    /// none plays.
+    Skip(bool),
     /// Has a side win, as [`World::win`].
     Win(u32),
     /// Has a side lose, as [`World::lose`].
@@ -104,11 +107,20 @@ pub enum Channel {
 }
 
 impl Action {
-    /// Leaves `clock`, a match's pause and speed, as it has them.
-    fn set_clock(&self, clock: &mut (bool, f32)) {
-        match *self {
-            Action::Pause(pause) => clock.0 = pause,
-            Action::Speed(speed) if SPEEDS.contains(&speed) => clock.1 = speed,
+    /// Leaves `clock`, a match's pause and speed, as it has them. During a
+    /// scripted scene, `film`, the speed and pausing are the scene's, and
+    /// only unpausing is heard.
+    fn set_clock(&self, clock: &mut (bool, f32), film: Option<&Film>) {
+        match (self, film) {
+            (Action::Pause(false), _) => clock.0 = false,
+            (Action::Pause(true), None) => clock.0 = true,
+            (Action::Speed(speed), None) if SPEEDS.contains(speed) => clock.1 = *speed,
+            (Action::Skip(skip), Some(film)) => {
+                clock.1 = match skip {
+                    true => film.fastest,
+                    false => film.remembered,
+                }
+            }
             _ => {}
         }
     }
@@ -120,7 +132,7 @@ impl Action {
             Action::Order { player, command } => {
                 return world.apply(player, command).map_err(|e| (player, e));
             }
-            Action::Pause(_) | Action::Speed(_) => {}
+            Action::Pause(_) | Action::Speed(_) | Action::Skip(_) => {}
             Action::Win(player) => world.win(player),
             Action::Lose(player) => world.lose(player),
             Action::Raise {
@@ -188,6 +200,17 @@ pub struct Schedule {
     record: Record,
     paused: bool,
     speed: f32,
+    /// The scripted scene playing, if one is.
+    film: Option<Film>,
+}
+
+/// A scripted scene as it plays: the speed it took over from, given back
+/// as it ends, the speed it's hurried on at, and whether it is.
+#[derive(Debug, Clone, Copy)]
+struct Film {
+    remembered: f32,
+    fastest: f32,
+    hurried: bool,
 }
 
 impl Default for Schedule {
@@ -197,6 +220,7 @@ impl Default for Schedule {
             record: Record::default(),
             paused: false,
             speed: 1.0,
+            film: None,
         }
     }
 }
@@ -237,8 +261,36 @@ impl Schedule {
 
     fn clock_once_carried_out(&self) -> (bool, f32) {
         let mut clock = (self.paused, self.speed);
-        self.waiting.iter().for_each(|a| a.set_clock(&mut clock));
+        let film = self.film.as_ref();
+        self.waiting
+            .iter()
+            .for_each(|a| a.set_clock(&mut clock, film));
         clock
+    }
+
+    /// Whether a scripted scene is being hurried on.
+    pub fn skipping(&self) -> bool {
+        self.film.is_some_and(|f| f.hurried)
+    }
+
+    /// Plays scripted scenes at normal speed as the match switches them
+    /// on, and gives the speed back as it switches them off.
+    fn follow_film(&mut self, world: &World) {
+        match (self.film, world.triggers.cutscene) {
+            (None, true) => {
+                self.film = Some(Film {
+                    remembered: self.speed,
+                    fastest: world.rules.film_speed,
+                    hurried: false,
+                });
+                self.speed = 1.0;
+            }
+            (Some(film), false) => {
+                self.speed = film.remembered;
+                self.film = None;
+            }
+            _ => {}
+        }
     }
 
     /// Carries out every action waiting, returning the orders refused.
@@ -250,11 +302,15 @@ impl Schedule {
         let mut refused = Vec::new();
         for action in self.waiting.drain(..) {
             let mut clock = (self.paused, self.speed);
-            action.set_clock(&mut clock);
-            if clock.1 != self.speed {
+            action.set_clock(&mut clock, self.film.as_ref());
+            // A scene's own speed isn't told.
+            if clock.1 != self.speed && self.film.is_none() {
                 world.notices.push(crate::Notice::Speed(clock.1));
             }
             (self.paused, self.speed) = clock;
+            if let (Action::Skip(skip), Some(film)) = (&action, &mut self.film) {
+                film.hurried = *skip;
+            }
             let step = world.ticks;
             self.record.given.push(Given {
                 step,
@@ -270,6 +326,7 @@ impl Schedule {
     pub fn step(&mut self, world: &mut World) -> Vec<(u32, Refused)> {
         let refused = self.carry_out(world);
         world.tick();
+        self.follow_film(world);
         self.record.steps = world.ticks;
         if world.ticks.is_multiple_of(CHECK_EVERY) {
             self.record.checks.push((world.ticks, world.hash()));
@@ -396,6 +453,45 @@ mod tests {
         let diverged = record.replay(&mut fresh()).unwrap_err();
         assert!(diverged.step > 30 && diverged.step < 600);
         assert!(diverged.step.is_multiple_of(CHECK_EVERY));
+    }
+
+    #[test]
+    fn a_scripted_scene_plays_at_normal_speed_and_can_be_hurried() {
+        let (mut w, mut s) = (fresh(), Schedule::default());
+        s.act(Action::Speed(2.0));
+        s.step(&mut w);
+        w.triggers.cutscene = true;
+        s.step(&mut w);
+        assert_eq!(s.speed(), 1.0, "the scene's own speed");
+        s.act(Action::Speed(4.0));
+        s.act(Action::Pause(true));
+        s.step(&mut w);
+        assert_eq!((s.paused(), s.speed()), (false, 1.0), "neither heard");
+        s.act(Action::Skip(true));
+        assert_eq!(s.speeding(), 16.0);
+        s.step(&mut w);
+        assert!(s.skipping());
+        s.act(Action::Skip(false));
+        s.step(&mut w);
+        assert_eq!(s.speed(), 2.0, "back to the speed remembered");
+        assert!(!s.skipping());
+        s.act(Action::Skip(true));
+        s.step(&mut w);
+        w.triggers.cutscene = false;
+        s.step(&mut w);
+        assert_eq!(s.speed(), 2.0, "the scene's end gives it back");
+        assert!(!s.skipping());
+        s.act(Action::Skip(true));
+        s.step(&mut w);
+        assert_eq!(s.speed(), 2.0, "nothing to hurry");
+        let told = w.take_notices();
+        let speeds: Vec<_> = (told.iter())
+            .filter_map(|n| match n {
+                crate::Notice::Speed(s) => Some(*s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(speeds, [2.0], "a scene's speeds aren't told");
     }
 
     #[test]

@@ -194,6 +194,8 @@ pub struct Rules {
     /// What a building's aircraft are rebuilt and repaired at while it's
     /// under siege, as a share of the usual.
     pub denizen_siege_rate: f32,
+    /// How many times as fast a scripted scene plays while it's skipped.
+    pub film_speed: f32,
     /// How each template falls when it's dropped, by template.
     pub falls: HashMap<Id, tgmap::Fall>,
     /// World units a second each second that what falls gains.
@@ -307,6 +309,7 @@ impl Default for Rules {
             airfields: HashMap::new(),
             aircraft: HashMap::new(),
             denizen_siege_rate: 0.25,
+            film_speed: 16.0,
             falls: HashMap::new(),
             gravity: 49.05,
             plane_fall_tweak: 0.005,

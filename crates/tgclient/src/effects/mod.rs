@@ -12,7 +12,7 @@ mod place;
 mod play;
 mod tint;
 
-use follow::{fade, follow, show_by_night};
+use follow::{fade, follow, show_by_time};
 use notice::{AT_WORK, DEAD, Now, Seen, When, by_state, changes, crossed, notice, on_shot};
 pub(crate) use play::Lowers;
 use play::play;
@@ -62,6 +62,8 @@ pub struct Effects {
     detail: f32,
     /// The map's sun is dark enough that effects for the night show.
     night: bool,
+    /// A scripted scene plays, which some effects aren't shown in.
+    film: bool,
     /// Seconds since a site's health last changed that it's still being
     /// worked on, if the game says.
     at_work: Option<f32>,
@@ -132,6 +134,10 @@ struct Tied(Entity);
 /// An effect for the night, hidden while the sun's too bright for it.
 #[derive(Component)]
 struct NightOnly;
+
+/// An effect hidden while a scripted scene plays.
+#[derive(Component)]
+struct NotInFilm;
 
 /// An effect a command stopped that's still to go as it does.
 #[derive(Component)]
@@ -230,6 +236,7 @@ impl Effects {
             aim: game.aim_heights().straight,
             detail: 1.0,
             night,
+            film: false,
             at_work: game.active_construction_seconds(),
             rng: Random::new(0x9e37_79b9_7f4a_7c15),
         }
@@ -238,6 +245,16 @@ impl Effects {
     /// Has effects for the night show, or not.
     pub(crate) fn set_night(&mut self, night: bool) {
         self.night = night;
+    }
+
+    /// Has effects kept out of scripted scenes hide, or show.
+    pub(crate) fn set_film(&mut self, film: bool) {
+        self.film = film;
+    }
+
+    /// Whether an effect shows now, as it's `nightly` and `unfilmed`.
+    fn shows(&self, nightly: bool, unfilmed: bool) -> bool {
+        (!nightly || self.night) && (!unfilmed || !self.film)
     }
 
     /// The terrain group of the tile at a map point.
@@ -445,13 +462,30 @@ impl Effects {
     }
 }
 
+/// Keeps up with whether a scripted scene plays, which some effects
+/// aren't shown in.
+fn follow_film(sim: Res<crate::Sim>, mut effects: ResMut<Effects>) {
+    let film = sim.0.triggers.cutscene;
+    if effects.film != film {
+        effects.set_film(film);
+    }
+}
+
 pub struct EffectsPlugin;
 
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (notice, play, follow, show_by_night, fade, tint_units)
+            (
+                follow_film,
+                notice,
+                play,
+                follow,
+                show_by_time,
+                fade,
+                tint_units,
+            )
                 .chain()
                 .after(crate::views::show_packing)
                 .after(crate::views::show_units)
@@ -679,6 +713,7 @@ mod tests {
             attached_scale: 0.0,
             never_discard: false,
             night_only: false,
+            in_cutscenes: true,
             constant_screen_size: false,
             real_time: false,
             random_orientation: false,
@@ -765,7 +800,7 @@ mod tests {
     fn effects_for_the_night_show_only_while_it_is_night() {
         let mut app = App::new();
         app.insert_resource(effects(HashMap::new()))
-            .add_systems(Update, show_by_night);
+            .add_systems(Update, show_by_time);
         let effect = || Effect {
             vfx: Id::from("lit_window"),
             by: None,
@@ -787,13 +822,37 @@ mod tests {
     }
 
     #[test]
+    fn effects_kept_out_of_scripted_scenes_hide_while_one_plays() {
+        let mut app = App::new();
+        app.insert_resource(effects(HashMap::new()))
+            .add_systems(Update, show_by_time);
+        let effect = Effect {
+            vfx: Id::from("speed_decal"),
+            by: None,
+            holding: None,
+            ends: None,
+            discard: false,
+        };
+        let unfilmed = app
+            .world_mut()
+            .spawn((effect, NotInFilm, visible(true)))
+            .id();
+        let shown = |app: &App| *app.world().get::<Visibility>(unfilmed).unwrap();
+        app.world_mut().resource_mut::<Effects>().set_film(true);
+        app.update();
+        assert_eq!(shown(&app), Visibility::Hidden);
+        app.world_mut().resource_mut::<Effects>().set_film(false);
+        app.update();
+        assert_eq!(shown(&app), Visibility::Inherited);
+    }
+
+    #[test]
     fn effects_on_things_show_with_them_and_for_the_night_only_at_night() {
         use Visibility::{Hidden, Inherited, Visible};
-        assert_eq!(shown_with(Visible, false, false), Inherited);
-        assert_eq!(shown_with(Hidden, false, true), Hidden);
-        assert_eq!(shown_with(Inherited, true, true), Inherited);
-        assert_eq!(shown_with(Visible, true, false), Hidden);
-        assert_eq!(shown_with(Hidden, true, true), Hidden);
+        assert_eq!(shown_with(Visible, true), Inherited);
+        assert_eq!(shown_with(Inherited, true), Inherited);
+        assert_eq!(shown_with(Visible, false), Hidden);
+        assert_eq!(shown_with(Hidden, true), Hidden);
     }
 
     fn effects(objects: HashMap<Id, ObjectEffects>) -> Effects {
@@ -813,6 +872,7 @@ mod tests {
             aim: 0.65,
             detail: 1.0,
             night: false,
+            film: false,
             at_work: Some(2.5),
             rng: Random::new(1),
         }

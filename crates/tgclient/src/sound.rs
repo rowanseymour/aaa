@@ -130,7 +130,7 @@ pub struct Fades;
 
 /// One play of an [`Audio`].
 #[derive(Component)]
-struct Playing {
+pub(crate) struct Playing {
     audio: Id,
     /// When it started, to know which of an audio's plays is oldest.
     started: f64,
@@ -583,6 +583,15 @@ fn follow_volumes(
     for (p, mut sink) in &mut playing {
         let level = p.loudness * volumes.of(p.category) * ducked(p.category, duck);
         sink.set_volume(Volume::Linear(level));
+    }
+}
+
+/// Stops every line of speech playing.
+pub(crate) fn hush_speech(mut commands: Commands, playing: Query<(Entity, &Playing)>) {
+    for (e, p) in &playing {
+        if p.category == AudioCategory::Speech {
+            commands.entity(e).try_despawn();
+        }
     }
 }
 
