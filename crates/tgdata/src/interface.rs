@@ -180,6 +180,12 @@ impl GameData {
         }
     }
 
+    /// Each letterbox bar's share of the screen's height, none where the
+    /// settings don't say.
+    pub fn letterbox_height_ratio(&self) -> f32 {
+        self.avar(|v| v.letterbox_height_ratio).unwrap_or(0.0)
+    }
+
     /// Whether the elapsed game time is shown as the options start.
     pub fn shows_elapsed_game_time(&self) -> bool {
         self.uvar(|v| v.view_show_elapsed_game_time)
