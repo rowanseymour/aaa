@@ -651,3 +651,13 @@ asked = 2026-11-16
 q = '''When exactly `KingdomDropDown`, `DisplayBannerPanel` and `Subtitles` show.'''
 by = "analysis"
 asked = 2026-11-16
+
+[[open]]
+q = '''How many pixels a line is `small_bold` (Arial bold) at 16 pixels high: 19 with its shadow fits the tooltip frames, but a capture with two title-font lines, or a measurement on Windows, would settle it.'''
+by = "analysis"
+asked = 2026-11-27
+
+[[open]]
+q = '''Does the tooltip label's `T = 1` move the text down by a layout unit inside the padding? A close look at where the first line's glyphs sit in a capture would settle it.'''
+by = "analysis"
+asked = 2026-11-27
