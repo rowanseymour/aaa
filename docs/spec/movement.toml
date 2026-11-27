@@ -542,7 +542,22 @@ title = "Arriving"
 [[topic.rule]]
 id = "arrival-check"
 tags = ["code"]
-text = '''When a unit has no route left it stops dead and checks where it is. It has arrived if it is within 0.5 of its destination, or within 0.1 on a move that needs exact arrival: going to another actor, to a spot of its own to unpack, or any move whose destination is already within 0.5 of the unit when the move starts. On some moves to another actor, being within 0.1 of that actor's outline also counts. It is not moved onto the spot.'''
+text = '''When a unit has no route left it stops dead and checks where it is. It has arrived if it is within 0.5 of its destination, or within 0.1 on a move that needs exact arrival (below), or any move whose destination is already within 0.5 of the unit when the move starts. It is not moved onto the spot.'''
+
+[[topic.rule]]
+id = "exact-arrival-moves"
+tags = ["code"]
+text = '''
+These are the moves a unit makes on its own that need exact arrival:
+- going to another thing: a man's approach to the target of his attack (until he's in range, [combat](combat.toml#attack-orders)), a man walking to the thing he repairs, a member that has fallen out of its regiment heading back to it, and a unit in no regiment ordered to move onto a thing it doesn't attack;
+- going to a spot of its own: a truck to the spot it unpacks on ([Unpacking after a move](#unpacking-after-a-move)), and a unit just recruited walking out to its place by the building, or to the free spot it's moved to when that place is taken.
+A regiment's move never does, whether to a spot or onto a thing: the regiment arrives within 0.5, and its members, following its route or keeping their places, within 0.5 as well.
+'''
+
+[[topic.rule]]
+id = "arrival-by-outline"
+tags = ["code"]
+text = '''Going to another thing that blocks tiles (`blocking`, such as a building), a unit has also arrived once its outline comes within 0.1 of that thing's outline; for anything else only its position counts.'''
 
 [[topic.rule]]
 id = "replan-if-not-arrived"
@@ -615,7 +630,23 @@ under = "Moves that can't be made"
 [[topic.rule]]
 id = "map-areas"
 tags = ["code"]
-text = '''The map is divided into areas, each made of tiles of one kind: tiles land things may stand on, water, or ground closed to everything. Areas of the same kind join where they share a tile edge; areas of different kinds never join. Things on the map, buildings included, play no part. The areas are worked out when a map is prepared and kept with it.'''
+text = '''The map is divided into areas, each a block of tiles of one kind: tiles land things may stand on, water, or ground closed to everything. Areas of the same kind join where they share a tile edge; areas of different kinds never join. Things on the map, buildings included, play no part. The areas are worked out when a map is prepared and kept with it.'''
+
+[[topic.rule]]
+id = "how-areas-are-drawn"
+tags = ["code", "data"]
+text = '''
+How the areas are drawn, all in tiles (SVars):
+- The map is covered with rectangles, each of one kind of tile. Squares are tried from `StaticMapStartingSquareSize` (10) a side downwards, each next size three quarters of the last, rounded down (`StaticMapFastSquareReductionMult` 3 over `StaticMapFastSquareReductionDiv` 4: 10, 7, 5, 3, 2, 1), going down each column of the map from the left. Wherever a square of that size lies wholly on uncovered tiles of one kind, it's grown a column to the right and a row downwards at a time, each way until the next column or row would take in a tile of another kind, one already covered, or go off the map.
+- Each grown rectangle is cut into equal pieces, as near as whole tiles allow, none more than W along a side: W = `StaticMapMaxRectangleWidth` (12) × (map width ÷ `StaticMapBaseMapWidth` (64)) to the power `StaticMapMaxRectangleWidthExp` (0.3333), rounded, the map width being the mean of its width and height. So W is 12 on a 64-tile map, 15 on 128 and 19 on 256.
+- A piece of at least `StaticMapMinRegionSize` (9) tiles and at least `StaticMapMinRegionWidth` (3) along each side is an area of its own. A smaller one joins the neighbouring area of its kind it shares the most edge with (on a tie, the smaller area), passing over areas of more than `StaticMapMaxRegionSizeForExpansion` (1000) tiles; with none to join, it's an area of its own.
+- An area's centre is the middle of its tiles.
+'''
+
+[[topic.rule]]
+id = "open-land-areas"
+tags = ["code", "data"]
+text = '''So open land is cut into squares of about W tiles a side, and only a coast, a mountain edge or the map's own edge makes them smaller or out of line.'''
 
 [[topic.rule]]
 id = "no-area-chain"
@@ -630,7 +661,12 @@ text = '''So for a land regiment the move fails when its destination is land it 
 [[topic.rule]]
 id = "area-chain-limit"
 tags = ["code"]
-text = '''A chain longer than 254 areas is cut short at the area reached that is nearest the destination, and the move heads there instead. If that nearest area is the unit's own, there is no route and the move fails at once.'''
+text = '''A chain longer than 254 areas is cut short at the area reached that is nearest the destination, and the move heads there instead (below). If that nearest area is the unit's own, there is no route and the move fails at once. On open land a chain crosses one area every W tiles or so, so even corner to corner of a 256-tile map it's under 30 areas: the cut needs a chain winding through hundreds of small areas, which no stock map has.'''
+
+[[topic.rule]]
+id = "area-stages"
+tags = ["code"]
+text = '''A move with a chain of areas goes in stages. Each stage heads for the centre of the first area along the chain, after the unit's own, that a straight line from the unit can't reach without crossing a tile closed to it, passing over areas whose centre has a thing on it; with no such area, it heads for the destination (for a cut chain, the end of the cut chain is no stopping point then). The centre is first made a spot the unit could stand on, as the destination is ([Where the move is aimed](#where-the-move-is-aimed)); if none is found there's no route and the move fails. The stage is done once the unit stands in that area, and it plans the next one from there.'''
 
 [[topic.rule]]
 id = "region-path-planner-switch"
@@ -719,7 +755,7 @@ text = '''An unpack order to a regiment sends the regiment to the ordered spot f
 [[topic.rule]]
 id = "unpack-on-arrival"
 tags = ["code"]
-text = '''Once the regiment has arrived (within 0.5, above), the member in its layout's `PrimarySlot` (the truck, which leads whenever that slot is filled) unpacks where it stands: the building goes at the truck's own position less its `packed_position_offset` (0, 0 on every stock truck), not the ordered spot, facing as the order says (see [buildings](buildings.toml#packing-and-unpacking)). With that slot empty, nothing unpacks.'''
+text = '''Once the regiment has arrived (within 0.5, above), the member in its layout's `PrimarySlot` (the truck, which leads whenever that slot is filled) unpacks where it stands: the building goes at the truck's own position less its `packed_position_offset` (0, 0 on every stock truck), not the ordered spot, facing as the order says (see [buildings](buildings.toml#packing-and-unpacking)). With that slot empty, nothing unpacks and the message comes at once (below).'''
 
 [[topic.rule]]
 id = "unpack-room-only"
@@ -729,7 +765,7 @@ text = '''Nothing about the truck's facing, or its trailer, is tested. The only 
 [[topic.rule]]
 id = "cannot-unpack"
 tags = ["code"]
-text = '''At each of its looks while the truck is neither unpacking nor unpacked, the regiment tells it to unpack, up to twice; at the look after the second, the player is told "Cannot unpack" with the truck's name (string `tai_error_unpack`) and the order is dropped. So a building with no room is asked for twice. A truck that refuses the order outright gives the message at once.'''
+text = '''At each of its looks while the truck is neither unpacking nor unpacked, the regiment tells it to unpack, up to twice; at the look after the second, the player is told "Cannot unpack" with the truck's name (string `tai_error_unpack`) and the order is dropped. So a building with no room is asked for twice. The message comes at once instead, with no try, when the member in the truck's place can't take an unpack order at that look: the truck was lost on the way, so the regiment is led by a unit that isn't a truck, or the truck can't be ordered at all just then.'''
 
 [[topic.rule]]
 id = "unpack-move-given-up"
@@ -739,7 +775,7 @@ text = '''If the regiment gives up the move (above), the same message is shown, 
 [[topic.rule]]
 id = "lone-truck-unpacks"
 tags = ["code"]
-text = '''A truck in no regiment unpacks where it stands at once, without moving; with no room, the same message.'''
+text = '''A truck in no regiment drives to the ordered spot itself, needing exact arrival (above), unless it's already within 0.1 of it. Once there it unpacks where it stands, once: with no room, the same message at once and no second try. If it can't get there, the same message and it stays a truck.'''
 
 [[topic]]
 title = "Explore orders"
@@ -966,6 +1002,6 @@ by = "analysis"
 asked = 2026-11-27
 
 [[open]]
-q = '''Which moves to another actor count as arrived on coming within 0.1 of that actor's outline, rather than of its position?'''
+q = '''A stage of a move over areas is also counted done on one further test besides the unit standing in that area; what is it?'''
 by = "analysis"
 asked = 2026-11-27
