@@ -929,6 +929,7 @@ mod tests {
         let mut w = grouped();
         let order = moves([[9.0, 50.0], [11.0, 30.0]]);
         w.apply(7, order).unwrap();
+        w.plan_pending();
         assert_eq!(w.organizations[0].group, w.organizations[1].group);
         run(&mut w, 2.0);
         // Half as far to go, it goes at half the speed.
@@ -1358,6 +1359,7 @@ mod tests {
         let mut w = grouped();
         w.sides.computers.insert(7, "computer".into());
         w.apply(7, moves([[9.0, 50.0], [11.0, 30.0]])).unwrap();
+        w.plan_pending();
         let id = w.organizations[0].group.unwrap();
         assert!(w.group(id).times_all);
         w.organizations[1].taking_part = false;

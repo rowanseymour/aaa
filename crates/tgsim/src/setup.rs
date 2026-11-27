@@ -291,6 +291,7 @@ impl World {
             tries: 0,
             sent: 0,
             hand_out: false,
+            pending: None,
             targeted: false,
             given_speed: f32::INFINITY,
             pacer: organization.primary,

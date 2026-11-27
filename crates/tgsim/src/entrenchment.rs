@@ -163,8 +163,11 @@ mod tests {
         w.morale_effects(0).map(|e| e.loss_rate).sum()
     }
 
+    /// Gives `command`, planned at once rather than at the regiment's
+    /// next look.
     fn order(w: &mut crate::World, command: Command) {
         w.apply(1, command).unwrap();
+        w.plan_pending();
     }
 
     #[test]
@@ -208,6 +211,24 @@ mod tests {
         w.grant(1, Id::from("spades"));
         run(&mut w, 25.0);
         assert!(w.entrenched(0));
+    }
+
+    #[test]
+    fn a_move_stays_entrenched_until_it_plans_and_for_good_if_that_fails() {
+        let mut w = trench();
+        for y in 0..w.pathing.side() as i32 {
+            w.pathing.set(tgmap::Tile::new(10, y), tgmap::Domain::Naval);
+        }
+        run(&mut w, 31.0);
+        let across = Command::Move {
+            organization: 0,
+            to: [30.0, 10.0],
+        };
+        w.apply(1, across).unwrap();
+        // Until its look it's as it was; then it finds no way and stays so.
+        assert!(w.entrenched(0) && w.organizations[0].pending.is_some());
+        run(&mut w, 2.0);
+        assert!(w.entrenched(0) && !w.underway(0));
     }
 
     #[test]
@@ -268,6 +289,7 @@ mod tests {
         assert_eq!(w.organizations[0].order, crate::Order::Move);
         // One sent with a facing turns to it all the same.
         w.send(0, [30.0, 10.0], [0.0, 1.0]);
+        w.plan_pending();
         assert_eq!(w.organizations[0].facing, [0.0, 1.0]);
         assert!(w.entrenched(0));
         // Into the water it heads for the near shore, which ends it.

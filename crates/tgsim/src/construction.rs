@@ -282,8 +282,14 @@ impl World {
             if self.underway(r) && off <= PURSUIT_DRIFT * squared_distance(here, to) {
                 continue;
             }
+            // With no way there, or sent off and going nowhere, it can't get
+            // any nearer.
+            let leader = self.pacer(r).map(|p| self.organizations[r].units[p]);
+            if leader.is_some_and(|l| self.no_route(l, to)) {
+                self.organizations[r].mending = None;
+                continue;
+            }
             self.send(r, to, facing);
-            // Sent off and going nowhere, it can't get any nearer.
             if !self.underway(r) {
                 self.organizations[r].mending = None;
             }

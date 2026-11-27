@@ -416,6 +416,9 @@ pub struct Organization {
     /// Whether it hands its members fresh routes at its next look, for an
     /// order given while it was on its way.
     pub hand_out: bool,
+    /// A move it was given while standing, which it plans at its next look
+    /// and until then leaves it as it was.
+    pub pending: Option<Pending>,
     /// Whether, when it last checked, another regiment was engaging it
     /// without its engaging back.
     pub targeted: bool,
@@ -615,6 +618,16 @@ pub(crate) fn next_chance(rng: &mut u64) -> f32 {
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// A move given to a standing organization, waiting for its next look.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pending {
+    pub to: [f32; 2],
+    /// The way to face until it has a route to face along, and whether to
+    /// turn to it once there.
+    pub facing: [f32; 2],
+    pub ordered: bool,
 }
 
 /// The leg of its path a unit is driving, to its next waypoint.
@@ -1403,7 +1416,8 @@ impl World {
     /// fighting on the way, where it carries on to after.
     pub fn destination(&self, organization: usize) -> [f32; 2] {
         let r = &self.organizations[organization];
-        r.resume.map_or(r.position, |(to, _)| to)
+        let sent = r.pending.map(|p| p.to).unwrap_or(r.position);
+        r.resume.map_or(sent, |(to, _)| to)
     }
 
     /// Whether an organization is still on its way somewhere: moving, or
@@ -1412,6 +1426,7 @@ impl World {
         let r = &self.organizations[organization];
         r.resume.is_some()
             || r.hand_out
+            || r.pending.is_some()
             || self.survivors(organization).any(|u| self.units[u].moving())
     }
 
@@ -1607,7 +1622,7 @@ digest!(Organization {
     id, template, number, owner, units, speed, position, banner, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombard, bombarded, properties,
-    guard, arriving, terrain_properties, settled, travelling, route_end, route, heading, tries, sent, hand_out, targeted, given_speed, pacer, checked_as, stage, resend_places, turn_to, entrenched, morale, morale_max,
+    guard, arriving, terrain_properties, settled, travelling, route_end, route, heading, tries, sent, hand_out, pending, targeted, given_speed, pacer, checked_as, stage, resend_places, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
     chased, follow, build, mending, explore, queue,
 } skip {
@@ -1615,6 +1630,12 @@ digest!(Organization {
     formations, unpacks, primary,
     // Follows from where it stands.
     terrain,
+});
+
+digest!(Pending {
+    to,
+    facing,
+    ordered
 });
 
 digest!(Guard {
@@ -2088,7 +2109,7 @@ mod tests {
         let played = format!("{}\n{}", snapshot(&battle), snapshot(&towing));
         assert_eq!(
             fingerprint(&[&battle, &towing]),
-            0x9343_43d0_06f7_5aa2,
+            0x040a_7cad_e832_47d2,
             "{played}"
         );
     }

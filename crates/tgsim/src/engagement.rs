@@ -41,6 +41,7 @@ impl World {
             if !matches!(organization.order, Order::Move | Order::Pursue(_))
                 && organization.engaged.is_empty()
                 && !organization.hand_out
+                && organization.pending.is_none()
                 && !self.survivors(r).any(|u| self.units[u].moving())
             {
                 let before = organization.current_formation();
@@ -395,13 +396,14 @@ impl World {
         let organization = &mut self.organizations[r];
         // A pursuit takes up its enemy afresh instead.
         if !matches!(organization.order, Order::Pursue(_)) {
-            organization.resume = Some((organization.position, organization.facing));
+            let sent = organization.pending.map_or(organization.position, |p| p.to);
+            organization.resume = Some((sent, organization.facing));
         }
         let facing = normalised([there[0] - here[0], there[1] - here[1]]);
         let facing = facing.unwrap_or(organization.facing);
         // It stops at once, not at its next look as for a new order.
         self.drop_route(r);
-        self.send(r, here, facing);
+        self.send_now(r, here, facing);
     }
 
     /// Gives each member of an organization that's just engaged a moment of
@@ -508,6 +510,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         run(&mut w, 9.5);
         assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
         assert!(!w.units[0].moving());
@@ -532,6 +535,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         // Each in the other's range, edge to edge, from y 12.1, after 1s.
         run(&mut w, 2.0);
         assert_eq!(w.organizations[0].engaged, [Piece::Building(0)]);
@@ -682,6 +686,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         assert_eq!(w.organizations[0].order, Order::Pursue(1));
         assert_eq!(w.organizations[0].current_formation(), 1);
         // Away to 38 by 4s; in the tiles its control range of 18 takes in
@@ -694,6 +699,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         run(&mut w, 5.5);
         assert!(w.organizations[0].engaged.is_empty());
         assert!(w.units[0].moving());
@@ -906,6 +912,7 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         // Engaged by what fired on it, it goes after its own enemy first,
         // not yet among what it's engaged with, so picked afresh...
         run(&mut w, 1.0);
@@ -1035,8 +1042,10 @@ mod tests {
             },
         )
         .unwrap();
+        w.plan_pending();
         run(&mut w, 1.0);
         w.apply(7, Command::Stop { organization: 0 }).unwrap();
+        w.plan_pending();
         run(&mut w, 5.0);
         assert!(near(w.organizations[0].position, [10.0, 12.0]));
         assert!(near(w.units[0].position, [9.0, 12.0]));

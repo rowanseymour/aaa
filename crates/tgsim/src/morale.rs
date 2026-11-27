@@ -1260,6 +1260,8 @@ mod tests {
             "{:?}",
             w.organizations[0].mind
         );
+        // Off at its next look.
+        w.plan_pending();
         let to = w.units[0].goal.expect("the leader runs");
         let goal = w.units[u].goal.expect("the second runs too");
         let off = [goal[0] - to[0], goal[1] - to[1]];
