@@ -1511,6 +1511,8 @@ pub struct SVars {
     pub active_construction_timeout: Option<f32>,
     /// Whether a side's objectives are kept in order of their text.
     pub sort_objectives: Option<bool>,
+    /// The fastest a scripted scene plays, as a power of two of normal.
+    pub game_speed_film_max: Option<f32>,
     /// The share of a region a side has to see for computer players to
     /// count it as just explored.
     #[serde(rename = "ResetWhiteFogTimerPecent")]
@@ -1894,6 +1896,7 @@ pub struct Vfx {
     pub attached_scale: Option<f32>,
     pub never_discard_temporary: Option<bool>,
     pub nightonly: Option<bool>,
+    pub show_in_cutscene: Option<bool>,
     pub constant_screen_size: Option<bool>,
     pub force_real_time: Option<bool>,
     pub gyroscope: Option<bool>,
@@ -2011,6 +2014,8 @@ pub struct Audio {
     pub delay_ms: Option<[f32; 2]>,
     /// Seconds to fade in and out.
     pub fade_time_s: Option<[f32; 2]>,
+    /// Seconds it plays for, as noted for the editor.
+    pub ldf_length: Option<f32>,
     pub subtitle: Option<Subtitle>,
 }
 

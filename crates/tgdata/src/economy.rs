@@ -476,6 +476,12 @@ impl GameData {
         self.kept("svars", || self.read_svars())
     }
 
+    /// How many times as fast a scripted scene plays while it's skipped,
+    /// where the settings say.
+    pub fn film_speed(&self) -> Option<f32> {
+        self.svar(|v| v.game_speed_film_max).map(f32::exp2)
+    }
+
     /// The first of the tuning settings that `of` finds.
     pub(crate) fn svar<T>(&self, of: impl Fn(&defs::SVars) -> Option<T>) -> Option<T> {
         self.svars().iter().find_map(of)

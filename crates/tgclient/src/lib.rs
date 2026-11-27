@@ -757,7 +757,7 @@ pub fn run(program: Program) -> ExitCode {
                 keys::send
                     .run_if(keys_free)
                     .run_if(keys_heard)
-                    .run_if(curtains::interface_up),
+                    .run_if(curtains::input_free),
                 (
                     special_ops::act,
                     idle::cycle,
@@ -884,7 +884,7 @@ fn takes_input(
     keys_heard(console, menu)
         && displays::closed(Some(displays))
         && loading.is_empty()
-        && curtains::interface_up(sim, fixed)
+        && curtains::input_free(sim, fixed)
 }
 
 /// Whether keys reach the match's hotkeys: neither the console nor the

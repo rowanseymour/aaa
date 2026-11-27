@@ -19,7 +19,7 @@ use crate::{Drawn, Loaded, Screen, Sim};
 use super::follow::{Fading, fade_in, opacity};
 use super::notice::{RAISE, fighter};
 use super::place::{Place, upright};
-use super::{Effect, Effects, Follow, NightOnly, Source, Stopped, Subject, Tied, tie};
+use super::{Effect, Effects, Follow, NightOnly, NotInFilm, Source, Stopped, Subject, Tied, tie};
 
 /// On an effect that sinks a building's view, the view, for as long as the
 /// effect lasts.
@@ -218,8 +218,20 @@ pub(super) fn play(
             continue;
         }
         // One for the night is still made by day, hidden, so as to show
-        // if the sun goes down.
-        let nightly = (NightOnly, visible(effects.night));
+        // if the sun goes down; and one kept out of scripted scenes is
+        // made during one, to show once it's over.
+        let shows = effects.shows(vfx.night_only, !vfx.in_cutscenes);
+        let gate = |entity: &mut EntityCommands| {
+            if vfx.night_only {
+                entity.insert(NightOnly);
+            }
+            if !vfx.in_cutscenes {
+                entity.insert(NotInFilm);
+            }
+            if vfx.night_only || !vfx.in_cutscenes {
+                entity.insert(visible(shows));
+            }
+        };
         if !fits(sim, &cue.targets, fired_by, p.target) {
             continue;
         }
@@ -307,9 +319,7 @@ pub(super) fn play(
                 },
                 DespawnOnExit(Screen::Match),
             ));
-            if vfx.night_only {
-                entity.insert(nightly);
-            }
+            gate(&mut entity);
             if decal.fade != [0.0; 2] {
                 entity.insert(Fading {
                     decal: decal.clone(),
@@ -346,9 +356,7 @@ pub(super) fn play(
             },
             DespawnOnExit(Screen::Match),
         ));
-        if vfx.night_only {
-            entity.insert(nightly);
-        }
+        gate(&mut entity);
         if let Some(rate) = rate(&vfx, cue, length) {
             entity.insert(Rate(rate));
         }

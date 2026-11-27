@@ -1031,6 +1031,9 @@ pub mod layer {
     /// What sits on the edges of the interface's panels, such as the clock
     /// and the panels' buttons.
     pub const HUD_TOP: i32 = 60;
+    /// What takes the clicks meant for the interface while a scripted
+    /// scene plays.
+    pub const FILM: i32 = 90;
     /// A menu over the match, on a [`scrim`](super::scrim).
     pub const DIALOG: i32 = 100;
     /// A page over the whole screen, such as the options or the loading

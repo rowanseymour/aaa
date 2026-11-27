@@ -11,7 +11,7 @@ use crate::ui::visible;
 use crate::views::BuildingView;
 
 use super::play::on_screen;
-use super::{Effect, Effects, Follow, NightOnly, Stopped, Subject, Tied};
+use super::{Effect, Effects, Follow, NightOnly, NotInFilm, Stopped, Subject, Tied};
 
 /// A picture laid on the ground that takes time to show or to go.
 #[derive(Component)]
@@ -57,6 +57,7 @@ pub(super) type Playing<'a> = (
     Option<&'a mut Fading>,
     Has<Stopped>,
     Has<NightOnly>,
+    Has<NotInFilm>,
     &'a mut Transform,
     &'a mut Visibility,
 );
@@ -84,10 +85,20 @@ pub(super) fn follow(
         (anchors.get(anchor).ok())
             .filter(|(_, _, b)| b.is_none_or(|v| !sim.0.buildings[v.building].gone()))
     };
-    for (e, mut effect, follow, tied, fading, stopped, nightly, mut transform, mut visibility) in
-        &mut effects
+    for (
+        e,
+        mut effect,
+        follow,
+        tied,
+        fading,
+        stopped,
+        nightly,
+        unfilmed,
+        mut transform,
+        mut visibility,
+    ) in &mut effects
     {
-        let with = |shown: &Visibility| shown_with(*shown, nightly, lit.night);
+        let with = |shown: &Visibility| shown_with(*shown, lit.shows(nightly, unfilmed));
         if effect.ends.is_some_and(|t| t <= now) {
             commands.entity(e).despawn();
             continue;
@@ -145,26 +156,36 @@ pub(super) fn follow(
     }
 }
 
-/// Shows effects for the night only while it's night. Those shown with
-/// what they're on are left to `follow`.
-pub(super) fn show_by_night(
-    effects: Res<Effects>,
-    mut nightly: Query<(&Effect, &mut Visibility, Has<Tied>), With<NightOnly>>,
-) {
-    for (effect, mut visibility, tied) in &mut nightly {
+/// The effects shown only at times.
+type AtTimes = Or<(With<NightOnly>, With<NotInFilm>)>;
+
+/// What [`show_by_time`] looks at of an effect shown only at times.
+type Gated = (
+    &'static Effect,
+    &'static mut Visibility,
+    Has<Tied>,
+    Has<NightOnly>,
+    Has<NotInFilm>,
+);
+
+/// Shows effects for the night only while it's night, and those kept out
+/// of scripted scenes only while none plays. Those shown with what
+/// they're on are left to `follow`.
+pub(super) fn show_by_time(effects: Res<Effects>, mut gated: Query<Gated, AtTimes>) {
+    for (effect, mut visibility, tied, nightly, unfilmed) in &mut gated {
         if tied || matches!(effect.by, Some(Subject::Scenery(_))) {
             continue;
         }
-        visibility.set_if_neq(visible(effects.night));
+        visibility.set_if_neq(visible(effects.shows(nightly, unfilmed)));
     }
 }
 
 /// How an effect shows with what it's on, `shown` as that is: hidden with
-/// it, and by day if it's `nightly`.
-pub(super) fn shown_with(shown: Visibility, nightly: bool, night: bool) -> Visibility {
+/// it, and while it isn't to show at this time of day or in this scene.
+pub(super) fn shown_with(shown: Visibility, now: bool) -> Visibility {
     match shown {
         Visibility::Hidden => Visibility::Hidden,
-        _ if nightly && !night => Visibility::Hidden,
+        _ if !now => Visibility::Hidden,
         _ => Visibility::Inherited,
     }
 }

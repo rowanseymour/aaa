@@ -143,6 +143,9 @@ pub struct AudioSubtitle {
     pub text: String,
     /// Seconds it shows for, 0 for as long as the audio's file plays.
     pub duration: f32,
+    /// Seconds the audio is noted to play for, which it shows for when the
+    /// audio can't be played.
+    pub noted: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -467,6 +470,7 @@ fn audio(
             Some(AudioSubtitle {
                 text: s.text.clone()?,
                 duration: s.duration.unwrap_or(0.0),
+                noted: a.ldf_length,
             })
         }),
     })

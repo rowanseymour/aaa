@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use tgsim::Speech;
 
 use crate::sound::Sounds;
-use crate::{Loaded, Screen, Sim};
+use crate::{Loaded, Orders, Screen, Sim};
 
 pub(crate) struct SpeechPlugin;
 
@@ -15,9 +15,11 @@ impl Plugin for SpeechPlugin {
         })
         .add_systems(
             Update,
-            speak
-                .run_if(in_state(Screen::Match))
-                .run_if(resource_exists::<Heard>),
+            (
+                speak.run_if(resource_exists::<Heard>),
+                crate::sound::hush_speech.run_if(hurried),
+            )
+                .run_if(in_state(Screen::Match)),
         );
     }
 }
@@ -35,9 +37,19 @@ fn due(new: &[Speech], ticks: u64, timeout: f32) -> Option<&Speech> {
     (waited <= timeout).then_some(line)
 }
 
+/// Whether a scripted scene is being hurried on under the letterbox,
+/// when speech isn't played.
+fn hurried(orders: Option<Res<Orders>>, sim: Option<Res<Sim>>, fixed: Res<Time<Fixed>>) -> bool {
+    let letterboxed = sim.is_some_and(|s| crate::curtains::hides_interface(&s, &fixed));
+    orders.is_some_and(|o| o.skipping()) && letterboxed
+}
+
+#[allow(clippy::too_many_arguments)]
 fn speak(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
+    orders: Option<Res<Orders>>,
+    fixed: Res<Time<Fixed>>,
     time: Res<Time>,
     mut heard: ResMut<Heard>,
     mut sounds: ResMut<Sounds>,
@@ -46,10 +58,18 @@ fn speak(
     let lines = &sim.0.triggers.speech;
     let new = lines.get(heard.0..).unwrap_or_default();
     heard.0 = lines.len();
-    if let Some(line) = due(new, sim.0.ticks, loaded.game.audio_drop_timeout()) {
+    let Some(line) = due(new, sim.0.ticks, loaded.game.audio_drop_timeout()) else {
+        return;
+    };
+    let skipping = orders.is_some_and(|o| o.skipping());
+    let played = !(skipping && crate::curtains::hides_interface(&sim, &fixed));
+    if played {
         sounds.speak(&time, &line.audio);
-        started.write(crate::subtitles::Started(line.audio.clone()));
     }
+    started.write(crate::subtitles::Started {
+        audio: line.audio.clone(),
+        played,
+    });
 }
 
 #[cfg(test)]
