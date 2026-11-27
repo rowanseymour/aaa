@@ -8,19 +8,22 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::Button;
 
-use super::actions::GAP;
+use super::actions::PAD;
 use crate::Loaded;
 use crate::control_groups::{GROUPS, GroupButton, Shown, Strip, select_group};
 use crate::keys::Bindings;
 use crate::ui::{self, Blocks, Click, Edge, Font, ImageCache, Ink, Surface, label};
 
-/// A slot's side, and how far in its picture is drawn.
+/// A slot's side, and how far in its picture is drawn from the sides
+/// away from the window's edge.
 const SLOT: f32 = 36.0;
 const INSET: f32 = 2.0;
 
-/// How tall and wide the strip is, for what goes under and beside it.
-pub const HEIGHT: f32 = SLOT + 2.0 * GAP;
-pub const WIDTH: f32 = GROUPS as f32 * SLOT + 2.0 * GAP;
+/// How tall and wide the strip is, padded as the action palette is but
+/// for its top, where the slots run off the window's edge, for what goes
+/// under and beside it.
+pub const HEIGHT: f32 = SLOT + PAD;
+pub const WIDTH: f32 = GROUPS as f32 * SLOT + 2.0 * PAD;
 
 /// The widest the tooltip under the strip is before its words wrap.
 const TIP_WIDTH: f32 = 300.0;
@@ -69,7 +72,10 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                     position_type: PositionType::Absolute,
                     top: px(0),
                     left: px(at.x),
-                    padding: UiRect::all(px(GAP)),
+                    padding: UiRect {
+                        top: px(0),
+                        ..UiRect::all(px(PAD))
+                    },
                     ..default()
                 },
             ),
@@ -92,8 +98,12 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                             Node {
                                 width: px(SLOT),
                                 height: px(SLOT),
-                                // Square and touching, as one row of tiles.
-                                border: UiRect::all(px(1)),
+                                // Square and touching, as one row of tiles,
+                                // open to the window's edge.
+                                border: UiRect {
+                                    top: px(0),
+                                    ..UiRect::all(px(1))
+                                },
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 ..default()
@@ -108,9 +118,10 @@ pub fn spawn(mut commands: Commands, local: Res<crate::Local>, leaders: Res<crat
                             Node {
                                 position_type: PositionType::Absolute,
                                 left: px(INSET),
-                                top: px(INSET),
+                                top: px(0),
                                 right: px(INSET),
-                                bottom: px(INSET),
+                                // Square, as the slot no longer is inside.
+                                aspect_ratio: Some(1.0),
                                 ..default()
                             },
                             Visibility::Hidden,
