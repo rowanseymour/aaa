@@ -1,7 +1,7 @@
 //! Organizations taking on enemies: engaging, closing in, pursuing and
 //! breaking off.
 
-use tgmap::Zone;
+use tgmap::{Tile, Zone};
 
 use crate::supply::BEAT;
 use crate::{
@@ -227,7 +227,16 @@ impl World {
             if on_course || stuck {
                 continue;
             }
-            let way = self.way(u, goal);
+            let mut way = self.way(u, goal);
+            // Standing in the open tile its way to a thing that blocks tiles
+            // ends in, it goes straight on at the thing, until in reach.
+            let blocks = match t {
+                Target::Building(b) => self.buildings[b].obstacle.is_some(),
+                Target::Unit(_) => false,
+            };
+            if way.is_empty() && blocks && !self.pathing.passable(Tile::at(goal), unit.domain) {
+                way = vec![goal];
+            }
             let unit = &mut self.units[u];
             unit.unreached = way.is_empty().then_some(Unreached {
                 target: t,
