@@ -45,6 +45,8 @@ pub struct Triggers {
     pub cutscene: bool,
     /// The lines of speech triggers have asked for, oldest first.
     pub speech: Vec<Speech>,
+    /// The banner text triggers have put up, oldest first.
+    pub banners: Vec<BannerText>,
     /// The letterbox and screen fade, once a trigger has switched them.
     pub letterbox: Option<crate::Slide>,
     pub screenfade: Option<crate::Slide>,
@@ -139,6 +141,19 @@ pub struct Speech {
 
 crate::hash::digest!(Speech { audio, at });
 
+/// Banner text a trigger put up for every player.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BannerText {
+    /// The map's string, by id, e.g. `trigger_63_element_2`.
+    pub text: String,
+    /// Seconds it stays before fading, in real time; below 0 for ever.
+    pub seconds: f32,
+    /// The tick it was put up.
+    pub at: u64,
+}
+
+crate::hash::digest!(BannerText { text, seconds, at });
+
 /// A trigger turning the sun's colours to a sun definition's, moving from
 /// whatever they show at `at` over `seconds` of game time.
 #[derive(Debug, Clone, PartialEq)]
@@ -179,6 +194,7 @@ impl Triggers {
             views: Vec::new(),
             cutscene: false,
             speech: Vec::new(),
+            banners: Vec::new(),
             letterbox: None,
             screenfade: None,
             objectives: Arc::default(),
@@ -213,6 +229,7 @@ impl crate::hash::Digest for Triggers {
         self.views.digest(h);
         self.cutscene.digest(h);
         self.speech.digest(h);
+        self.banners.digest(h);
         self.letterbox.digest(h);
         self.screenfade.digest(h);
         self.event_kingdom.digest(h);
@@ -299,6 +316,7 @@ const HANDLED: &[&str] = &[
     "global_toggle_letterbox",
     "global_toggle_screenfade",
     "play_speech",
+    "display_banner_text_fade",
     "actor_moves_to_location",
     "actor_performs_command_on_actor",
     "actor_performs_command_at_location",
@@ -955,6 +973,18 @@ impl World {
                 }
                 true
             }
+            "display_banner_text_fade" => match name(p.first()) {
+                Some(text) => {
+                    let banner = BannerText {
+                        text: text.to_string(),
+                        seconds: self.number(p.get(1)).unwrap_or(0.0),
+                        at: self.ticks,
+                    };
+                    self.triggers.banners.push(banner);
+                    true
+                }
+                None => false,
+            },
             "play_speech" => match name(p.first()) {
                 Some(line) if !line.is_empty() => {
                     let at = self.ticks;
@@ -1921,6 +1951,34 @@ mod tests {
         run(&mut w, 0.5);
         let asked: Vec<_> = w.triggers.speech.iter().map(|s| s.audio.as_str()).collect();
         assert_eq!(asked, ["allies01_intro"], "a line needs an id");
+    }
+
+    #[test]
+    fn a_trigger_puts_up_banner_text() {
+        let banner = |id: &str, seconds| {
+            let id = parameter(
+                "ma_localized_string",
+                "mi_localized_string",
+                Value::String(id.into()),
+            );
+            element("display_banner_text_fade", vec![id, int(seconds)])
+        };
+        let mut w = with(
+            pool(),
+            vec![trigger(
+                1,
+                true,
+                false,
+                vec![],
+                vec![banner("trigger_63_element_2", 8)],
+            )],
+            &[],
+        );
+        run(&mut w, 0.5);
+        let up: Vec<_> = (w.triggers.banners.iter())
+            .map(|b| (b.text.as_str(), b.seconds))
+            .collect();
+        assert_eq!(up, [("trigger_63_element_2", 8.0)]);
     }
 
     #[test]

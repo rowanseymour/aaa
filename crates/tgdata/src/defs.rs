@@ -1743,6 +1743,8 @@ pub struct AVars {
     pub dynamic_shadow_sun_modulate: Option<f32>,
     /// Each letterbox bar's share of the screen's height.
     pub letterbox_height_ratio: Option<f32>,
+    /// Milliseconds banner text takes to fade out.
+    pub banner_fade_duration_ms: Option<f32>,
     /// What streamed audio plays in place of a file the archives don't have.
     pub default_audio_streaming_resource: Option<String>,
     /// The music that plays nothing, for stopping music.

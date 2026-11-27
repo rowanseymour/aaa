@@ -32,13 +32,18 @@ impl Plugin for SubtitlesPlugin {
             .add_systems(OnEnter(Screen::Match), spawn)
             .add_systems(
                 Update,
-                (start, show)
+                (start, show.in_set(Shown))
                     .chain()
                     .run_if(in_state(Screen::Match))
                     .run_if(resource_exists::<Panel>),
             );
     }
 }
+
+/// Where the subtitle showing is worked out, and so what it has the
+/// banner show.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct Shown;
 
 /// A line of speech started playing, or would have but for being
 /// `played`.
@@ -54,6 +59,9 @@ struct Panel {
     width: f32,
     height: f32,
     font: String,
+    /// The banner's label, which a subtitle is copied to outside the
+    /// letterbox, cut to its own size: its width, height and font.
+    banner: Option<(f32, f32, String)>,
     letters: Letters,
     showing: Option<Showing>,
 }
@@ -62,6 +70,9 @@ struct Panel {
 /// has left, and whether its line is playing rather than unplayed.
 struct Showing {
     parts: Vec<Part>,
+    /// Its parts as cut for the banner, and how long it's been showing.
+    banner: Vec<Part>,
+    elapsed: f32,
     at: usize,
     left: f32,
     played: bool,
@@ -119,6 +130,19 @@ fn parts(text: &str, lines: usize, fits: impl Fn(&str) -> bool, length: f32) -> 
         last.seconds = (length - before).max(0.0);
     }
     out
+}
+
+/// The part of `parts` due `elapsed` seconds in; the last once they've
+/// all run.
+fn at(parts: &[Part], elapsed: f32) -> Option<&str> {
+    let mut until = 0.0;
+    for part in parts {
+        until += part.seconds;
+        if elapsed < until {
+            return Some(&part.text);
+        }
+    }
+    parts.last().map(|p| p.text.as_str())
 }
 
 /// Puts the panel up, empty, where the layouts have it.
@@ -193,10 +217,17 @@ fn spawn(mut commands: Commands, loaded: Res<Loaded>, mut faces: ResMut<Assets<F
         Pickable::IGNORE,
         ChildOf(holder),
     ));
+    let banner = crate::banner::layout(game).map(|(panel, label)| {
+        let at = crate::banner::label_bounds(&panel, &label);
+        let font = label.font.unwrap_or_default();
+        letters.read(game, &mut faces, &font);
+        (at.width(), at.height(), font)
+    });
     commands.insert_resource(Panel {
         width: at.width(),
         height: at.height(),
         font,
+        banner,
         letters,
         showing: None,
     });
@@ -245,15 +276,21 @@ fn start(
         warn!("{}: no length for its subtitle", audio.files.join(", "));
         return;
     };
-    let (_, line) = panel.letters.measure(&panel.font, "");
-    let lines = ((panel.height / line.max(1.0)) as usize).max(1);
-    let fits = |words: &str| panel.letters.measure(&panel.font, words).0 <= panel.width;
-    let parts = parts(&text, lines, fits, length);
-    if let Some(first) = parts.first() {
+    let cut = |width: f32, height: f32, font: &str| {
+        let (_, line) = panel.letters.measure(font, "");
+        let lines = ((height / line.max(1.0)) as usize).max(1);
+        let fits = |words: &str| panel.letters.measure(font, words).0 <= width;
+        parts(&text, lines, fits, length)
+    };
+    let shown = cut(panel.width, panel.height, &panel.font);
+    let banner = (panel.banner.as_ref()).map_or_else(Vec::new, |(w, h, font)| cut(*w, *h, font));
+    if let Some(first) = shown.first() {
         let left = first.seconds;
         let played = *played;
         panel.showing = Some(Showing {
-            parts,
+            parts: shown,
+            banner,
+            elapsed: 0.0,
             at: 0,
             left,
             played,
@@ -273,8 +310,10 @@ fn shown(log: &MessageLog) -> bool {
 /// Steps the subtitle on through its parts in real time, standing still
 /// while the match is paused, and shows the part it's at while the
 /// letterbox is up.
+#[allow(clippy::too_many_arguments)]
 fn show(
     mut panel: ResMut<Panel>,
+    mut copied: ResMut<crate::banner::Copied>,
     log: Res<MessageLog>,
     orders: Option<Res<Orders>>,
     sim: Option<Res<Sim>>,
@@ -295,6 +334,7 @@ fn show(
         && !paused
     {
         showing.left -= real.delta_secs();
+        showing.elapsed += real.delta_secs();
         while showing.left <= 0.0 {
             showing.at += 1;
             match showing.parts.get(showing.at) {
@@ -311,6 +351,13 @@ fn show(
         panel.showing = None;
     }
     let part = panel.showing.as_ref().map(|s| s.parts[s.at].text.as_str());
+    let banner = panel
+        .showing
+        .as_ref()
+        .and_then(|s| at(&s.banner, s.elapsed));
+    if copied.0.as_deref() != banner {
+        copied.0 = banner.map(str::to_string);
+    }
     for (mut text, mut visibility) in &mut words {
         let says = part.unwrap_or_default();
         if text.0 != says {
@@ -356,6 +403,16 @@ mod tests {
         let parts = parts("Hold the line.", 3, within(40), 4.0);
         assert_eq!(texts(&parts), ["Hold the line."]);
         assert!((parts[0].seconds - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_banners_copy_shows_the_part_due_then_the_last() {
+        let cut = parts("one two three four", 1, within(7), 4.0);
+        assert_eq!(texts(&cut), ["one two", "three", "four"]);
+        assert_eq!(at(&cut, 0.0), Some("one two"));
+        assert_eq!(at(&cut, 2.5), Some("three"));
+        assert_eq!(at(&cut, 99.0), Some("four"));
+        assert_eq!(at(&[], 0.0), None);
     }
 
     #[test]

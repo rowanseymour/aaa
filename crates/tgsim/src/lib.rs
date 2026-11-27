@@ -106,7 +106,7 @@ pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
 pub use targets::TypeSlots;
 pub use tgmap::{Outcome, Player, Relation, Team};
-pub use triggers::{Counter, Speech, SunChange, Switch, Triggers};
+pub use triggers::{BannerText, Counter, Speech, SunChange, Switch, Triggers};
 pub use value::CombatMeans;
 pub use views::{Pace, Slide, View, ViewMove};
 

@@ -788,7 +788,7 @@ fn on_screen(at: Rect) -> Node {
 
 /// The skin of the viewing player's nation, which the original's panels
 /// are drawn in.
-fn skin(game: &tgdata::GameData, sim: &Sim, local: &Local) -> Option<tgdata::Skin> {
+pub(crate) fn skin(game: &tgdata::GameData, sim: &Sim, local: &Local) -> Option<tgdata::Skin> {
     let nation = (local.0)
         .and_then(|p| sim.0.sides.player(p))
         .and_then(|p| p.nation.clone())?;
