@@ -186,6 +186,11 @@ impl GameData {
         self.avar(|v| v.letterbox_height_ratio).unwrap_or(0.0)
     }
 
+    /// Seconds banner text takes to fade out once its time is up.
+    pub fn banner_fade_seconds(&self) -> f32 {
+        self.avar(|v| v.banner_fade_duration_ms).unwrap_or(1000.0) / 1000.0
+    }
+
     /// Whether the elapsed game time is shown as the options start.
     pub fn shows_elapsed_game_time(&self) -> bool {
         self.uvar(|v| v.view_show_elapsed_game_time)

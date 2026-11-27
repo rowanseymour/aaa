@@ -24,6 +24,7 @@
 
 mod actions;
 mod backdrop;
+mod banner;
 mod banners;
 mod campaigns;
 mod chat;
@@ -519,6 +520,7 @@ pub fn run(program: Program) -> ExitCode {
         .add_plugins(curtains::CurtainsPlugin)
         .add_plugins(speech::SpeechPlugin)
         .add_plugins(subtitles::SubtitlesPlugin)
+        .add_plugins(banner::BannerPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .insert_resource(ui::Theme::of(&modern))
