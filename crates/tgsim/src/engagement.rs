@@ -396,8 +396,12 @@ impl World {
         let organization = &mut self.organizations[r];
         // A pursuit takes up its enemy afresh instead.
         if !matches!(organization.order, Order::Pursue(_)) {
-            let sent = organization.pending.map_or(organization.position, |p| p.to);
-            organization.resume = Some((sent, organization.facing));
+            // A move it's yet to plan is the one it carries on with.
+            let sent = (organization.pending)
+                .map_or((organization.position, organization.facing), |p| {
+                    (p.to, p.facing)
+                });
+            organization.resume = Some(sent);
         }
         let facing = normalised([there[0] - here[0], there[1] - here[1]]);
         let facing = facing.unwrap_or(organization.facing);
@@ -1029,6 +1033,21 @@ mod tests {
         assert!(w.units[0].alive() && w.units[1].alive());
         assert!(near(w.units[0].position, [10.0, 50.0]));
         assert_eq!(w.organizations[0].order, Order::Move);
+    }
+
+    #[test]
+    fn a_fight_before_a_move_is_planned_carries_on_with_its_facing() {
+        let mut w = skirmish();
+        w.send(0, [10.0, 50.0], [1.0, 0.0]);
+        assert!(w.organizations[0].pending.is_some());
+        w.hold(0, Piece::Organization(1));
+        assert_eq!(w.organizations[0].resume, Some(([10.0, 50.0], [1.0, 0.0])));
+        // And an order that sends it nowhere drops the move it had yet to
+        // plan.
+        w.organizations[0].resume = None;
+        w.send(0, [10.0, 50.0], [1.0, 0.0]);
+        w.organizations[0].take_order(Order::Move);
+        assert!(w.organizations[0].pending.is_none());
     }
 
     #[test]

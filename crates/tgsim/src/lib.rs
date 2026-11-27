@@ -520,6 +520,7 @@ impl Organization {
         self.build = None;
         self.mending = None;
         self.resume = None;
+        self.pending = None;
         self.unpack_at = None;
         self.unpack_again = None;
         self.rally = None;
