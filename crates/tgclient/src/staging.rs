@@ -30,10 +30,12 @@ impl Plugin for StagingPlugin {
             .add_systems(OnEnter(Screen::Lobby), clear_log)
             .add_systems(
                 Update,
+                // Each checks for itself, since what runs between them, the
+                // console's clicks among it, can leave the game.
                 (launch_hosted, follow, show_controls, show_log)
                     .chain()
-                    .run_if(in_state(Screen::Lobby))
-                    .run_if(resource_exists::<Staged>),
+                    .distributive_run_if(in_state(Screen::Lobby))
+                    .distributive_run_if(resource_exists::<Staged>),
             );
     }
 }
