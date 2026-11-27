@@ -1160,8 +1160,7 @@ pub enum Command {
     /// Group Behavior on: a fresh group of them, timed to arrive together.
     /// `selection` is the player's selection group they're given to: a
     /// saved group by number, or none for the one that stands in for any
-    /// selection not saved. A fresh group faces as the last one made for
-    /// the same selection group does, while that's still there.
+    /// selection not saved.
     Group {
         orders: Vec<Command>,
         #[serde(default)]

@@ -431,7 +431,8 @@ pub(crate) fn send(
 ) -> Vec<(usize, [f32; 2])> {
     // A group's regiments are sent to the one point, each to take its
     // place in the group round it.
-    let targets = match together || orders.gathering() {
+    // An unpack has no place round its point, each truck needing its own spot.
+    let targets = match together || (orders.gathering() && aim != actions::Aim::Unpack) {
         true => vec![[px, py]; organizations.len()],
         false => spread(sim, organizations, [px, py], size),
     };

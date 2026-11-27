@@ -146,11 +146,11 @@ impl Regions {
         (r != NONE).then_some(r as usize)
     }
 
-    /// The tiles in `region`.
-    pub fn tiles(&self, region: usize) -> impl Iterator<Item = Tile> + '_ {
+    /// The tiles in any of `regions`, in one pass over the map.
+    pub fn tiles_in<'a>(&'a self, regions: &'a [usize]) -> impl Iterator<Item = Tile> + 'a {
         let side = self.side;
         (self.tiles.iter().enumerate())
-            .filter(move |&(_, &r)| r as usize == region && r != NONE)
+            .filter(move |&(_, &r)| r != NONE && regions.contains(&(r as usize)))
             .map(move |(i, _)| Tile::new((i % side) as i32, (i / side) as i32))
     }
 

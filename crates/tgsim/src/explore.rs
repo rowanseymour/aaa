@@ -302,11 +302,12 @@ impl World {
             return false;
         };
         let island = regions.regions[region].island;
-        (regions.regions[region].neighbours.iter())
-            .filter(|&&(n, _)| regions.regions[n].island == island)
-            .all(|&(n, _)| {
-                (regions.tiles(n)).all(|t| self.seen_with(&[owner], t.centre()) != Seen::Unexplored)
-            })
+        let neighbours: Vec<usize> = (regions.regions[region].neighbours.iter())
+            .map(|&(n, _)| n)
+            .filter(|&n| regions.regions[n].island == island)
+            .collect();
+        (regions.tiles_in(&neighbours))
+            .all(|t| self.seen_with(&[owner], t.centre()) != Seen::Unexplored)
     }
 
     fn on_the_map(&self, at: [f32; 2]) -> bool {

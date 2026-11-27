@@ -240,6 +240,9 @@ impl World {
                     taken.push(order);
                 }
                 Err(e) => {
+                    if let Some(r) = r {
+                        self.set_aim(id, r, None);
+                    }
                     refused.extend(r);
                     if done.is_err() {
                         done = Err(e);
@@ -288,7 +291,9 @@ impl World {
             },
             _ => return None,
         };
-        let reach = self.zone_radius(&self.group(id).organizations);
+        // One come to rest at its place, pulled in to just inside, counts
+        // as inside though it stopped short.
+        let reach = self.zone_radius(&self.group(id).organizations) + crate::ARRIVAL_REACH;
         (always || !within(self.centre(r), point, reach))
             .then(|| self.place_round(id, r, point))
             .flatten()
@@ -341,7 +346,9 @@ impl World {
             }
             self.set_aim(id, r, aim);
             let given = self.aimed_order(order, aim);
-            self.hand(g.owner, r, given);
+            if !self.hand(g.owner, r, given) {
+                self.set_aim(id, r, None);
+            }
             sent.push(r);
         }
         sent
