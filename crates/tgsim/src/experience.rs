@@ -240,7 +240,19 @@ impl World {
         let unit = &self.units[u];
         let r = unit.organization;
         let owner = self.organizations[r].owner;
-        let held = self.timed_on(crate::Target::Unit(u));
+        // What its organization hands it reaches it only if it's of the
+        // kind that needs, but a special operation's reaches every member.
+        let table = &self.rules.combat_effects;
+        let own = |h: &crate::Held| unit.properties.iter().any(|o| o.property == h.property);
+        let reaches = |h: &crate::Held| {
+            h.by.is_some()
+                || own(h)
+                || (table.get(&h.property))
+                    .is_none_or(|e| self.qualifies(&unit.template, &e.requires))
+        };
+        let held = self
+            .timed_on(crate::Target::Unit(u))
+            .filter(move |h| reaches(h));
         let more = [self.level_property(r), self.stance_property(u)];
         let more = more.into_iter().flatten().chain(self.entrenched_on(u));
         let on = self.weighed(crate::Target::Unit(u));

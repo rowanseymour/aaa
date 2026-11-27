@@ -267,7 +267,7 @@ pub(crate) fn command(
     }
     // What can't be attacked there is repaired, by those that can, or
     // else moved onto.
-    if let Some(piece) = onto(&sim.0, player, *focus) {
+    if let Some(piece) = onto(*focus) {
         let (_, rest) = give_each(&sim.0, &mut orders, player, &moving, point, |r| {
             tgsim::Command::Repair {
                 organization: r,
@@ -297,15 +297,10 @@ fn enemy_organization(sim: &World, player: u32, focus: Focus) -> Option<usize> {
     (sim.sides.relation(player, owner) == tgsim::Relation::Enemy).then_some(e)
 }
 
-/// What at `focus` organizations of `player`'s are moved onto, rather than
-/// to its place: any organization, and a building that isn't an enemy's.
-fn onto(sim: &World, player: u32, focus: Focus) -> Option<tgsim::Piece> {
-    focus.piece().filter(|&p| match p {
-        tgsim::Piece::Organization(_) => true,
-        tgsim::Piece::Building(_) => {
-            sim.sides.relation(player, sim.piece_owner(p)) != tgsim::Relation::Enemy
-        }
-    })
+/// What at `focus` organizations are moved onto, rather than to its place:
+/// any thing, each heading for the thing itself.
+fn onto(focus: Focus) -> Option<tgsim::Piece> {
+    focus.piece()
 }
 
 /// Moves organizations onto `piece`. Returns those that went, each with
@@ -394,8 +389,9 @@ pub(crate) fn acknowledge(
 }
 
 /// Where each of `organizations` goes for an order at `[px, py]` on a map
-/// `size` across: the point plus its own offset from their centre, so they
-/// keep their places relative to each other.
+/// `size` across: the point plus its own offset from their centre, cut to
+/// the rules' group zone range at most, so they keep roughly how they
+/// stood.
 pub(crate) fn spread(
     sim: &World,
     organizations: &[usize],
@@ -407,11 +403,18 @@ pub(crate) fn spread(
     let [cx, cy] = centres
         .iter()
         .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
+    let most = sim.group_zone_range_min();
     (centres.into_iter())
         .map(|[x, y]| {
+            let [dx, dy] = [x - cx, y - cy];
+            let length = dx.hypot(dy);
+            let cut = match length > most {
+                true => most / length,
+                false => 1.0,
+            };
             [
-                (px + x - cx).clamp(0.0, size),
-                (py + y - cy).clamp(0.0, size),
+                (px + dx * cut).clamp(0.0, size),
+                (py + dy * cut).clamp(0.0, size),
             ]
         })
         .collect()
@@ -522,7 +525,18 @@ mod tests {
     }
 
     #[test]
-    fn a_right_click_moves_onto_any_organization_and_buildings_not_an_enemys() {
+    fn organizations_far_apart_are_pulled_in_to_the_group_zone_range() {
+        let sim = crate::orders::testing::fresh_by(tgsim::Rules {
+            group_zone_range_min: 3.0,
+            ..Default::default()
+        });
+        // 10 apart, so 5 each from their centre: cut to 3.
+        let spots = spread(&sim, &[0, 1], [30.0, 30.0], 100.0);
+        assert_eq!(spots, [[30.0, 27.0], [30.0, 33.0]]);
+    }
+
+    #[test]
+    fn a_right_click_moves_onto_any_organization_or_building() {
         let mut sim = crate::orders::testing::fresh();
         let house = |owner| tgmap::Building {
             id: 9,
@@ -542,12 +556,12 @@ mod tests {
         };
         sim.add_buildings(&[house(1), house(2)]);
         let organization = tgsim::Piece::Organization;
-        assert_eq!(onto(&sim, 1, Focus::Organization(0)), Some(organization(0)));
-        assert_eq!(onto(&sim, 1, Focus::Organization(1)), Some(organization(1)));
-        let own = Focus::Building(0);
-        assert_eq!(onto(&sim, 1, own), Some(tgsim::Piece::Building(0)));
-        // An enemy's building is attacked where it stands instead.
-        assert_eq!(onto(&sim, 1, Focus::Building(1)), None);
-        assert_eq!(onto(&sim, 1, Focus::Nothing), None);
+        assert_eq!(onto(Focus::Organization(0)), Some(organization(0)));
+        assert_eq!(onto(Focus::Organization(1)), Some(organization(1)));
+        assert_eq!(onto(Focus::Building(0)), Some(tgsim::Piece::Building(0)));
+        // An enemy's building too: each heads for it rather than keeping
+        // how they stood.
+        assert_eq!(onto(Focus::Building(1)), Some(tgsim::Piece::Building(1)));
+        assert_eq!(onto(Focus::Nothing), None);
     }
 }

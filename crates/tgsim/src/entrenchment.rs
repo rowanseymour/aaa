@@ -94,7 +94,7 @@ impl World {
     }
 
     /// Whether things made from `template` have every property in `needs`.
-    fn qualifies(&self, template: &Id, needs: &[Id]) -> bool {
+    pub(crate) fn qualifies(&self, template: &Id, needs: &[Id]) -> bool {
         let kind = self.rules.kinds.get(template);
         needs
             .iter()

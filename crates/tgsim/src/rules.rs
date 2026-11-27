@@ -96,6 +96,14 @@ pub struct Rules {
     /// The least a regiment's banner goes a second catching up with its
     /// leader.
     pub banner_catchup_floor: f32,
+    /// The longest a regiment's offset from the middle of several ordered
+    /// together is cut to.
+    pub group_zone_range_min: f32,
+    /// The seconds after its order before which a regiment doesn't give up
+    /// a move it keeps failing to finish.
+    pub move_fail_seconds: f32,
+    /// The states a regiment has no formation in, by id.
+    pub formationless_states: HashSet<Id>,
     /// How far from where a lone recruit is looked for room the search's
     /// later rings are centred.
     pub recruit_search_step: f32,
@@ -272,6 +280,9 @@ impl Default for Rules {
             efficiency_rates: [0.01, 0.02],
             catchup_speed: 1.75,
             banner_catchup_floor: 0.5,
+            group_zone_range_min: 18.0,
+            move_fail_seconds: 5.0,
+            formationless_states: HashSet::new(),
             recruit_search_step: 0.5,
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),
