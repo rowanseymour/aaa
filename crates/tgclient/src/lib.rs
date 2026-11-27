@@ -58,6 +58,7 @@ mod menu;
 mod messages;
 mod minimap;
 mod music;
+mod naming;
 mod object_display;
 mod objectives;
 mod options;
@@ -210,6 +211,11 @@ struct Side(Option<usize>);
 /// What the person playing goes by.
 #[derive(Resource, Clone, PartialEq)]
 pub(crate) struct Nickname(pub(crate) String);
+
+/// Whether the person playing has ever said what they go by, rather than
+/// going by the default.
+#[derive(Resource, Clone, Copy, PartialEq, Default)]
+pub(crate) struct NicknameSet(pub(crate) bool);
 
 /// Whether the console's verbs for developing the game may run, as asked
 /// on the command line.
@@ -422,6 +428,7 @@ pub fn run(program: Program) -> ExitCode {
     });
     // Before there's a window, so that a host that isn't there or won't
     // let the game in is said where the game was asked for.
+    let set = NicknameSet(name.is_some() || saved.nickname().is_some());
     let name = name
         .or_else(|| saved.nickname())
         .unwrap_or_else(|| tgserver::default_name(&game.strings()));
@@ -560,6 +567,7 @@ pub fn run(program: Program) -> ExitCode {
         .init_resource::<formations::Formations>()
         .insert_resource(Side(side))
         .insert_resource(Nickname(name))
+        .insert_resource(set)
         .insert_resource(Seed(seed))
         .insert_resource(Dev(dev))
         .add_plugins((
@@ -800,6 +808,7 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(pause::Words::of(&strings))
         .insert_resource(chat::Words::of(&strings))
         .insert_resource(lan::Words::of(&strings))
+        .insert_resource(naming::Words::of(&strings))
         .insert_resource(staging::Words::of(&strings))
         .insert_resource(StageWords::of(&strings))
         .insert_resource(options::Options::new(&game))

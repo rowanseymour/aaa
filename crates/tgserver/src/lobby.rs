@@ -193,6 +193,7 @@ impl Staging {
             // Nobody is ready without the map.
             Choice::Ready(ready) => guest.side.is_some() && (!ready || guest.holds || guest.host),
             Choice::Holds(_, _) => true,
+            Choice::Name(typed) => crate::name(typed).is_some(),
             // Only between two people on sides.
             Choice::Offer(to, true) => *to != client && guest.side.is_some() && self.seated(*to),
             Choice::Offer(to, false) => self.offers.contains(&(client, *to)),
@@ -322,7 +323,7 @@ impl Staging {
                 self.withdraw(client);
             }
             // Whoever runs the host launches and puts people out.
-            Choice::Launch(_) | Choice::Kick(_) => {}
+            Choice::Launch(_) | Choice::Kick(_) | Choice::Name(_) => {}
         }
     }
 }
@@ -377,6 +378,8 @@ pub enum Choice {
     Launch(bool),
     /// Put the person at this client out of the game.
     Kick(u32),
+    /// Go by the name this makes, numbered if another goes by it.
+    Name(String),
 }
 
 /// Something everyone in a game being set up is told, or the one it's
@@ -393,6 +396,8 @@ pub enum Told {
     Count(u32),
     /// The launch has stopped counting down.
     Aborted,
+    /// Someone who went by the first name goes by the second.
+    Renamed(String, String),
     /// What this person asked for was refused, while the launch counts
     /// down if `counting`.
     Refused { choice: Choice, counting: bool },
@@ -632,6 +637,7 @@ impl<L: Link> Lobby<L> {
                 gone.push((target, true));
                 false
             }
+            Choice::Name(typed) => self.rename(client, &typed),
             choice => {
                 self.staging.make(client, choice);
                 // An offer is for the places the two hold, so it goes
@@ -646,6 +652,24 @@ impl<L: Link> Lobby<L> {
                 true
             }
         }
+    }
+
+    /// Has the person at `client` go by the name `typed` makes, numbered
+    /// if anyone else goes by it, telling everyone. Whether it changed.
+    fn rename(&mut self, client: u32, typed: &str) -> bool {
+        let guests = &self.staging.guests;
+        let taken = |name: &str| guests.iter().any(|g| g.client != client && g.name == name);
+        let name = crate::name(typed).map(|n| crate::unique(&n, &self.naming.numbered, taken));
+        let guest = self.staging.guests.iter_mut().find(|g| g.client == client);
+        let (Some(name), Some(guest)) = (name, guest) else {
+            return false;
+        };
+        if guest.name == name {
+            return false;
+        }
+        let was = std::mem::replace(&mut guest.name, name.clone());
+        self.tell(&ToClient::Told(Told::Renamed(was, name)));
+        true
     }
 
     /// Tells everyone what the person at `client` said for those `to`
@@ -895,6 +919,9 @@ impl<L: Link> Entry<L> {
             };
             match decode(&message) {
                 Some(ToClient::Staging(staging)) => {
+                    if let Some(me) = staging.guest(self.me) {
+                        self.name = me.name.clone();
+                    }
                     self.staging = staging;
                     self.staged += 1;
                 }
@@ -1007,6 +1034,39 @@ mod tests {
         assert!(other.staging().guests[0].host && other.staging().locked);
         let joined = [Told::Joined("Bob".into()), Told::Joined("Bob (1)".into())];
         assert_eq!(host.take_told(), joined);
+    }
+
+    #[test]
+    fn a_rename_is_told_to_everyone_and_numbered_if_taken() {
+        let (mut lobby, mut host, _) = hosted();
+        let mut bob = ask(&mut lobby, "Bob", "sesame").unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        host.take_told();
+        bob.take_told();
+        // Trimmed, and numbered as whoever runs the host goes by it.
+        bob.choose(Choice::Name("  Host ".into())).unwrap();
+        // One that makes no name, or the name they go by, changes nothing.
+        bob.choose(Choice::Name("   ".into())).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        bob.choose(Choice::Name("Host (1)".into())).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        assert_eq!(bob.name(), "Host (1)");
+        let renamed = Told::Renamed("Bob".into(), "Host (1)".into());
+        assert_eq!(host.take_told(), [renamed]);
+        let told = bob.take_told();
+        assert_eq!(told.len(), 2);
+        assert!(matches!(
+            told[1],
+            Told::Refused {
+                choice: Choice::Name(_),
+                ..
+            }
+        ));
+        // Whoever runs the host is numbered too, never the other.
+        host.choose(Choice::Name("Host (1)".into())).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        assert_eq!(host.name(), "Host (1) (1)");
+        assert_eq!(bob.name(), "Host (1)");
     }
 
     #[test]
