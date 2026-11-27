@@ -110,7 +110,7 @@ Terrain sets a speed limit. Each terrain has at most one, for everyone on it:
 - A terrain that lists no such property has no limit.
 - The limit used is never below `TerrainMinimumMoveSpeed`, which the data files don't set; the game's own default is 0.5.
 - A terrain of type `MOUNTAIN` is given a limit of 0.0001 whatever it lists, which that floor then raises: on a mountain the limit in play is `TerrainMinimumMoveSpeed` itself, 0.5 with stock data. It doesn't depend on what any other terrain lists.
-- It seldom comes up. A terrain says who may cross it with `land` and `water`; `MountainTerrain` sets both false and no stock mountain changes them, so mountain tiles are closed to everything that moves on land or water. Aircraft, which do cross them, have no terrain looked at and so no limit ([terrain](terrain.toml)). The mountain limit only bites on a ground unit whose terrain is a mountain anyway: one a map placed there, or a regiment member whose leader's tile is one.
+- It seldom comes up. A terrain says who may cross it with `land` and `water`; `MountainTerrain` sets both false and no stock mountain changes them, so mountain tiles are closed to everything that moves on land or water. Aircraft, which do cross them, have no terrain looked at and so no limit ([terrain](terrain.toml)). The mountain limit only bites on a ground unit whose terrain is a mountain anyway: one a map placed there, or a regiment member with its regiment whose regiment's position is on one.
 - Each step, after the unit's speed has moved towards its travel speed, a speed above the limit is cut to it at once (a regiment member keeping its place then stretches its step, so it can go faster: [keeping place](#keeping-place)). It's an absolute speed, not a share of `speed_max`: a unit slower than the limit isn't affected.
 - Whether the unit holds the terrain's property plays no part, nor whether it's infantry or a vehicle: foot soldiers in forest are held to 2 like the tanks.
 - The terrain is the unit's terrain as [terrain](terrain.toml) has it: a member with its regiment (the leader, or a member inside the regiment's control zone, `control_range`) is limited by the terrain under the regiment's position, not by the tile it's on, so one lagging behind in forest while the regiment's position is on open ground has no limit at all. Whether a member is with its regiment is judged as [supply](supply.toml#member-with-regiment) has it, so the body of a regiment shares one terrain limit, on top of moving at its slowest member's top speed ([a regiment's speed](#a-regiments-speed)). A straggler is limited by its own tile.
@@ -152,8 +152,8 @@ text = '''A property with `required_properties`, handed down from a regiment or 
 
 [[topic.rule]]
 id = "top-speed-changes"
-tags = ["code"]
-text = '''A change takes effect at once: the top speed is recomputed whenever a property arrives or goes; a unit faster than its new top speed drops to it at once, and one below it speeds up at its `acceleration`.'''
+tags = ["code", "guess"]
+text = '''The top speed is recomputed whenever a property arrives or goes, and a unit faster than its new top speed drops to it at once. A rise doesn't speed up a unit already on its way: it keeps the speed it was last given, and speeds up at its `acceleration` only once it's given a higher one. A regiment's member is given one when its regiment's speed rises and is handed down ([A regiment's speed](#a-regiments-speed)); a unit on its own, at its next move.'''
 
 [[topic.rule]]
 id = "turn-rate-follows-top-speed"
@@ -176,7 +176,7 @@ Where the stock `SPEED_MAX` modifiers come from, and who holds them:
 | Formation `regiment_aggressive` (Assault, the layouts' combat formation) | regiment, handed down | −0.25 | while the regiment is in it |
 | Formation `regiment_column` (Column) | regiment, handed down | +0.25 | while in it |
 | Formation `regiment_defensive` (Aggressive) | — | none | |
-| Layout's Broken Formation property | regiment, handed down | +0.25 | while the regiment has no formation (routing, Exhausted) |
+| Layout's Broken Formation property | regiment, handed down | +0.25 | while the regiment has no formation (routing, Exhausted, and the other states below) |
 | State `actor_state_engaged` | regiment, handed down; also a unit on its own | +0.25 | while engaged |
 | State `actor_state_targeted` | regiment, handed down | −0.10 | while targeted (below) |
 | Stance `infantry_kneel` | the unit | −0.2 | while kneeling ([stances](stances.toml)) |
@@ -193,7 +193,8 @@ Formations: the formation the regiment is in decides, moving or standing:
 - Moving or standing on the player's orders, it's in the formation the player chose, so Column is +0.25 and Assault −0.25 whether or not it's moving.
 - Attacking (the approach of an attack order or attack-ground), engaged, and guarding are in the combat formation, Assault, whatever the player chose ([combat](combat.toml#attack-orders)): −0.25.
 - Engaged also gives `actor_state_engaged` +0.25, which cancels Assault's −0.25: an engaged regiment's units are at their full `speed_max`, stances aside. On the approach of an attack order the regiment isn't engaged yet, so it closes in at 0.75.
-- Routing and Exhausted regiments have no formation and hold the Broken Formation property instead: +0.25.
+- A regiment in a state whose `formation_required` is `BROKEN` has no formation and holds the Broken Formation property instead: +0.25. In AA's data that's routing and Exhausted, and also chasing a lost attack target (`mind_chasing`), regrouping, reattaching, building, repairing and razing.
+- Retreating (`mind_retreating`) takes the layout's retreat formation; no stock layout names one.
 '''
 
 [[topic.rule]]
@@ -258,22 +259,22 @@ text = '''When a regiment sets off on a route it turns at once to face along the
 id = "organized-formation-routes"
 tags = ["code", "data"]
 text = '''
-In a formation that is `organized` (all of AA's regiment formations are), the leader is handed the route itself, and every other member, with the regiment or away from it, is handed a copy of the route fitted to its place, with the regiment's speed:
+In a formation that is `organized` (every formation a player's regiment can have; AA's ambient herds use `regiment_herding`, which isn't), the leader is handed the route itself, and every other member, with the regiment or away from it, is handed a copy of the route fitted to its place, with the regiment's speed:
 - Each point of the copy is the leader's point moved by the member's place: its place's distance ahead of or behind the leader, and to the leader's left or right, as the regiment faces at set-off, laid out along that point's own heading instead. A place 2 to the leader's left puts every point 2 to the left of the leader's point, square to the leg that ends there; a place 3 behind puts it 3 back along that leg.
 - Every point but the last is then slid along the leg that ends at it to where that leg's line meets the next leg's line, so the member's legs run parallel to the leader's, each at the same offset, and meet in clean corners: a member on the inside of a turn turns before the leader's corner, one on the outside after it. Where two legs run the same way the point stays where it was moved to.
 - The points keep the leader's headings. The last point, the member's destination, is its place at the end of the route as the regiment will face along the last leg.
-- Nothing tests the moved points against the ground when the copy is made. A member finds a point it can't reach as it drives: when, at a look, the way to its next point is blocked, it pulls that point back towards the leader's point it was made from, a short step at a time, until it reaches a spot it can drive to in a straight line, and goes there instead. If none is found short of the leader's point, that counts as a try at the point. A point it can't reach after three tries is given up and counts as passed; but when that point is its last and it isn't within 0.5 of it, its move fails.
+- Nothing tests the moved points against the ground when the copy is made. A member finds a point it can't reach as it drives: when, at a look, the way to its next point is blocked, it pulls that point back towards the leader's point it was made from, a short step at a time, until it reaches a spot it can drive to in a straight line, and goes there instead. If none is found short of the leader's point, the point is given up at once and counts as passed; but when that point is its last and it isn't within 0.5 of it, its move fails.
 '''
 
 [[topic.rule]]
 id = "joining-member-route"
 tags = ["code"]
-text = '''A member that joins the regiment, or comes back to it (back inside its control zone after being cut off), while the regiment is moving is handed a copy at the regiment's next look, about once a second, made the same way from what is left of the route and the regiment's facing then.'''
+text = '''A member that joins the regiment, or comes back to it (back inside its control zone after being cut off), while the regiment is moving is handed a copy at the regiment's next look, about once a second, made the same way from what is left of the route and the regiment's facing then. That holds in any formation, `organized` or not, as long as the regiment is moving in the formation it would choose and its leader is still driving: the copy is fitted to the member's place, which for a regiment with no `organized` formation is where it last stood from the leader.'''
 
 [[topic.rule]]
 id = "unorganized-regiment-routes"
-tags = ["code", "guess"]
-text = '''A regiment with no `organized` formation (one routing or exhausted has no formation at all) doesn't keep place. Each member with the regiment is handed the route moved bodily by where the member stands from the leader, unturned and with no corner fitting, and drives it at the regiment's speed like the leader; a member away from the regiment is sent to the move's destination on its own. Kohan II's `herding` formations aren't covered.'''
+tags = ["code"]
+text = '''A regiment with no `organized` formation (one routing or exhausted has no formation at all) doesn't keep place. Each member with the regiment is handed the route moved bodily by where the member stands from the leader, unturned and with no corner fitting, and drives it at the regiment's speed like the leader. A member away from the regiment is sent on a move of its own to the route's first point, shifted by where it last stood from the leader while it was with the regiment; only for a route of one point is that the move's destination. `herding` formations (AA's ambient herds, and Kohan II's) aren't covered.'''
 
 [[topic.rule]]
 id = "getting-onto-route"
@@ -292,7 +293,7 @@ text = '''When the regiment arrives (within 0.5 of where it was sent), it faces 
 
 [[topic.rule]]
 id = "new-order-while-moving"
-tags = ["code", "guess"]
+tags = ["code"]
 text = '''**A new order while moving** takes effect for the whole regiment at its first look after the order: the route is planned and every member is handed its new route then, dropping the old one, wherever it is. The same fresh hand-out happens during a move when the regiment's formation changes, when the thing it's following moves far enough for it to plan again, and when a long route moves on to its next stage.'''
 
 [[topic]]
@@ -399,12 +400,12 @@ text = '''An order counts as given to the group as one whenever two or more thin
 
 [[topic.rule]]
 id = "leaving-group"
-tags = ["code", "guess"]
+tags = ["code", "data"]
 text = '''A regiment leaves its group (a group left empty goes) when: it accepts an order given to it rather than to the group (Group Behavior off, or the regiment ordered alone), apart from `set_formation`; it starts routing or becomes exhausted; it joins another group; it changes side; or it's removed. Orders the group itself hands its regiments don't take them out.'''
 
 [[topic.rule]]
 id = "left-group-untimed"
-tags = []
+tags = ["code"]
 text = '''Then it no longer times its arrival with the rest.'''
 
 [[topic.rule]]
@@ -449,7 +450,7 @@ text = '''A regiment handed a speed below `GroupSpeedMinimum` (1.0 in AA) doesn'
 
 [[topic.rule]]
 id = "who-takes-part"
-tags = ["code", "data", "guess"]
+tags = ["code", "data"]
 text = '''
 Which regiments take part:
 - The group's zone is a circle round its centre (the average of its regiments' positions) whose radius is the largest control zone radius among its regiments (`control_range`), never less than `GroupZoneRangeMin` (18 in AA).
@@ -467,7 +468,7 @@ title = "Corners"
 [[topic.rule]]
 id = "corner-lead"
 tags = ["code"]
-text = '''Before each corner the unit starts its turn early by the lead distance: `turn_radius` times the tangent of half the angle between the route's next two legs. The lead is 0 when only one point is left.'''
+text = '''Before each corner the unit starts its turn early by the lead distance: `turn_radius` times the tangent of half the angle between the route's next two legs. The lead is 0 when only one point is left, and on a leg the unit is driving straight for a spot of its own (a destination close by, the dash of a detour). Where the next point lies on the one after it (closer than 0.0002), the angle is taken with the leg after that, or the lead is 0 if those two are all that's left.'''
 
 [[topic.rule]]
 id = "next-leg-at-lead"
@@ -477,7 +478,7 @@ text = '''It drives the leg until it is level with the point lead short of the c
 [[topic.rule]]
 id = "lead-recomputed"
 tags = ["code"]
-text = '''When it finishes a turn (takes the heading exactly) the lead for the corner ahead is worked out afresh.'''
+text = '''The lead is worked out when the unit takes up a leg, and again each time it finishes a turn (takes the heading exactly). It depends only on the route's points and `turn_radius`, so the second gives the same lead unless the route has changed in between, as by a detour.'''
 
 [[topic]]
 title = "Second thoughts"
@@ -485,7 +486,7 @@ title = "Second thoughts"
 [[topic.rule]]
 id = "look-interval"
 tags = ["code"]
-text = '''While it drives, a unit looks at its move again every 1.0 to 1.3 seconds (uniform), and every 0.3 to 0.6 seconds on a leg it was snapped onto (below). Between looks it just carries on as under Driving a leg.'''
+text = '''While it drives, a unit looks at its move again every 1.0 to 1.3 seconds (uniform), and every 0.3 to 0.6 seconds on a leg it is driving straight for a spot of its own: a destination close by ([A destination close by](#a-destination-close-by)) or the dash of a detour (above). A leg it was snapped onto keeps 1.0 to 1.3 seconds. Between looks it just carries on as under Driving a leg.'''
 
 [[topic.rule]]
 id = "last-leg-snap"
@@ -494,7 +495,7 @@ text = '''**Snapping onto the last leg.** Picture two circles of radius `turn_ra
 
 [[topic.rule]]
 id = "getting-back-on-line"
-tags = ["code", "guess"]
+tags = ["code"]
 text = '''**Getting back on line.** At a look, a unit that has finished turning (faces the leg's heading exactly) and is 1 or more to the side of the leg's line (the line through the leg's point along its heading) puts a detour in ahead of the point: it turns toward the line by 45 degrees, drives to meet it, and turns back along it, all at its usual turn rate. When the offset is small enough that 45 degrees would overshoot, a shallower angle is used.'''
 
 [[topic.rule]]
@@ -514,12 +515,12 @@ intro = '''These apply when a unit is given a destination of its own, not when i
 [[topic.rule]]
 id = "close-exact-destination"
 tags = ["code"]
-text = '''On a move that needs exact arrival (see [Arriving](#arriving)), a destination less than 3 away gets a single straight leg from where the unit stands, with no route planned. The unit turns onto it at its turn rate unless the snap above applies, which it does at once for a spot inside a turning circle.'''
+text = '''On a move that needs exact arrival (see [Arriving](#arriving)), a destination less than 3 away gets a single straight leg from where the unit stands, with no route planned. The unit turns onto it at its turn rate unless the snap above applies, which it does at once for a spot inside a turning circle. That's only while the move hasn't planned a route: a move that has, and plans again with its destination under 3 away, plans a route.'''
 
 [[topic.rule]]
 id = "destination-inside-turning-circle"
 tags = ["code"]
-text = '''Otherwise, if the destination is ahead of the unit (not behind its facing) and inside the turning circle on the destination's side, the unit faces it at once and drives straight there.'''
+text = '''Otherwise, if the destination is ahead of the unit (not behind its facing; one exactly abeam counts as ahead) and strictly inside the turning circle on the destination's side, the unit faces it at once and drives straight there. That holds for any move, exact or not, but again only while the move hasn't planned a route.'''
 
 [[topic.rule]]
 id = "close-destination-otherwise-planned"
@@ -537,7 +538,7 @@ title = "Arriving"
 [[topic.rule]]
 id = "arrival-check"
 tags = ["code"]
-text = '''When a unit has no route left it stops dead and checks where it is. It has arrived if it is within 0.5 of its destination, or within 0.1 on a move that needs exact arrival (going to another actor, or to a spot of its own to unpack). It is not moved onto the spot.'''
+text = '''When a unit has no route left it stops dead and checks where it is. It has arrived if it is within 0.5 of its destination, or within 0.1 on a move that needs exact arrival: going to another actor, to a spot of its own to unpack, or any move whose destination is already within 0.5 of the unit when the move starts. On some moves to another actor, being within 0.1 of that actor's outline also counts. It is not moved onto the spot.'''
 
 [[topic.rule]]
 id = "replan-if-not-arrived"
@@ -573,7 +574,7 @@ text = '''A regiment's own position follows its leader's. While the regiment mov
 [[topic.rule]]
 id = "regiment-arrival"
 tags = ["code"]
-text = '''The regiment has arrived when its position is within 0.5 of where it was sent. If its leader has stopped and it hasn't arrived, it sends the leader again. Each plan or re-send counts as a try; from the third try on, the regiment gives up the move if `CAIMoveMinSecondsBeforeFail` (stock 5) seconds have passed since the order.'''
+text = '''The regiment has arrived when its position is within 0.5 of where it was sent. If its leader has stopped and it hasn't arrived, it sends the leader again. Each plan or re-send counts as a try, except that on a move to another actor only re-sends count; from the third try on, the regiment gives up the move if `CAIMoveMinSecondsBeforeFail` (stock 5) seconds have passed since the order.'''
 
 [[topic]]
 title = "Moves that can't be made"
@@ -624,12 +625,12 @@ text = '''So for a land regiment the move fails when its destination is land it 
 [[topic.rule]]
 id = "area-chain-limit"
 tags = ["code"]
-text = '''A chain longer than 254 areas is cut short at the area reached that is nearest the destination, and the move heads there instead.'''
+text = '''A chain longer than 254 areas is cut short at the area reached that is nearest the destination, and the move heads there instead. If that nearest area is the unit's own, there is no route and the move fails at once.'''
 
 [[topic.rule]]
 id = "region-path-planner-switch"
 tags = ["code", "data"]
-text = '''The area step is switched by `TAIUseRegionPathPlanner` (SVars, stock `true`); things flagged `ethereal` skip it. Without it, nothing but the destination's spot (above) fails a move.'''
+text = '''The area step is switched by `TAIUseRegionPathPlanner` (SVars, stock `true`); things flagged `ethereal` skip it (for a regiment, as its leader is flagged). Without it, a move fails at once only for the destination's spot (above) or a tile route cut short at the unit's own tile (below).'''
 
 [[topic]]
 title = "Closed in by things"
@@ -638,12 +639,12 @@ under = "Moves that can't be made"
 [[topic.rule]]
 id = "blocked-tiles-not-areas"
 tags = ["code"]
-text = '''Things that block tiles (buildings, mostly) don't split areas, so a destination closed in by them, or a unit closed in, still has a route at the area level. The route over tiles then finds no way through, and heads for the tile it could reach that is nearest the destination instead (nearest as the crow flies, a diagonal tile step counting 1.414).'''
+text = '''Things that block tiles (buildings, mostly) don't split areas, so a destination closed in by them, or a unit closed in, still has a route at the area level. The route over tiles then finds no way through, and heads for the tile it could reach that is nearest the destination instead. Nearness here is from the tile's centre to the destination: the shorter of the two distances along the map's axes times 1.414, plus the difference between the two.'''
 
 [[topic.rule]]
 id = "tile-route-limit"
 tags = ["code"]
-text = '''A route over tiles is at most 254 tile steps long, a diagonal step counting as one: once the search reaches tiles 255 steps from the start it stops and settles the same way, for the nearest tile reached so far. On open ground that cuts only a route longer than 254 tiles (508 units) along its longer axis; one that winds round obstacles reaches it sooner. The unit then plans the rest from where the cut route ends, and each such plan counts as a plan or try under [Arriving](#arriving).'''
+text = '''A route over tiles is at most 254 tile steps long, a diagonal step counting as one: once the search reaches tiles 255 steps from the start it stops and settles the same way, for the nearest tile reached so far. If that is still the tile the unit stands on, there is no route and the move fails at once. On open ground that cuts only a route longer than 254 tiles (508 units) along its longer axis; one that winds round obstacles reaches it sooner. The unit then plans the rest from where the cut route ends, and each such plan counts as a plan or try under [Arriving](#arriving).'''
 
 [[topic.rule]]
 id = "closed-in-gives-up"
@@ -653,7 +654,7 @@ text = '''Either way it ends up short, so it gives up there as a pulled-back des
 [[topic.rule]]
 id = "immediate-failure-cases"
 tags = ["code"]
-text = '''So a move to somewhere it can't reach fails at once only for the cases under [Where the move is aimed](#where-the-move-is-aimed) and [Areas](#areas); anything else sets off, ending entrenchment, and is given up later.'''
+text = '''So a move to somewhere it can't reach fails at once only for the cases under [Where the move is aimed](#where-the-move-is-aimed) and [Areas](#areas), and a tile route cut short where it stands (above); anything else sets off, ending entrenchment, and is given up later.'''
 
 [[topic]]
 title = "When a move fails"
@@ -712,7 +713,7 @@ text = '''An unpack order to a regiment sends the regiment to the ordered spot f
 [[topic.rule]]
 id = "unpack-on-arrival"
 tags = ["code"]
-text = '''Once the regiment has arrived (within 0.5, above), its leader unpacks where it stands: the building goes at the truck's own position, not the ordered spot, facing as the order says (see [buildings](buildings.toml#packing-and-unpacking)).'''
+text = '''Once the regiment has arrived (within 0.5, above), the member in its layout's `PrimarySlot` (the truck, which leads whenever that slot is filled) unpacks where it stands: the building goes at the truck's own position less its `packed_position_offset` (0, 0 on every stock truck), not the ordered spot, facing as the order says (see [buildings](buildings.toml#packing-and-unpacking)). With that slot empty, nothing unpacks.'''
 
 [[topic.rule]]
 id = "unpack-room-only"
@@ -722,7 +723,7 @@ text = '''Nothing about the truck's facing, or its trailer, is tested. The only 
 [[topic.rule]]
 id = "cannot-unpack"
 tags = ["code"]
-text = '''If the building has no room, the regiment asks once more on its next look; after two refusals the player is told "Cannot unpack" with the truck's name (string `tai_error_unpack`) and the order is dropped.'''
+text = '''At each of its looks while the truck is neither unpacking nor unpacked, the regiment tells it to unpack, up to twice; at the look after the second, the player is told "Cannot unpack" with the truck's name (string `tai_error_unpack`) and the order is dropped. So a building with no room is asked for twice. A truck that refuses the order outright gives the message at once.'''
 
 [[topic.rule]]
 id = "unpack-move-given-up"
@@ -812,7 +813,7 @@ under = "Explore orders"
 [[topic.rule]]
 id = "explore-first-destination"
 tags = ["code"]
-text = '''It first heads for the clicked point itself, as a move would. If no member could stand within 2 of that point (water, a building), it skips that and chooses a destination at once.'''
+text = '''It first heads for the clicked point, as a move would, or rather for the nearest spot within 2 of it where a member could stand. If there is none (water, a building), it skips that and chooses a destination at once.'''
 
 [[topic.rule]]
 id = "explore-new-destination"
@@ -824,14 +825,14 @@ id = "explore-candidates"
 tags = ["code", "data", "guess"]
 text = '''
 Choosing: it makes two sets of candidate places, and takes the best. The destination it's just had isn't one of them.
-- `ExploreNumActorLocations` (20) around the regiment: each in a random direction, at a random distance from `ExploreActorRadiusMin` (20) to `ExploreActorRadiusMax` (30). One is only kept when a member could stand within 4 of it.
+- `ExploreNumActorLocations` (20) around the regiment: each in a random direction, at a random distance from `ExploreActorRadiusMin` (20) to `ExploreActorRadiusMax` (30).
 - `ExploreNumWaypointLocations` (20) around the explore point: each in a random direction, the game looks along that direction from the explore point for ground its side has never seen, on the same stretch of land as the regiment, and takes a spot up to `ExploreWaypointTilesIntoFog` (8) tiles further into that unseen ground. A direction that only reaches the map's edge gives nothing.
-- Off the map, or where no member could stand within 2, a candidate is dropped.
+- Off the map, or where no member could stand within 2, a candidate is dropped; one kept is moved to the spot within 2 where a member could stand.
 '''
 
 [[topic.rule]]
 id = "explore-best-candidate"
-tags = ["code", "data", "guess"]
+tags = ["code", "data"]
 text = '''
 Best: the less the side knows of a place, the better, before anything else: never seen beats seen before but not in view now, which beats in view now. This is judged for the regiment's side alone. Among places known equally well, the higher value wins:
 - `ExploreActorBaseValue` (40) for one around the regiment, `ExploreWaypointBaseValue` (0) for one around the explore point;
@@ -868,12 +869,12 @@ under = "Explore orders"
 [[topic.rule]]
 id = "explore-engagement"
 tags = ["code"]
-text = '''An engagement interrupts it as it does any order ([combat](combat.toml#engagement)): the regiment fights by the usual rules for its formation's aggressiveness, then goes back to exploring, choosing a new destination. Meeting an enemy doesn't end it.'''
+text = '''An engagement interrupts it as it does any order ([combat](combat.toml#engagement)): the move stops, the regiment fights by the usual rules for its formation's aggressiveness, then goes back to exploring, heading on for the destination it had (choosing a new one only if it now stands within `ExploreInertiaCloseEnough` of it, as on any look). Meeting an enemy doesn't end it.'''
 
 [[topic.rule]]
 id = "explore-counts-as-moving"
 tags = ["code", "data"]
-text = '''It counts as moving for stances ([stances](stances.toml)) and for supply it allows resupply ([supply](supply.toml#what-supply-gives)); it doesn't regain morale (`mind_exploring` has `morale_replenish = false`).'''
+text = '''Its activity is Exploring, so for stances ([stances](stances.toml)) it is neither resting nor guarding, and its moves end entrenchment like any of its own. For supply it allows resupply ([supply](supply.toml#what-supply-gives)); it doesn't regain morale (`mind_exploring` has `morale_replenish = false`).'''
 
 [[topic.rule]]
 id = "explore-never-ends"
@@ -910,7 +911,7 @@ title = "Trailers"
 [[topic.rule]]
 id = "trailer-hitch"
 tags = ["code", "data"]
-text = '''A truck with a `trailer_actor` tows it by the truck's `TrailerHitch` `node_offset` (x to the truck's right, y ahead, so stock trucks' 0, -2.2 is behind the cab). The trailer has a `TrailerHitch` offset of its own (stock 0, 1.4: ahead of its centre).'''
+text = '''A truck with a `trailer_actor` tows it by the truck's `TrailerHitch` `node_offset` (x to the truck's right, y ahead, so stock trucks' 0, -0.7 to 0, -2.2 are behind the cab). The trailer has a `TrailerHitch` offset of its own (stock 0, 0.5 to 0, 1.6, mostly 1.4 or 1.5: ahead of its centre). Each offset also has a height, so the trailer's facing tilts with the ground between the two.'''
 
 [[topic.rule]]
 id = "trailer-follows-hitch"
@@ -943,7 +944,7 @@ by = "analysis"
 asked = 2026-11-11
 
 [[open]]
-q = '''Can a ground unit's centre ever be on a mountain tile in play (a map placing it there, a member pushed off its route, a regiment leader's tile), so that the mountain limit is seen? Routes are taken to keep off tiles closed to the unit.'''
+q = '''Can a ground unit's centre ever be on a mountain tile in play (a map placing it there, a member pushed off its route, a regiment's position), so that the mountain limit is seen? Routes are taken to keep off tiles closed to the unit.'''
 by = "implementer"
 asked = 2026-11-11
 
@@ -956,3 +957,13 @@ asked = 2026-11-09
 q = '''Does the `explore` cursor change over places the order can't use, such as water? Every place on the map is accepted.'''
 by = "implementer"
 asked = 2026-11-22
+
+[[open]]
+q = '''Which formation does a retreating regiment take, when its layout names no retreat formation? The data's own description says the last organized one, which is Column in every stock layout.'''
+by = "analysis"
+asked = 2026-11-27
+
+[[open]]
+q = '''Which moves to another actor count as arrived on coming within 0.1 of that actor's outline, rather than of its position?'''
+by = "analysis"
+asked = 2026-11-27
