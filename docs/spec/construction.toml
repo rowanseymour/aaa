@@ -16,9 +16,19 @@ tags = ["code", "data"]
 text = '''A regiment offers what its members can build: the union of their lists, each template once. The first member's entries come in its list order; an entry only a later member lists goes before them. An engineer regiment's six engineers list the same three, so its menu is those three in that order. Its captain lists nothing and adds nothing.'''
 
 [[topic.rule]]
+id = "members-on-the-map"
+tags = ["code"]
+text = '''Only members on the map count, wherever they stand: a position still empty, waiting for its member to be recruited or replaced, adds nothing, unlike technologies, where an empty place counts by its unit ([object display](object-display.toml)). The regiment's list is made again each time a member joins it or dies, so it grows as builders arrive and shrinks as they're lost.'''
+
+[[topic.rule]]
+id = "filling-regiment"
+tags = ["code", "data"]
+text = '''So a newly recruited engineer regiment, which arrives as its captain alone and fills its places one by one ([supply](supply.toml#recruits-fill-by-resupply)), can't build until its first engineer has joined: until then it has no Build button and the Build key does nothing, and when it's selected with other regiments it ignores their Build order. The button appears, with all three entries, the moment the first engineer joins. Engineer regiments keep the default `recruit_full = false`.'''
+
+[[topic.rule]]
 id = "when-regiment-can-build"
 tags = ["code"]
-text = '''A regiment can be ordered to build while any member can, and not while it routs or has no members ([commands](commands.toml#command-grid) for the greyed button in combat).'''
+text = '''A regiment can be ordered to build while any member on the map can, and not while it routs or has no members ([commands](commands.toml#command-grid) for the greyed button in combat).'''
 
 [[topic.rule]]
 id = "build-structure"
@@ -85,7 +95,7 @@ text = '''An engagement on the way interrupts the order like any other, and it r
 id = "arrival-checks"
 tags = ["code"]
 text = '''
-On arrival the first member (in the regiment's member order) that lists the template builds it. Then, in order:
+On arrival the first member on the map (in the regiment's member order, whether or not it's with the regiment) that lists the template builds it. If none does, because every builder the regiment had when it was ordered has died since, the order ends there with nothing built, nothing paid and no message; the regiment doesn't wait for a replacement. Otherwise, in order:
 - the order is dropped silently if the side may not build that template (a map's restriction group bars it; the menu still offers it);
 - if the side can't afford its cost, "Insufficient funds for %s. Requires %s." (`construct_error_affording`, the template's name and the cost) is posted to the side, located at the builder, and the order ends with nothing built ([messages](messages.toml));
 - otherwise the site appears at the aimed place and facing, owned by the regiment's side and in no regiment, and the cost is taken: the template's `[Cost]` with the side's cost adjustments, as for recruiting ([economy](economy.toml)).
@@ -209,7 +219,7 @@ tags = ["code", "game", "data"]
 text = '''
 When a regiment works on a building:
 - it closes in as on an attack order, until its centre is within `CAITargetInRangeZOCMultiplier` (0.6) times its control range of the building ([combat](combat.toml#attack-orders));
-- then every member that can work on it does, each moving to within its ability's range and using it again as each use ends; members that can't (an engineer regiment's captain) move up to the building;
+- then every member with the regiment ([supply](supply.toml#member-with-regiment)) that can work on it does, each moving to within its ability's range and using it again as each use ends; members that can't (an engineer regiment's captain) move up to the building. The members are given their work afresh each time the regiment looks at the building, so an engineer that joins while it builds, or comes back from straying, walks to the building and joins in once it's with the regiment; one still away from it doesn't help;
 - stacking is plain addition: every member of every regiment on the building heals it; the captain doesn't. An engineer regiment has six engineers (its layout's first slot, `front`, holds 3, then three more single slots) and its captain, so it adds 30 health a second, 48 with Construction Battalions: a bunker takes about 42 seconds from 1 health, or 26.
 '''
 
