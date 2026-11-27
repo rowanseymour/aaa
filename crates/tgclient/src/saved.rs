@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Nickname;
 use crate::hud::Hud;
+use crate::lan::Made;
 use crate::options::{
     AntiAliasing, Display, Options, Page, WindowedSize, fitting, on_wayland, room, size_of,
 };
@@ -55,6 +56,21 @@ pub struct Chosen {
     pub volume: Levels,
     #[serde(skip_serializing_if = "unset")]
     pub sounds: Switches,
+    #[serde(skip_serializing_if = "unset")]
+    pub lan: Lan,
+}
+
+/// The LAN screen's create and Join Direct boxes, as last used.
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct Lan {
+    /// Empty for the default name, which follows the nickname.
+    pub game_name: Option<String>,
+    pub password: Option<String>,
+    pub most_players: Option<usize>,
+    pub observers: Option<bool>,
+    pub join_address: Option<String>,
+    pub join_port: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
@@ -196,6 +212,7 @@ impl Saved {
         if let Some(on) = chosen.sounds.replies {
             sounds.switches.replies = on;
         }
+        world.resource_mut::<Made>().take(&chosen.lan);
     }
 
     /// Keeps what's in `now` that differs from `before`. What's unset in
@@ -365,6 +382,7 @@ struct Now<'w, 's> {
     hud: Res<'w, Hud>,
     volumes: Res<'w, Volumes>,
     sounds: Res<'w, Sounds>,
+    made: Res<'w, Made>,
     window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     /// What [`Now::shown`] last was.
     shown: Local<'s, Option<Shown>>,
@@ -390,6 +408,7 @@ impl Now<'_, '_> {
             || self.hud.is_changed()
             || self.volumes.is_changed()
             || self.sounds.is_changed()
+            || self.made.is_changed()
     }
 
     fn shown(&self) -> Shown {
@@ -431,6 +450,7 @@ impl Now<'_, '_> {
                 chat: Some(self.sounds.switches.chat),
                 replies: Some(self.sounds.switches.replies),
             },
+            lan: self.made.kept(),
         }
     }
 }
