@@ -754,11 +754,14 @@ impl World {
     /// it's tried enough times for long enough.
     fn leader_stopped(&mut self, r: usize, l: usize) {
         let organization = &self.organizations[r];
-        if within(
-            self.regiment_position(r),
-            organization.position,
-            ARRIVAL_REACH,
-        ) {
+        let own = self
+            .destination_places(r)
+            .into_iter()
+            .find(|&(u, _)| u == l);
+        // Its own position follows its leader's, so it's where it was sent
+        // once that is where the leader has its place there.
+        let there = own.map_or(organization.position, |(_, place)| place);
+        if within(organization.banner.at, there, ARRIVAL_REACH) {
             self.end_route(r);
             return;
         }
@@ -770,10 +773,6 @@ impl World {
         let given = (self.ticks - organization.sent) as f32 * TICK;
         let tried = organization.tries >= WAYS_TRIED && given >= self.rules.move_fail_seconds;
         let exact = organization.unpack_at.is_some();
-        let own = self
-            .destination_places(r)
-            .into_iter()
-            .find(|&(u, _)| u == l);
         let route = match tried {
             true => None,
             false => own.and_then(|(_, place)| self.plan(l, place, exact)),
@@ -2169,7 +2168,12 @@ mod tests {
     fn a_regiment_sent_to_face_a_way_turns_to_it_once_there() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         w.send(0, [10.0, 30.0], [1.0, 0.0]);
-        run(&mut w, 15.0);
+        run(&mut w, 13.0);
+        // It arrives, rather than giving the move up.
+        let r = &w.organizations[0];
+        assert!(r.route_end.is_none() && r.tries == 0 && r.turn_to.is_none());
+        assert!(distance(r.position, [10.0, 30.0]) < 1e-3);
+        run(&mut w, 2.0);
         // Its left-hand man, facing east, is to the north.
         assert!(distance(w.units[0].position, [10.0, 31.0]) < 0.5);
         assert!(distance(w.units[1].position, [10.0, 29.0]) < 0.5);
