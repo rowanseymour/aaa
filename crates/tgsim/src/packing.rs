@@ -80,9 +80,14 @@ impl World {
                 false => organization.primary.and_then(|p| organization.units.get(p)),
             };
             let truck = truck.copied().filter(|&u| self.units[u].alive());
-            // With no truck in its slot, nothing unpacks.
-            let (Some(unpacks), Some(truck)) = (organization.unpacks.clone(), truck) else {
+            let Some(unpacks) = organization.unpacks.clone() else {
                 self.organizations[r].unpack_at = None;
+                continue;
+            };
+            // With no truck in its slot, lost on the way, nothing unpacks,
+            // and it says so at once.
+            let Some(truck) = truck else {
+                self.cannot_unpack(r);
                 continue;
             };
             let Some((at, _)) = organization.unpack_at else {
@@ -107,12 +112,7 @@ impl World {
             organization.unpack_at = None;
             organization.unpack_again = None;
             if !room {
-                let player = self.organizations[r].owner;
-                let told = Notice::CannotUnpack {
-                    player,
-                    organization: r,
-                };
-                self.notices.push(told);
+                self.cannot_unpack(r);
                 continue;
             }
             let truck_id = self.units[truck].id;
@@ -180,6 +180,18 @@ impl World {
                 self.pack_up(b);
             }
         }
+    }
+
+    /// Calls off the organization at `r`'s unpacking, telling its player it
+    /// can't.
+    fn cannot_unpack(&mut self, r: usize) {
+        let organization = &mut self.organizations[r];
+        (organization.unpack_at, organization.unpack_again) = (None, None);
+        let player = organization.owner;
+        self.notices.push(Notice::CannotUnpack {
+            player,
+            organization: r,
+        });
     }
 
     /// Takes away for good the scenery whose shape overlaps `footprint`, a
@@ -505,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn a_regiment_with_its_primary_slot_empty_unpacks_nothing() {
+    fn a_regiment_with_its_primary_slot_empty_unpacks_nothing_and_says_so_at_once() {
         let mut w = headquarters();
         let mut t = truck();
         (t.owner, t.template, t.primary) = (1, "regiment_hq".into(), None);
@@ -513,10 +525,18 @@ mod tests {
         t.place([30.0, 30.0], [0.0, 1.0]);
         let r = w.add_organization(&t);
         w.order_unpack(1, r, [30.0, 34.0], NORTH).unwrap();
-        run(&mut w, 5.0);
-        assert!(w.organizations[r].unpack_at.is_none());
-        assert_eq!(w.buildings.len(), 1);
-        assert!(w.units[0].alive() && w.notices.is_empty());
+        let mut asked = false;
+        while w.organizations[r].unpack_at.is_some() {
+            w.tick();
+            asked |= w.organizations[r].unpack_again.is_some();
+            assert!(w.ticks < 100);
+        }
+        assert!(!asked && w.buildings.len() == 1 && w.units[0].alive());
+        let told = Notice::CannotUnpack {
+            player: 1,
+            organization: r,
+        };
+        assert_eq!(w.notices, [told]);
     }
 
     #[test]

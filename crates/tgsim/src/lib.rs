@@ -697,6 +697,9 @@ pub struct Unit {
     /// being cut off from it, which it does at its catch-up speed until
     /// it's handed another.
     returning: bool,
+    /// The thing it's going to, which it has also got to once its outline
+    /// is within [`EXACT_REACH`] of a blocking one's.
+    onto: Option<Target>,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -1638,7 +1641,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, straight, stage, sources, with, returning, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, straight, stage, sources, with, returning, onto, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
     health_factor,
     fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,

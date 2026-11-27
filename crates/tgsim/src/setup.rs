@@ -423,6 +423,7 @@ impl World {
             sources: Vec::new(),
             with: None,
             returning: false,
+            onto: None,
             speed_max: m.speed,
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),

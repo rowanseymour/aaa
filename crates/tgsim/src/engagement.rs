@@ -235,7 +235,9 @@ impl World {
                 from: unit.position,
                 tick: ticks,
             });
-            unit.take(way, false);
+            // Going to another thing, it has to get right there.
+            unit.take(way, true);
+            unit.onto = Some(t);
         }
     }
 

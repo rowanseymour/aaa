@@ -186,6 +186,7 @@ impl Unit {
         self.stage = false;
         self.sources.clear();
         self.returning = false;
+        self.onto = None;
     }
 
     /// Sets it off along `route` to stop at `goal`, which is where it's
@@ -587,18 +588,15 @@ impl World {
     pub(crate) fn take_places(&mut self, organization: usize) {
         self.organizations[organization].hand_out = false;
         let r = &self.organizations[organization];
-        // A move to unpack has to end right there.
-        let exact = r.unpack_at.is_some();
+        let exact = self.exact_move(organization);
         let leader = (self.pacer(organization))
             .map(|p| r.units[p])
             .filter(|_| r.travelling);
         let lone = self.lone(organization);
         let mut places = self.destination_places(organization);
         let lead = leader.and_then(|l| places.iter().find(|(u, _)| *u == l).copied());
-        // As is one already near where it's going.
         let near =
             lead.is_some_and(|(l, place)| within(self.units[l].position, place, ARRIVAL_REACH));
-        let exact = exact || near;
         let route = lead
             .and_then(|(l, place)| self.plan(l, place, exact, true))
             .unwrap_or_default();
@@ -684,7 +682,7 @@ impl World {
         let organization = &mut self.organizations[r];
         organization.resend_places = true;
         let facing = organization.facing;
-        let exact = organization.unpack_at.is_some();
+        let exact = self.exact_move(r);
         let turn = turn && !self.lone(r);
         for (u, place) in self.formation_places(r) {
             let unit = &self.units[u];
@@ -718,7 +716,7 @@ impl World {
             return;
         }
         let facing = organization.facing;
-        let exact = organization.unpack_at.is_some();
+        let exact = self.exact_move(r);
         self.organizations[r].resend_places = false;
         for (u, place) in self.formation_places(r) {
             let unit = &self.units[u];
@@ -788,7 +786,7 @@ impl World {
             let organization = &self.organizations[r];
             let reach = organization.control(&self.rules.guard_rules);
             let zone = self.pathing.zone(self.units[l].position, reach);
-            let exact = organization.unpack_at.is_some();
+            let exact = self.exact_move(r);
             let route = organization.route.clone();
             for (u, place) in self.destination_places(r) {
                 let unit = &self.units[u];
@@ -807,7 +805,8 @@ impl World {
                 unit.with = Some(inside);
                 // One with no zone cuts none off.
                 if !inside && reach > 0.0 {
-                    unit.returning = true;
+                    // Heading back to it, it has to get right there.
+                    (unit.returning, unit.exact) = (true, true);
                 }
             }
         }
@@ -845,7 +844,7 @@ impl World {
         let organization = &self.organizations[r];
         let given = (self.ticks - organization.sent) as f32 * TICK;
         let tried = organization.tries >= WAYS_TRIED && given >= self.rules.move_fail_seconds;
-        let exact = organization.unpack_at.is_some();
+        let exact = self.exact_move(r);
         let route = match tried || alone {
             true => None,
             false => own.and_then(|(_, place)| self.plan(l, place, exact, false)),
@@ -1131,13 +1130,23 @@ impl World {
     }
 
     /// Sends a unit to stand at `place` facing `facing`, stopping right
-    /// there if `exact` or it's already near.
+    /// there if `exact`. One already there has arrived.
     pub(crate) fn take_place(&mut self, u: usize, place: [f32; 2], facing: [f32; 2], exact: bool) {
         // Nothing in the air sets off on a move.
         if self.units[u].in_air() {
             return;
         }
-        let exact = exact || within(self.units[u].position, place, ARRIVAL_REACH);
+        let reach = if exact { EXACT_REACH } else { ARRIVAL_REACH };
+        if within(self.units[u].position, place, reach) {
+            let alone = self.lone(self.units[u].organization);
+            let unit = &mut self.units[u];
+            unit.halt();
+            unit.end_facing = facing;
+            if !alone {
+                unit.facing = facing;
+            }
+            return;
+        }
         let Some(route) = self.plan(u, place, exact, true) else {
             // One that finds no route stops where it is, as it faces.
             self.units[u].halt();
@@ -1147,6 +1156,30 @@ impl World {
         unit.take_route(route, place, exact);
         unit.closing = None;
         unit.end_facing = facing;
+    }
+
+    /// Whether the moves of the organization at `r` have to end right
+    /// where they're going: a regiment's never do, but those of a unit on
+    /// its own sent to unpack, or onto a thing it doesn't attack, do.
+    fn exact_move(&self, r: usize) -> bool {
+        let organization = &self.organizations[r];
+        let onto = organization.unpack_at.is_some() || organization.follow.is_some();
+        onto && self.lone(r)
+    }
+
+    /// Whether the unit at `u` has got to `goal`: within `reach`, or for
+    /// one going to a thing that blocks tiles, with its outline within
+    /// [`EXACT_REACH`] of that thing's.
+    fn got_to(&self, u: usize, goal: [f32; 2], reach: f32) -> bool {
+        let unit = &self.units[u];
+        let blocking = |t: crate::Target| match t {
+            crate::Target::Building(b) => self.buildings[b].obstacle.is_some(),
+            crate::Target::Unit(o) => self.units[o].shape.is_some(),
+        };
+        within(unit.position, goal, reach)
+            || (unit.onto.filter(|&t| blocking(t)))
+                .and_then(|t| self.gap(crate::Target::Unit(u), t))
+                .is_some_and(|gap| gap <= EXACT_REACH)
     }
 
     /// The way a unit takes to stop at `to`, `exact` for a move that has
@@ -1554,7 +1587,7 @@ impl World {
                     false => ARRIVAL_REACH,
                 };
                 let (exact, ways, stage) = (unit.exact, unit.ways, unit.stage);
-                let there = within(unit.position, goal, reach);
+                let there = self.got_to(u, goal, reach);
                 // A long way's next stage is planned afresh.
                 let ways = if stage { 0 } else { ways };
                 let again = (!there && ways < WAYS_TRIED)
@@ -1709,7 +1742,9 @@ mod tests {
 
     use tgmap::{Domain, Obstacle, Pathing, Shape, Tile};
 
-    use crate::{ARRIVAL_REACH, Command, Sides, Unit, World, distance, normalised, path, within};
+    use crate::{
+        ARRIVAL_REACH, Command, EXACT_REACH, Sides, Unit, World, distance, normalised, path, within,
+    };
 
     #[test]
     fn units_stood_somewhere_afresh_keep_nothing_of_what_they_were_doing() {
@@ -3138,12 +3173,50 @@ mod tests {
     }
 
     #[test]
-    fn a_move_to_somewhere_already_near_has_to_end_right_there() {
+    fn a_move_to_somewhere_already_near_has_arrived_before_it_starts() {
         let mut w = lone_vehicle();
         w.take_place(0, [10.0, 10.4], [0.0, 1.0], false);
-        assert!(w.units[0].exact);
-        w.take_place(0, [10.0, 14.0], [0.0, 1.0], false);
-        assert!(!w.units[0].exact);
+        assert!(!w.units[0].moving() && w.units[0].goal.is_none());
+        // One that has to end right there still goes the last bit.
+        w.take_place(0, [10.0, 10.4], [0.0, 1.0], true);
+        assert!(w.units[0].moving() && w.units[0].exact);
+    }
+
+    #[test]
+    fn only_units_on_their_own_sent_to_unpack_or_onto_a_thing_arrive_exactly() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.organizations[0].unpack_at = Some(([10.0, 30.0], [0.0, 1.0]));
+        assert!(!w.exact_move(0));
+        let mut w = lone_vehicle();
+        assert!(!w.exact_move(0));
+        w.organizations[0].unpack_at = Some(([10.0, 30.0], [0.0, 1.0]));
+        assert!(w.exact_move(0));
+        w.organizations[0].unpack_at = None;
+        w.organizations[0].follow = Some(crate::Piece::Organization(0));
+        assert!(w.exact_move(0));
+    }
+
+    #[test]
+    fn units_going_to_a_building_arrive_once_their_outline_is_at_its() {
+        let mut w = lone_vehicle();
+        let mut house = building(5, 7, [10.0, 16.0]);
+        house.obstacle.as_mut().unwrap().shape = Shape::Rect {
+            width: 4.0,
+            height: 4.0,
+        };
+        w.add_buildings(&[house]);
+        let b = w.buildings.len() - 1;
+        w.units[0].shape = Some(Shape::Circle { radius: 1.0 });
+        // Its outline 0.05 short of the building's south edge at 14.
+        w.units[0].position = [10.0, 12.95];
+        w.units[0].onto = Some(crate::Target::Building(b));
+        assert!(w.got_to(0, [10.0, 16.0], EXACT_REACH));
+        w.units[0].position = [10.0, 12.5];
+        assert!(!w.got_to(0, [10.0, 16.0], EXACT_REACH));
+        // Going nowhere in particular, only its position counts.
+        w.units[0].position = [10.0, 12.95];
+        w.units[0].onto = None;
+        assert!(!w.got_to(0, [10.0, 16.0], EXACT_REACH));
     }
 
     #[test]
