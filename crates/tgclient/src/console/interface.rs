@@ -70,6 +70,15 @@ pub(crate) fn click(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
+pub(crate) fn drag(world: &mut World, args: &[&str]) -> Reply {
+    let [from, to] = args else {
+        return Err(usage("drag"));
+    };
+    crate::drive::drag(world, from, to)?;
+    world.resource_mut::<Console>().settling = SETTLE_FRAMES;
+    Ok(String::new())
+}
+
 pub(crate) fn hover(world: &mut World, args: &[&str]) -> Reply {
     let id = match args {
         [] => None,

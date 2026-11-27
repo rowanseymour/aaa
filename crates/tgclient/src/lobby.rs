@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bevy::image::CompressedImageFormatSupport;
+use bevy::picking::events::PointerDragDrop;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use tgdata::{Faction, Handicap, Id, Nation, RuleValues, Sai};
@@ -349,6 +350,28 @@ impl Lobby {
         self.computer(player) && !self.theirs.contains_key(&player)
     }
 
+    /// What dropping the slot of side `from` on side `to` does, both sides
+    /// a person may move to, `hosting` being whether this machine runs the
+    /// host: the person moves, or one of the host's computer players does,
+    /// either trading places with a computer player of this machine's
+    /// already there. None where neither may.
+    fn dropped(&self, from: u32, to: u32, hosting: bool) -> Option<Moved> {
+        if from == to {
+            return None;
+        }
+        let takes = self.empty(to) || self.mine(to);
+        if self.person == Some(from) {
+            return takes.then_some(Moved::Seat(to));
+        }
+        if !self.mine(from) || !hosting {
+            return None;
+        }
+        if self.person == Some(to) {
+            return Some(Moved::Seat(from));
+        }
+        takes.then_some(Moved::Shift(from, to))
+    }
+
     /// The profile chosen for `player`'s side, while the computer plays it.
     fn profile<'a>(&self, sais: &'a Sais, player: u32) -> Option<&'a Sai> {
         let id = self.slots.computers.get(&player)?;
@@ -410,6 +433,32 @@ impl Lobby {
 /// A player to play, or none to watch.
 #[derive(Component)]
 struct SideChoice(Option<u32>);
+
+/// What a slot dropped on another moves.
+#[derive(Debug, PartialEq)]
+enum Moved {
+    /// The person, to this side.
+    Seat(u32),
+    /// A computer player, from the first side to the second.
+    Shift(u32, u32),
+}
+
+/// A side's slot, by player id, which can be dragged or dropped on, and
+/// whether a person may move to it.
+#[derive(Component)]
+struct SlotRow {
+    id: u32,
+    movable: bool,
+}
+
+/// A team's header, which a slot from another team can be dropped on:
+/// its sides, and the first of them a person may move to that nobody
+/// holds.
+#[derive(Component)]
+struct TeamRow {
+    members: Vec<u32>,
+    free: Option<u32>,
+}
 
 /// The button that opens a side's nations, by player id.
 #[derive(Component)]
@@ -778,15 +827,61 @@ fn share(staged: Option<ResMut<Staged>>, choice: tgserver::Choice) -> bool {
 fn choose_side(
     activate: On<Activate>,
     choices: Query<&SideChoice>,
-    mut lobby: ResMut<Lobby>,
+    lobby: ResMut<Lobby>,
     staged: Option<ResMut<Staged>>,
 ) {
     if let Ok(SideChoice(person)) = choices.get(activate.entity) {
-        lobby.open = Open::Nothing;
-        if !share(staged, tgserver::Choice::Side(*person)) {
-            let from = std::mem::replace(&mut lobby.person, *person);
-            lobby.slots.seat(from, *person);
+        seat(lobby, staged, *person);
+    }
+}
+
+/// Moves the person to side `person`, or to watch with none.
+fn seat(mut lobby: ResMut<Lobby>, staged: Option<ResMut<Staged>>, person: Option<u32>) {
+    lobby.open = Open::Nothing;
+    if !share(staged, tgserver::Choice::Side(person)) {
+        let from = std::mem::replace(&mut lobby.person, person);
+        lobby.slots.seat(from, person);
+    }
+}
+
+/// Takes a slot dropped on another slot or a team's header, as
+/// [`Lobby::dropped`] has it.
+fn drop_slot(
+    mut drop: On<PointerDragDrop>,
+    rows: Query<&SlotRow>,
+    teams: Query<&TeamRow>,
+    parents: Query<&ChildOf>,
+    mut lobby: ResMut<Lobby>,
+    staged: Option<ResMut<Staged>>,
+) {
+    drop.propagate(false);
+    let up = |e: &Entity| parents.get(*e).ok().map(ChildOf::parent);
+    let dragged = std::iter::successors(Some(drop.dropped), up).find_map(|e| rows.get(e).ok());
+    let Some(&SlotRow { id: from, movable }) = dragged else {
+        return;
+    };
+    let to = match (rows.get(drop.entity), teams.get(drop.entity)) {
+        (Ok(row), _) if row.movable => row.id,
+        (_, Ok(team)) if !team.members.contains(&from) => match team.free {
+            Some(free) => free,
+            None => return,
+        },
+        _ => return,
+    };
+    let hosting = staged.as_ref().is_none_or(|s| {
+        let staging = s.entry.staging();
+        staging.guest(s.entry.me()).is_some_and(|g| g.host)
+    });
+    if !movable {
+        return;
+    }
+    match lobby.dropped(from, to, hosting) {
+        Some(Moved::Seat(side)) => seat(lobby, staged, Some(side)),
+        Some(Moved::Shift(from, to)) if !share(staged, tgserver::Choice::Shift(from, to)) => {
+            lobby.open = Open::Nothing;
+            lobby.slots.exchange(from, to);
         }
+        Some(Moved::Shift(..)) | None => {}
     }
 }
 
@@ -1077,6 +1172,16 @@ fn show_slots(
         // Joining a team takes its first side nobody holds.
         let joined = lobby.person.is_some_and(|p| members.contains(&p));
         let free = members.iter().find(|&&p| lobby.empty(p) && movable(p));
+        commands
+            .entity(header)
+            .insert((
+                TeamRow {
+                    members: members.clone(),
+                    free: free.copied(),
+                },
+                called(format!("lobby.team.{}", slug(&heading))),
+            ))
+            .observe(drop_slot);
         match free.filter(|_| !joined) {
             Some(&free) => {
                 commands
@@ -1115,7 +1220,13 @@ fn show_slots(
                         ..default()
                     },
                     children![side_mark(&gem, player)],
+                    SlotRow {
+                        id,
+                        movable: movable(id),
+                    },
+                    called(side.clone()),
                 ))
+                .observe(drop_slot)
                 .id();
             // Anyone may put a computer player on an open side, and
             // changes their own; others' are shown with whose machine
@@ -1838,8 +1949,34 @@ mod tests {
     }
 
     #[test]
-    fn launch_lists_every_side_the_computer_plays_with_its_chosen_profile() {
+    fn a_dropped_slot_moves_the_person_or_the_hosts_own_computer_player() {
+        // The person on 12, this machine's computer player on 10, another
+        // machine's on 11, and 13 open.
         let lobby = Lobby {
+            theirs: BTreeMap::from([(11, "Bob".into())]),
+            slots: tgserver::Slots {
+                open: [13].into(),
+                ..Default::default()
+            },
+            ..field_lobby()
+        };
+        // The person onto an open side or their machine's computer player.
+        assert_eq!(lobby.dropped(12, 13, false), Some(Moved::Seat(13)));
+        assert_eq!(lobby.dropped(12, 10, false), Some(Moved::Seat(10)));
+        assert_eq!(lobby.dropped(12, 11, true), None);
+        // Only the host moves its computer players, onto an open side or
+        // the person's, never another machine's.
+        assert_eq!(lobby.dropped(10, 13, true), Some(Moved::Shift(10, 13)));
+        assert_eq!(lobby.dropped(10, 12, true), Some(Moved::Seat(10)));
+        assert_eq!(lobby.dropped(10, 13, false), None);
+        assert_eq!(lobby.dropped(10, 11, true), None);
+        assert_eq!(lobby.dropped(11, 13, true), None);
+        assert_eq!(lobby.dropped(12, 12, true), None);
+    }
+
+    /// A lobby for a map called Field with [`players`], the person on 12.
+    fn field_lobby() -> Lobby {
+        Lobby {
             map: "field".into(),
             brief: Ok(Brief {
                 name: "Field".into(),
@@ -1854,6 +1991,15 @@ mod tests {
             person: Some(12),
             others: Vec::new(),
             theirs: BTreeMap::new(),
+            slots: tgserver::Slots::default(),
+            rules: Default::default(),
+            open: Open::Nothing,
+        }
+    }
+
+    #[test]
+    fn launch_lists_every_side_the_computer_plays_with_its_chosen_profile() {
+        let lobby = Lobby {
             slots: tgserver::Slots {
                 computers: BTreeMap::from([
                     (10, Id::from("konev_sai")),
@@ -1862,8 +2008,7 @@ mod tests {
                 open: [11, 13].into(),
                 ..Default::default()
             },
-            rules: Default::default(),
-            open: Open::Nothing,
+            ..field_lobby()
         };
         let (setup, _, _) = lobby.setup(1).unwrap();
         // The person's side has none, nor the one left open, nor the

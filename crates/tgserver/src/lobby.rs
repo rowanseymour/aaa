@@ -183,6 +183,13 @@ impl Staging {
             Choice::Side(Some(player)) => {
                 self.sides.contains(player) && (self.free(*player) || mine(player))
             }
+            // Whoever runs the host moves its own computer players among the
+            // sides a person may take.
+            Choice::Shift(from, to) => {
+                let taken = |p| self.sides.contains(p);
+                let to_ok = self.free(*to) || mine(to);
+                guest.host && from != to && taken(from) && taken(to) && mine(from) && to_ok
+            }
             // Nobody is ready without the map.
             Choice::Ready(ready) => guest.side.is_some() && (!ready || guest.holds || guest.host),
             Choice::Holds(_, _) => true,
@@ -268,6 +275,15 @@ impl Staging {
                 slots.empty(player);
                 self.owners.remove(&player);
             }
+            Choice::Shift(from, to) => {
+                slots.exchange(from, to);
+                let (on_from, on_to) = (self.owners.remove(&from), self.owners.remove(&to));
+                for (player, owner) in [(from, on_to), (to, on_from)] {
+                    if let Some(owner) = owner {
+                        self.owners.insert(player, owner);
+                    }
+                }
+            }
             Choice::Side(side) => {
                 let Some(guest) = self.guest_mut(client) else {
                     return;
@@ -344,6 +360,9 @@ pub enum Choice {
     Computer(u32, Option<Id>),
     /// Leave a side nobody takes for nobody, by player id.
     Open(u32),
+    /// Move the computer player on the first side, by player id, to the
+    /// second, trading places with any computer player there.
+    Shift(u32, u32),
     /// Take a side, by player id, or none to watch.
     Side(Option<u32>),
     Ready(bool),
@@ -1326,6 +1345,53 @@ mod tests {
         bob.leave();
         lobby.turn();
         assert!(lobby.staging().offers.is_empty());
+    }
+
+    #[test]
+    fn the_host_moves_its_own_computer_players_between_sides() {
+        let mut lobby = Lobby::new(
+            Staging {
+                sides: vec![1, 2, 3],
+                slots: Slots::left_open(&[1, 2, 3]),
+                ..staging()
+            },
+            String::new(),
+        );
+        let (ours, theirs) = pair();
+        lobby.admit(ours, "Host", "").unwrap();
+        let mut host = entered(theirs);
+        let mut bob = ask(&mut lobby, "Bob", "").unwrap();
+        host.choose(Choice::Computer(1, Some(Id::from("konev_sai"))))
+            .unwrap();
+        host.choose(Choice::Nation(1, Some(Id::from("rus"))))
+            .unwrap();
+        bob.choose(Choice::Computer(3, None)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        for entry in [&mut host, &mut bob] {
+            entry.take_told();
+        }
+        // Onto an open side, taking all chosen for it along.
+        host.choose(Choice::Shift(1, 2)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        let staging = bob.staging();
+        assert_eq!(staging.slots.computers, [(2, Id::from("konev_sai"))].into());
+        assert_eq!(staging.slots.nations, [(2, Id::from("rus"))].into());
+        assert!(staging.slots.is_open(1));
+        assert_eq!(staging.owner(2), Some(1));
+        // Not another machine's, nor by anyone else.
+        host.choose(Choice::Shift(3, 1)).unwrap();
+        host.choose(Choice::Shift(2, 3)).unwrap();
+        bob.choose(Choice::Shift(3, 1)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        assert_eq!((host.take_told().len(), bob.take_told().len()), (2, 1));
+        // Onto another of its own, the two trade places.
+        host.choose(Choice::Computer(1, Some(Id::from("rommel_sai"))))
+            .unwrap();
+        host.choose(Choice::Shift(1, 2)).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        let computers = [(1, Id::from("konev_sai")), (2, Id::from("rommel_sai"))];
+        assert_eq!(bob.staging().slots.computers, computers.into());
+        assert_eq!(bob.staging().owners, [(1, 1), (2, 1), (3, 2)].into());
     }
 
     #[test]

@@ -7,8 +7,8 @@ use crate::{Orders, Screen, Sim};
 
 use super::camera::{camera, look_at, pitch, with_camera, yaw, zoom};
 use super::interface::{
-    ask, click, game_pause, game_speed, hover, mouse, pointer, press, resolution, screenshot, ui,
-    ui_scale, ui_tint, wait,
+    ask, click, drag, game_pause, game_speed, hover, mouse, pointer, press, resolution, screenshot,
+    ui, ui_scale, ui_tint, wait,
 };
 use super::parse::commands;
 use super::play::{
@@ -122,6 +122,12 @@ pub(crate) const VERBS: &[Verb] = &[
         "button [left | right]",
         "presses a button, by its id, with the left mouse button or the right; ui lists them",
         |world, args, _| click(world, args),
+    ),
+    verb(
+        "drag",
+        "from to",
+        "drags a part of the interface onto another, by their ids, e.g. lobby.side1 (a lobby's first slot) onto lobby.team.team-2 (a team's header)",
+        |world, args, _| drag(world, args),
     ),
     verb(
         "hover",

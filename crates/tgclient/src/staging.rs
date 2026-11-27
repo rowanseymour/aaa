@@ -252,7 +252,7 @@ fn follow(
             Told::Aborted => words.aborted.clone(),
             Told::Refused { counting: true, .. } => words.counting_refused.clone(),
             Told::Refused { choice, .. } => match choice {
-                Choice::Side(_) => words.side_refused.clone(),
+                Choice::Side(_) | Choice::Shift(..) => words.side_refused.clone(),
                 Choice::Ready(_) => words.ready_refused.clone(),
                 _ => words.refused.clone(),
             },

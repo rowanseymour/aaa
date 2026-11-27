@@ -11,7 +11,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::input::mouse::MouseButtonInput;
 use bevy::picking::backend::HitData;
-use bevy::picking::events::Pointer;
+use bevy::picking::events::{Pointer, PointerDragDrop};
 use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::{Location, PointerId};
 use bevy::prelude::*;
@@ -98,17 +98,9 @@ pub fn right_click(world: &mut World, id: &str) -> Result<(), String> {
     mouse.press(MouseButton::Right);
     mouse.release(MouseButton::Right);
     world.entity_mut(entity).insert(bevy::ui::Pressed);
-    let target = NormalizedRenderTarget::None {
-        width: 0,
-        height: 0,
-    };
-    let location = Location {
-        target,
-        position: middle,
-    };
     world.trigger(PointerClick {
         entity,
-        pointer: Pointer::new(PointerId::Mouse, location),
+        pointer: mouse_at(middle),
         button: PointerButton::Secondary,
         hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
         duration: std::time::Duration::ZERO,
@@ -119,6 +111,56 @@ pub fn right_click(world: &mut World, id: &str) -> Result<(), String> {
         button.remove::<bevy::ui::Pressed>();
     }
     Ok(())
+}
+
+/// Drags the part of the interface with id `from` and drops it on the
+/// one with id `to`, as the mouse would.
+pub fn drag(world: &mut World, from: &str, to: &str) -> Result<(), String> {
+    let (dropped, _) = reachable(world, from)?;
+    let (entity, middle) = reachable(world, to)?;
+    world.trigger(PointerDragDrop {
+        entity,
+        pointer: mouse_at(middle),
+        button: PointerButton::Primary,
+        dropped,
+        hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+    });
+    world.flush();
+    Ok(())
+}
+
+/// The mouse, at `position` on the screen.
+fn mouse_at(position: Vec2) -> Pointer {
+    let target = NormalizedRenderTarget::None {
+        width: 0,
+        height: 0,
+    };
+    Pointer::new(PointerId::Mouse, Location { target, position })
+}
+
+/// The part of the interface on screen with id `id`, button or not, and
+/// where its middle is, only where a person could reach it.
+fn reachable(world: &mut World, id: &str) -> Result<(Entity, Vec2), String> {
+    let cover = topmost_cover(world);
+    type Parts<'a> = (
+        Entity,
+        &'a ButtonId,
+        &'a ComputedNode,
+        &'a UiGlobalTransform,
+        &'a InheritedVisibility,
+    );
+    let mut named = world.query::<Parts>();
+    let world = &*world;
+    let found = named.iter(world).find(|(entity, named, node, _, shown)| {
+        shown.get()
+            && node.size.min_element() > 0.0
+            && cover.is_none_or(|c| on(world, c, *entity))
+            && named.0.eq_ignore_ascii_case(id)
+    });
+    match found {
+        Some((entity, _, _, at, _)) => Ok((entity, at.translation)),
+        None => Err(format!("nothing called {id:?} on screen")),
+    }
 }
 
 /// The button on screen with id `id`, and where its middle is.

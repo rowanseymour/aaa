@@ -18,6 +18,7 @@ How lines are written, and how scripts and a port feed them in, is in [the conso
 | `screenshot file.png` | saves what the window shows to a file, answering once it's written | ✓ |  |
 | `ui` | lists the ids of the buttons on screen that can be pressed, and which are chosen |  |  |
 | `click button [left \| right]` | presses a button, by its id, with the left mouse button or the right; ui lists them |  |  |
+| `drag from to` | drags a part of the interface onto another, by their ids, e.g. lobby.side1 (a lobby's first slot) onto lobby.team.team-2 (a team's header) |  |  |
 | `hover [button]` | holds the pointer over a button, or a part that says something when hovered, by its id, as the mouse would be; without one, takes it off |  |  |
 | `pointer [x y \| off]` | puts the cursor on the map at x y, in metres, in place of the window's; off gives it back; without, says where it is |  | ✓ |
 | `mouse [shift-\|ctrl-\|alt-]left \| right` | clicks a mouse button where the cursor is, with those keys held |  |  |
