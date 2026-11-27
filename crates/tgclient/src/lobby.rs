@@ -1341,6 +1341,9 @@ fn show_slots(
             }
             if let Some(guest) = holder {
                 crate::staging::marks(&mut commands, row, guest, hosting, &look);
+                if staging.is_some_and(|(_, me)| guest.client == me) {
+                    rename(&mut commands, row, &format!("{side}.name"));
+                }
                 if let Some((staging, me)) = staging
                     && guest.client != me
                 {
@@ -1446,6 +1449,9 @@ fn show_slots(
             for guest in s.guests.iter().filter(|g| g.side.is_none()) {
                 let row = row(&mut commands, guest.name.clone());
                 crate::staging::marks(&mut commands, row, guest, hosting, &look);
+                if staging.is_some_and(|(_, me)| guest.client == me) {
+                    rename(&mut commands, row, "lobby.observers.name");
+                }
                 if staging.is_some_and(|(_, me)| guest.client != me) {
                     let id = format!("lobby.observers.{}.whisper", slug(&guest.name));
                     whisper(&mut commands, row, guest, &id);
@@ -1456,6 +1462,18 @@ fn show_slots(
         None if lobby.person.is_none() => _ = row(&mut commands, "Player".into()),
         None => {}
     }
+}
+
+/// The button in the viewer's own `row` that asks what they'll go by.
+fn rename(commands: &mut Commands, row: Entity, id: &str) {
+    commands
+        .spawn((
+            ChildOf(row),
+            button("Name", Font::Body),
+            called(id),
+            Hint("Change player name".into()),
+        ))
+        .observe(crate::naming::ask_change);
 }
 
 /// The button in `row` that has the next line typed go to `guest` alone.

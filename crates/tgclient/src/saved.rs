@@ -14,7 +14,6 @@ use bevy::window::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::Nickname;
 use crate::hud::Hud;
 use crate::lan::Made;
 use crate::options::{
@@ -24,6 +23,7 @@ use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
 use crate::times::Elapsed;
 use crate::ui_scale::{UI_SCALES, UiScaleSetting};
+use crate::{Nickname, NicknameSet};
 
 /// The options file's name, in the program's own folder for its
 /// configuration.
@@ -374,6 +374,7 @@ const SETTLED: f64 = 1.0;
 #[derive(bevy::ecs::system::SystemParam)]
 struct Now<'w, 's> {
     nickname: Res<'w, Nickname>,
+    nickname_set: Res<'w, NicknameSet>,
     options: Res<'w, Options>,
     border: Res<'w, Border>,
     elapsed: Res<'w, Elapsed>,
@@ -400,6 +401,7 @@ impl Now<'_, '_> {
         *self.shown = shown;
         moved
             || self.nickname.is_changed()
+            || self.nickname_set.is_changed()
             || self.options.is_changed()
             || self.border.is_changed()
             || self.elapsed.is_changed()
@@ -430,7 +432,8 @@ impl Now<'_, '_> {
         let volumes = *self.volumes;
         let level = |c| Some(percent(volumes.get(c)));
         Chosen {
-            nickname: Some(self.nickname.0.clone()),
+            // Left unsaid until it's set, so the player is asked for one.
+            nickname: self.nickname_set.0.then(|| self.nickname.0.clone()),
             hotkeys: self.options.hotkeys().map(|c| c.id.as_str().to_string()),
             supply_border: Some(self.border.0),
             elapsed_game_time: Some(self.elapsed.0),

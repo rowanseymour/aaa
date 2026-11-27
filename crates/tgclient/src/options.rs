@@ -28,7 +28,7 @@ use crate::ui::{
     slider, slug, switch, text, toggle,
 };
 use crate::ui_scale::{UI_SCALES, UiScaleSetting};
-use crate::{Nickname, Screen, menu};
+use crate::{Nickname, NicknameSet, Screen, menu};
 use bevy::ecs::component::Mutable;
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
@@ -1203,10 +1203,15 @@ fn close_list(
 fn type_nickname(
     boxes: Query<(&Field, &NicknameBox), Changed<Field>>,
     mut nickname: ResMut<Nickname>,
+    mut set: ResMut<NicknameSet>,
 ) {
     for (field, NicknameBox(before)) in &boxes {
-        let name = tgserver::name(&field.text).unwrap_or_else(|| before.clone());
-        nickname.set_if_neq(Nickname(name));
+        let typed = tgserver::name(&field.text);
+        // Not just for being put up with the name it has.
+        if typed.is_some() && field.text != *before {
+            set.set_if_neq(NicknameSet(true));
+        }
+        nickname.set_if_neq(Nickname(typed.unwrap_or_else(|| before.clone())));
     }
 }
 
@@ -1291,6 +1296,7 @@ mod tests {
         .insert_state(Screen::Options)
         .insert_resource(options(Some("classic")))
         .insert_resource(Nickname("Player".into()))
+        .init_resource::<NicknameSet>()
         .insert_resource(Volumes::from(tgdata::Volumes {
             main: 0.8,
             fx: 0.8,
@@ -1343,6 +1349,8 @@ mod tests {
     fn the_nickname_is_what_is_typed_trimmed_and_no_longer_than_a_name() {
         let mut app = app();
         assert_eq!(shown_nickname(&mut app), "Player");
+        // Shown, it isn't yet set.
+        assert!(!app.world().resource::<NicknameSet>().0);
         // Keys go nowhere until the box is pressed.
         press(&mut app, "a");
         assert_eq!(nickname(&app), "Player");
@@ -1358,6 +1366,7 @@ mod tests {
         }
         assert_eq!(shown_nickname(&mut app), " bob _");
         assert_eq!(nickname(&app), "bob");
+        assert!(app.world().resource::<NicknameSet>().0);
         for _ in 0..30 {
             press(&mut app, "x");
         }

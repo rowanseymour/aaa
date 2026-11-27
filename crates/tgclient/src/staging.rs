@@ -45,6 +45,7 @@ impl Plugin for StagingPlugin {
 #[derive(Resource)]
 pub struct Words {
     joined: String,
+    renamed: String,
     quit: String,
     kicked: String,
     asked_host: String,
@@ -70,6 +71,7 @@ impl Words {
         let said = ui::said(strings);
         Words {
             joined: said("networking_player_joined|s", "%s has joined the game"),
+            renamed: said("networking_player_changed_name|ss", "%s changed name to %s"),
             quit: said("networking_player_quit|s", "Player %s quit the game"),
             kicked: said(
                 "networking_player_kicked|s",
@@ -466,6 +468,7 @@ fn follow(
     for told in staged.entry.take_told() {
         let line = match told {
             Told::Joined(name) => filled(&words.joined, &[&name]),
+            Told::Renamed(was, now) => filled(&words.renamed, &[&was, &now]),
             Told::AskedReady if host => words.asked_host.clone(),
             Told::AskedReady => words.asked.clone(),
             Told::Counting => words.counting.clone(),

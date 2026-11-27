@@ -48,7 +48,14 @@ impl Plugin for LanPlugin {
             .init_resource::<Made>()
             .add_systems(
                 OnEnter(Screen::Lan),
-                (forget, spawn, refresh_now, tell_notice).chain(),
+                (
+                    forget,
+                    spawn,
+                    refresh_now,
+                    tell_notice,
+                    crate::naming::ask_first,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
