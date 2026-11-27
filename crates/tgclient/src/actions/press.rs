@@ -5,7 +5,6 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use tgdata::Id;
-use tgsim::Researchable;
 
 use crate::control_groups::ControlGroups;
 use crate::intent::{Asked, Intent};
@@ -294,7 +293,17 @@ impl Presser<'_, '_> {
                 let Some(recruit) = self.looks.menu(sim, Some(b)).get(i) else {
                     return;
                 };
-                if recruit.organization.is_some() {
+                if let Some(organization) = &recruit.organization {
+                    // The menu judges a press by its own look and the
+                    // stockpile, before the building has its say.
+                    if !self.ready(slot) {
+                        return;
+                    }
+                    if sim.cost(b, organization) > sim.stockpile(player) {
+                        self.refusal.0 = Some((slot, tgsim::Refused::Unaffordable));
+                        self.refuse_recruit(b, i, tgsim::Refused::Unaffordable);
+                        return;
+                    }
                     let template = tgmap::Id::from(recruit.id.as_str());
                     let settlement = sim.settlement_of(b);
                     let command = match settlement {
@@ -309,27 +318,22 @@ impl Presser<'_, '_> {
                         },
                     };
                     // What's flown in is aimed first, and ordered where
-                    // it's aimed.
-                    // A settlement's companies come out of it.
+                    // it's aimed. A settlement's companies come out of it.
                     let flown =
                         settlement.is_none() && sim.rules().airlifts.contains_key(&template);
-                    let given = match flown {
-                        true => sim.check(player, &command),
-                        false => self.orders.give(sim, player, command),
-                    };
-                    if let Err(e) = given {
+                    if flown {
+                        *self.page = Page::Delivering(i);
+                        return;
+                    }
+                    if let Err(e) = self.orders.give(sim, player, command) {
                         debug!("can't commission {template}: {e:?}");
                         // As the game does, it says nothing for what's not
                         // offered.
                         if e != tgsim::Refused::Lacking {
-                            self.refusal.0 = Some((slot, e));
                             self.refuse_recruit(b, i, e);
                         }
                     }
-                    // A plain recruit leaves the menu open for the next.
-                    if flown && given.is_ok() {
-                        *self.page = Page::Delivering(i);
-                    }
+                    *self.page = Page::Orders;
                 }
             }
             Entry::Research(i) => {
@@ -339,6 +343,14 @@ impl Presser<'_, '_> {
                 let Some(item) = sim.research_list(b).get(i) else {
                     return;
                 };
+                // Judged by the menu first, as a recruit is.
+                if !self.ready(slot) {
+                    return;
+                }
+                if sim.research_cost(item) > sim.stockpile(player) {
+                    self.refuse_research(b, i, tgsim::Refused::Unaffordable);
+                    return;
+                }
                 let command = tgsim::Command::Research {
                     building: b,
                     technology: item.technology.clone(),
@@ -348,12 +360,18 @@ impl Presser<'_, '_> {
                     debug!("can't research {}: {e:?}", item.technology);
                     self.refuse_research(b, i, e);
                 }
+                *self.page = Page::Orders;
             }
         }
     }
 }
 
 impl Presser<'_, '_> {
+    /// Whether the button in `slot` shows as pressable.
+    fn ready(&self, slot: usize) -> bool {
+        self.shown.faces[slot].as_ref().is_some_and(|f| f.ready)
+    }
+
     /// Asks the player whether they're sure, then gives `command` if it
     /// can still be given. What can't be given now is refused at once, and
     /// a press while a question's up is ignored.
@@ -474,20 +492,6 @@ pub fn act(mut intents: MessageReader<Intent>, mut presser: Presser) {
     });
     if let Some(slot) = slot {
         presser.press(slot);
-        return;
-    }
-    // What's done or under way, its slot left empty, is refused.
-    let (Page::Menu(Menu::Research), Some(b), Some(player)) = (page, building, presser.local.0)
-    else {
-        return;
-    };
-    let sim = &presser.sim.0;
-    let taken = (sim.research_list(b).iter().enumerate()).find(|(_, item)| {
-        wanted(&format!("PropertyDataSelectCommand {}", item.technology))
-            && sim.researchable(player, b, item) == Researchable::Taken
-    });
-    if let Some((i, _)) = taken {
-        presser.refuse_research(b, i, tgsim::Refused::Unable);
     }
 }
 
