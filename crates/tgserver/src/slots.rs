@@ -61,6 +61,28 @@ impl Slots {
         }
     }
 
+    /// Has whatever plays sides `a` and `b` trade places, taking all that's
+    /// chosen for it along, or leaving its old side open if the other was.
+    pub fn exchange(&mut self, a: u32, b: u32) {
+        for map in [
+            &mut self.nations,
+            &mut self.factions,
+            &mut self.handicaps,
+            &mut self.computers,
+        ] {
+            let (on_a, on_b) = (map.remove(&a), map.remove(&b));
+            put(map, a, on_b);
+            put(map, b, on_a);
+        }
+        let (open_a, open_b) = (self.open.remove(&a), self.open.remove(&b));
+        if open_b {
+            self.open.insert(a);
+        }
+        if open_a {
+            self.open.insert(b);
+        }
+    }
+
     /// Moves a person from side `from` to side `to`, none being to watch.
     /// Their nation and faction go with them. A computer player on `to`
     /// trades places with them, taking its profile, handicap, nation and
@@ -173,6 +195,24 @@ mod tests {
         assert_eq!(slots.nations, [(2, id("usa"))].into());
         assert_eq!(slots.factions, [(1, id("konev")), (2, id("patton"))].into());
         assert_eq!(slots.handicaps, [(2, id("easy"))].into());
+    }
+
+    #[test]
+    fn computer_players_move_with_all_that_is_chosen_for_them() {
+        let mut slots = slots();
+        slots.exchange(2, 3);
+        assert_eq!(slots.nations, [(1, id("usa")), (3, id("rus"))].into());
+        assert_eq!(slots.factions, [(1, id("patton")), (3, id("konev"))].into());
+        assert_eq!(slots.handicaps, [(3, id("easy"))].into());
+        assert_eq!(slots.computers, [(3, id("konev_sai"))].into());
+        assert_eq!(slots.open, BTreeSet::from([2]));
+        slots.computer(2, Some(id("rommel_sai")));
+        slots.exchange(2, 3);
+        assert_eq!(
+            slots.computers,
+            [(2, id("konev_sai")), (3, id("rommel_sai"))].into()
+        );
+        assert!(slots.open.is_empty());
     }
 
     #[test]
