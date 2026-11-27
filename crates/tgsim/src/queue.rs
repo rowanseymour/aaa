@@ -369,8 +369,11 @@ mod tests {
         };
         assert_eq!(g(&w).unwrap().queue.len(), 1);
         assert!(w.organizations.iter().all(|o| o.queue.is_empty()));
-        // The group's waiting order is marked once, with its lead.
-        assert_eq!(w.marked_orders(0).len(), 2);
+        // The group's waiting order is marked once, with its lead, which
+        // is already at its place round the point, so has no move of its
+        // own to mark.
+        assert!(!w.underway(0));
+        assert_eq!(w.marked_orders(0).len(), 1);
         assert_eq!(w.marked_orders(1).len(), 1);
         // Taken once both are at their places round where they were sent,
         // the nearer having waited.
