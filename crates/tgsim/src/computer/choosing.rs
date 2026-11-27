@@ -633,6 +633,18 @@ impl<'p, 'w> Board<'p, 'w> {
             // Orders the match would refuse, such as to a unit routing, are
             // left out.
             given.retain(|c| world.check(picture.player, c).is_ok());
+            // Several of its regiments are ordered as a group, as a person
+            // would with Group Behavior on.
+            let mut ordered: Vec<usize> =
+                given.iter().filter_map(crate::commands::ordered).collect();
+            ordered.sort_unstable();
+            ordered.dedup();
+            if ordered.len() >= 2 {
+                given = vec![Command::Group {
+                    orders: given,
+                    selection: None,
+                }];
+            }
             log::debug!(
                 "{}: {} {:?} at {:.0}, costing {:.0}, units {:?}, {} orders",
                 picture.player,

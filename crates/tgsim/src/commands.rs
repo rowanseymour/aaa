@@ -35,7 +35,7 @@ impl World {
         self.heeded(command)?;
         match *command {
             // Taken if any of them is.
-            Command::Group { ref orders } => {
+            Command::Group { ref orders, .. } => {
                 if orders.iter().any(|o| matches!(o, Command::Group { .. })) {
                     return Err(Refused::Unable);
                 }
@@ -153,6 +153,7 @@ impl World {
         self.playable(player)?;
         self.heeded(&command)?;
         let steering = steered(&command);
+        let ordering = ordered(&command);
         let bombard = matches!(command, Command::Bombard { .. });
         match command {
             Command::Move { organization, to } => self.order_move(player, organization, to)?,
@@ -285,7 +286,7 @@ impl World {
             }
             Command::AirRecon { building, at } => self.order_air_recon(player, building, at)?,
             Command::Escort { building, on } => self.set_escort(player, building, on)?,
-            Command::Group { orders } => self.order_group(player, orders)?,
+            Command::Group { orders, selection } => self.order_group(player, orders, selection)?,
             Command::Queued { command } => self.order_queued(player, *command)?,
             Command::Heard { command } => self.hear(&command)?,
             Command::Ability {
@@ -298,7 +299,7 @@ impl World {
                 self.triggers.selected.insert(player, pieces);
             }
         }
-        if let (Some(r), false) = (steering, grouped) {
+        if let (Some(r), false) = (ordering, grouped) {
             self.leave_group(r);
         }
         if let Some(r) = steering {
@@ -698,6 +699,20 @@ pub(crate) fn steered(command: &Command) -> Option<usize> {
         | Command::Repair { organization, .. }
         | Command::Disband { organization } => Some(organization),
         _ => None,
+    }
+}
+
+/// The organization `command` is an order to, which it takes out of any
+/// group it's in unless given to the group: any order to one, but
+/// `set_formation`.
+pub(crate) fn ordered(command: &Command) -> Option<usize> {
+    match *command {
+        Command::Rout { organization }
+        | Command::Attach { organization }
+        | Command::Detach { organization }
+        | Command::AttachHero { organization, .. }
+        | Command::DetachHero { organization } => Some(organization),
+        _ => steered(command),
     }
 }
 

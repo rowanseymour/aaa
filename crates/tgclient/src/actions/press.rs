@@ -149,7 +149,7 @@ impl Presser<'_, '_> {
                         selected,
                     );
                     if self.groups.grouping(selected) {
-                        self.orders.gather(player);
+                        self.orders.gather(player, self.groups.selection(selected));
                     }
                     for &organization in selected {
                         let stop = tgsim::Command::Stop { organization };
@@ -160,6 +160,10 @@ impl Presser<'_, '_> {
                 Some(give @ (Give::Rout | Give::Attach | Give::Detach | Give::DetachHero)) => {
                     let mut given = false;
                     let mut short = Vec::new();
+                    if self.groups.grouping(&self.selected.0) {
+                        let selection = self.groups.selection(&self.selected.0);
+                        self.orders.gather(player, selection);
+                    }
                     for &organization in &self.selected.0 {
                         if let Some(command) = give.command(organization) {
                             let check = sim.check(player, &command);

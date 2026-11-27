@@ -113,6 +113,13 @@ impl Fog {
         }
     }
 
+    /// Has `player` see the tiles within `radius` of `at`, as a test sets
+    /// up what a side has explored.
+    #[cfg(test)]
+    pub(crate) fn see(&mut self, player: u32, at: [f32; 2], radius: f32) {
+        self.stamp(player, at, radius, false);
+    }
+
     /// How a tile stands for `player` and the sides it shares sight with,
     /// out of `allies`.
     fn seen_by(&self, allies: &[u32], i: usize) -> Seen {

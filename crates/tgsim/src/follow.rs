@@ -9,17 +9,19 @@ use crate::{PURSUIT_DRIFT, PURSUIT_REACH, Piece, World, normalised, squared_dist
 const SHORT: f32 = 0.99;
 
 impl World {
-    /// Where the organization at `r` makes for to be near `piece`: on the
-    /// way there, [`PURSUIT_REACH`] of its control range short of it, and
-    /// the way it faces there.
+    /// Where the organization at `r` makes for to be near `piece`: its
+    /// place round it in its group, or else on the way there,
+    /// [`PURSUIT_REACH`] of its control range short of it; and the way it
+    /// faces there.
     pub(crate) fn near(&self, r: usize, piece: Piece) -> ([f32; 2], [f32; 2]) {
         let reach = SHORT * self.reach_of(r);
         let (here, there) = (self.centre(r), self.middle(piece));
         let way = normalised([there[0] - here[0], there[1] - here[1]]);
         let way = way.unwrap_or(self.organizations[r].facing);
-        match within(here, there, reach) {
-            true => (here, way),
-            false => ([there[0] - way[0] * reach, there[1] - way[1] * reach], way),
+        match (within(here, there, reach), self.group_aim(r)) {
+            (true, _) => (here, way),
+            (false, Some(aim)) => (aim, way),
+            (false, None) => ([there[0] - way[0] * reach, there[1] - way[1] * reach], way),
         }
     }
 

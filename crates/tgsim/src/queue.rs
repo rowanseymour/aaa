@@ -118,22 +118,23 @@ impl World {
     pub(crate) fn order_queued(&mut self, player: u32, command: Command) -> Result<(), Refused> {
         match command {
             Command::Queued { .. } => Err(Refused::Unable),
-            Command::Group { orders } if self.group_ordered(player, &orders).is_some() => {
+            Command::Group { orders, .. } if self.group_ordered(player, &orders).is_some() => {
                 let id = self.group_ordered(player, &orders).expect("just found");
                 let g = self.groups.iter().position(|g| g.id == id).expect("found");
                 let idle = self.groups[g]
                     .organizations
                     .iter()
                     .all(|&r| self.takes_queued(r));
-                match idle && self.groups[g].queue.is_empty() {
-                    true => self.order_group(player, orders),
+                let done = self.groups[g].orders.is_empty();
+                match idle && done && self.groups[g].queue.is_empty() {
+                    true => self.take_up_queued(id, orders),
                     false => {
                         self.groups[g].queue.push(orders);
                         Ok(())
                     }
                 }
             }
-            Command::Group { orders } => {
+            Command::Group { orders, .. } => {
                 let done: Vec<_> = (orders.into_iter())
                     .map(|o| self.order_queued(player, o))
                     .collect();
@@ -200,47 +201,29 @@ impl World {
 }
 
 impl World {
-    /// Has each group whose regiments have all run out of orders take
-    /// the next it has queued, as an order to the group, carried out
-    /// together and timed as one; what's left queued stays the group's.
+    /// Has each group done with its order whose regiments have all run
+    /// out of orders take up the next it has queued, carried out together
+    /// and timed as one; what's left queued stays the group's.
     fn take_group_queued(&mut self) {
-        let mut g = 0;
-        while g < self.groups.len() {
+        for g in 0..self.groups.len() {
             let group = &self.groups[g];
             let ready = !group.queue.is_empty()
+                && group.orders.is_empty()
                 && group.organizations.iter().all(|&r| self.takes_queued(r));
             if !ready {
-                g += 1;
                 continue;
             }
-            let (owner, members) = (group.owner, group.organizations.clone());
+            let (id, members) = (group.id, group.organizations.clone());
             let mut queue = std::mem::take(&mut self.groups[g].queue);
             while !queue.is_empty() {
                 let orders: Vec<Command> = (queue.remove(0).into_iter())
                     .filter(|o| queued_for(o).is_some_and(|r| members.contains(&r)))
                     .collect();
-                if self.order_group(owner, orders).is_ok() {
+                if self.take_up_queued(id, orders).is_ok() {
                     break;
                 }
             }
-            // The group the orders formed keeps the rest, or with none,
-            // each regiment its own share.
-            let formed = (members.iter())
-                .find_map(|&r| self.organizations[r].group)
-                .and_then(|id| self.groups.iter().position(|g| g.id == id));
-            match formed {
-                Some(f) => self.groups[f].queue = queue,
-                None => {
-                    for order in queue.into_iter().flatten() {
-                        if let Some(r) = queued_for(&order).filter(|r| members.contains(r)) {
-                            self.organizations[r].queue.push(order);
-                        }
-                    }
-                }
-            }
-            // The groups have changed: start over, which only ready ones
-            // with something queued act on.
-            g = 0;
+            self.groups[g].queue = queue;
         }
     }
 }
@@ -340,7 +323,12 @@ mod tests {
         assert!(reaches(&mut w, [30.0, 10.0]));
         // A group's orders to regiments that aren't one group are queued
         // each for its own regiment.
-        let group = |orders| queued(Command::Group { orders });
+        let group = |orders| {
+            queued(Command::Group {
+                orders,
+                selection: None,
+            })
+        };
         assert!(w.check(7, &queued(queued(to([1.0, 1.0])))).is_err());
         w.apply(7, to([10.0, 30.0])).unwrap();
         w.apply(7, group(vec![to([30.0, 30.0])])).unwrap();
@@ -360,6 +348,7 @@ mod tests {
             1,
             Command::Group {
                 orders: vec![move_to(0, [10.0, 15.0]), move_to(1, [30.0, 30.0])],
+                selection: None,
             },
         )
         .unwrap();
@@ -368,6 +357,7 @@ mod tests {
             1,
             queued(Command::Group {
                 orders: both([20.0, 5.0]),
+                selection: None,
             }),
         )
         .unwrap();
@@ -382,17 +372,22 @@ mod tests {
         // The group's waiting order is marked once, with its lead.
         assert_eq!(w.marked_orders(0).len(), 2);
         assert_eq!(w.marked_orders(1).len(), 1);
-        // Taken once both are there, the nearer having waited.
-        let arrived = |w: &World, r: usize, at: [f32; 2]| distance(w.centre(r), at) < 1.0;
+        // Taken once both are at their places round where they were sent,
+        // the nearer having waited.
+        let arrived = |w: &World, r: usize, at: [f32; 2]| distance(w.centre(r), at) < 19.0;
         assert!((0..800).any(|_| {
             w.tick();
             g(&w).is_some_and(|g| g.queue.is_empty())
         }));
         assert!(arrived(&w, 0, [10.0, 15.0]) && arrived(&w, 1, [30.0, 30.0]));
-        assert_ne!(w.organizations[0].group, Some(id));
+        // Queued, it went to the group it already had.
+        assert_eq!(w.organizations[0].group, Some(id));
         assert!((0..800).any(|_| {
             w.tick();
-            arrived(&w, 0, [20.0, 5.0]) && arrived(&w, 1, [20.0, 15.0])
+            arrived(&w, 0, [20.0, 5.0])
+                && arrived(&w, 1, [20.0, 15.0])
+                && !w.underway(0)
+                && !w.underway(1)
         }));
         // Carried out as a group, queue and all.
         let after = g(&w).unwrap();
@@ -403,6 +398,7 @@ mod tests {
             1,
             Command::Group {
                 orders: both([30.0, 10.0]),
+                selection: None,
             },
         )
         .unwrap();
@@ -410,6 +406,7 @@ mod tests {
             1,
             queued(Command::Group {
                 orders: both([10.0, 10.0]),
+                selection: None,
             }),
         )
         .unwrap();

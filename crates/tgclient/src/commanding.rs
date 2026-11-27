@@ -258,7 +258,7 @@ pub(crate) fn command(
     orders.queue(queuing(&keys));
     // With Group Behavior on, what each is told goes as one group.
     if groups.grouping(&selected.0) {
-        orders.gather(player);
+        orders.gather(player, groups.selection(&selected.0));
     }
     let mut moving = selected.0.clone();
     if let Some(e) = enemy_organization(&sim.0, player, *focus) {
@@ -419,7 +419,7 @@ pub(crate) fn spread(
 
 /// Gives organizations an order at a point, each keeping its place relative to
 /// the rest within a map `size` across, unless they all go `together` to
-/// the point itself. Returns those that went, each with where to.
+/// the point itself, as a group's do. Returns those that went, each with where to.
 pub(crate) fn send(
     sim: &World,
     orders: &mut Orders,
@@ -429,7 +429,10 @@ pub(crate) fn send(
     (aim, together): (actions::Aim, bool),
     size: f32,
 ) -> Vec<(usize, [f32; 2])> {
-    let targets = match together {
+    // A group's regiments are sent to the one point, each to take its
+    // place in the group round it.
+    // An unpack has no place round its point, each truck needing its own spot.
+    let targets = match together || (orders.gathering() && aim != actions::Aim::Unpack) {
         true => vec![[px, py]; organizations.len()],
         false => spread(sim, organizations, [px, py], size),
     };

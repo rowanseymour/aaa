@@ -34,9 +34,9 @@ pub(crate) struct Orders {
     /// Whether the game has left the match, after which there's nothing
     /// more of it to play.
     quit: bool,
-    /// While orders are gathered to go as one group, whose they are and
-    /// those given so far.
-    gathered: Option<(u32, Vec<Command>)>,
+    /// While orders are gathered to go as one group, whose they are, the
+    /// selection group they go to, and those given so far.
+    gathered: Option<(u32, Option<u8>, Vec<Command>)>,
     /// Whether the orders given this frame go on the end of their
     /// regiments' queues, as when Shift or Ctrl is held for a click on the
     /// map.
@@ -375,7 +375,7 @@ impl Orders {
             return Err(Refused::NotYours);
         }
         match (&mut self.gathered, action) {
-            (Some((_, gathered)), Action::Order { command, .. }) => gathered.push(command),
+            (Some((_, _, gathered)), Action::Order { command, .. }) => gathered.push(command),
             (None, action) => self.act(action),
             (Some(_), _) => unreachable!("only orders are gathered"),
         }
@@ -384,22 +384,27 @@ impl Orders {
 
     /// From now until [`Orders::send_gathered`], gathers the orders
     /// `player` gives rather than asking for each, to ask for them as one
-    /// group.
-    pub(crate) fn gather(&mut self, player: u32) {
-        self.gathered = Some((player, Vec::new()));
+    /// group, given to the `selection` group.
+    pub(crate) fn gather(&mut self, player: u32, selection: Option<u8>) {
+        self.gathered = Some((player, selection, Vec::new()));
+    }
+
+    /// Whether the orders given now are gathered for a group.
+    pub(crate) fn gathering(&self) -> bool {
+        self.gathered.is_some()
     }
 
     /// Asks for the orders gathered as one group, or for one alone as it
     /// is.
     pub(crate) fn send_gathered(&mut self) {
         let queuing = std::mem::take(&mut self.queuing);
-        let Some((player, mut orders)) = self.gathered.take() else {
+        let Some((player, selection, mut orders)) = self.gathered.take() else {
             return;
         };
         let command = match orders.len() {
             0 => return,
             1 => orders.remove(0),
-            _ => Command::Group { orders },
+            _ => Command::Group { orders, selection },
         };
         let command = match queuing {
             true => queued(command),
@@ -1223,7 +1228,7 @@ mod tests {
         orders.carry_out(&mut world);
         assert_eq!(sent(&orders), queued(to([2.0, 2.0])));
         // Gathered, the group goes queued as a whole.
-        orders.gather(1);
+        orders.gather(1, Some(2));
         orders.give(&world, 1, to([3.0, 3.0])).unwrap();
         orders.give(&world, 1, to([3.0, 1.0])).unwrap();
         orders.send_gathered();
@@ -1231,6 +1236,7 @@ mod tests {
         let orders_given = vec![to([3.0, 3.0]), to([3.0, 1.0])];
         let group = Command::Group {
             orders: orders_given,
+            selection: Some(2),
         };
         assert_eq!(sent(&orders), queued(group));
         // Once sent, what's given next isn't.
