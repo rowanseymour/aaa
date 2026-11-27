@@ -197,7 +197,7 @@ impl World {
                     continue;
                 }
                 let place = self.formation_places(r).into_iter().find(|&(v, _)| v == u);
-                let facing = self.organizations[r].facing;
+                let facing = self.regiment_facing(r);
                 match place {
                     Some((_, place)) => self.take_place(u, place, facing, false),
                     None => self.units[u].closing = None,

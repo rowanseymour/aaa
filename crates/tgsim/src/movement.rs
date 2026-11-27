@@ -1353,11 +1353,14 @@ impl World {
                 continue;
             }
             let organization = &self.organizations[r];
-            let driving = (self.pacer(r)).is_some_and(|lp| {
-                let leader = &self.units[organization.units[lp]];
-                leader.moving() && leader.closing.is_none()
-            });
-            let pace = self.place_pace(r, u, tops[r], self.unit_speed(u));
+            let leader = (self.pacer(r)).map(|lp| &self.units[organization.units[lp]]);
+            let driving = leader.is_some_and(|l| l.moving());
+            // A leader going after a target of its own is no guide to the
+            // place its members are making for.
+            let pace = match leader.is_some_and(|l| l.closing.is_some()) {
+                true => 1.0,
+                false => self.place_pace(r, u, tops[r], self.unit_speed(u)),
+            };
             let facing = self.regiment_facing(r);
             let unit = &mut self.units[u];
             match (pace > 0.0, driving) {
@@ -1379,10 +1382,11 @@ impl World {
     /// [`REGIMENT_SPEED_MIN`], and for a unit on its own, no more than it
     /// was last given, a rise in its top speed waiting for its next move.
     fn handed_speed(&mut self, r: usize) -> f32 {
-        let mut speed = match self.waiting_for_group(r) {
-            true => 0.0,
-            false => self.regiment_speed(r),
-        };
+        // Standing for its group isn't a speed it's given.
+        if self.waiting_for_group(r) {
+            return 0.0;
+        }
+        let mut speed = self.regiment_speed(r);
         if self.lone(r) {
             let organization = &mut self.organizations[r];
             speed = speed.min(organization.given_speed);
@@ -2385,6 +2389,19 @@ mod tests {
         let y = w.units[0].position[1];
         run(&mut w, 1.0);
         assert!((w.units[0].position[1] - y - 4.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_unit_on_its_own_sets_off_once_its_group_stops_waiting() {
+        let mut w = vehicle(0.0, 0.0, None);
+        w.units[0].template = "tank".into();
+        w.organizations[0].group_speed = Some(0.0);
+        move_to(&mut w, [10.0, 30.0]);
+        run(&mut w, 1.0);
+        let y = w.units[0].position[1];
+        w.organizations[0].group_speed = None;
+        run(&mut w, 1.0);
+        assert!(w.units[0].position[1] - y > 0.5);
     }
 
     #[test]
