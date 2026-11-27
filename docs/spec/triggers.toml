@@ -635,21 +635,51 @@ text = '''
 
 [[topic.rule]]
 id = "letterbox"
+tags = ["code", "game", "data"]
+text = '''
+`global_toggle_letterbox` (`ma_boolean`, `ma_value` seconds): two black bars across the full width of the screen, one at the top and one at the bottom. Fully in, each bar is `LetterboxHeightRatio` (AVars, 0.22222) of the whole screen's height, so the middle 56% of the screen still shows the map (171 of 768 pixels each at 1024×768).
+- On: both bars grow out from the screen's top and bottom edges at a steady rate, from nothing to full height over the seconds (0: at once). Off: they shrink back into the edges at a steady rate over the seconds.
+'''
+
+[[topic.rule]]
+id = "letterbox-interface"
 tags = ["code", "data"]
 text = '''
-`global_toggle_letterbox` (`ma_boolean`, `ma_value` seconds): black bars slide in at the top and bottom of the screen over the seconds (0 at once), or out when off. While it's on the in-match interface is hidden, and comes back when it's switched off.
-- What it hides is every widget whose `render_threshold` is below 20: the map view (`VWorld`, 15) and the in-match interface (unset, so 10). Hidden widgets take no clicks or hotkeys either. The subtitle panel, game menu, message boxes and console (20) stay.
+The letterbox hides the interface from the moment it's switched on, as the bars start to grow, until the bars have gone completely after it's switched off; then the interface is back as it was.
+- What it hides is every widget whose `render_threshold` is below 20: the whole in-match interface (unset, so 10), banner text and message log lines included, and the map view (`VWorld`, 15). The map view widget draws nothing itself: it's what takes clicks on the map. Hidden widgets take no clicks or hotkeys either, so while the letterbox is on, clicks on the map do nothing and the hotkeys bound to the map view (pause, game speed, chat) don't work.
+- What stays: the subtitle panel, game menu, message boxes and console (20).
 '''
+
+[[topic.rule]]
+id = "letterbox-map"
+tags = ["code", "game"]
+text = '''Between the bars the map is drawn as usual: the scene, its things moving and its effects playing. The letterbox itself hides nothing in the scene. Health bars and selection marks are hidden by cutscene mode, not by the letterbox ([object-display](object-display.toml#bars-hidden-states)), which is why the intros show none.'''
 
 [[topic.rule]]
 id = "screenfade"
 tags = ["code", "data"]
-text = '''`global_toggle_screenfade` (`ma_boolean`, `ma_value` seconds): on fades the screen to black over the seconds (0 at once); off fades it back in. Missions start with it on at 0 so the first frame is black.'''
+text = '''`global_toggle_screenfade` (`ma_boolean`, `ma_value` seconds): a black layer over the whole screen. On: its opacity rises at a steady rate from clear to fully black over the seconds (0: at once); off: it falls back to clear the same way. Missions start with it on at 0 so the first frame is black. It hides no interface and blocks no input of its own.'''
+
+[[topic.rule]]
+id = "bars-fade-draw-order"
+tags = ["code", "data"]
+text = '''Bars and fade are drawn over the whole map, everything in the scene included (health bars, text floating over the map), and the fade over the bars. Everything the interface is showing is drawn over both: the subtitle panel (which sits over the bottom bar), the game menu, message boxes and console, and, once the letterbox has gone, the in-match interface with its banner text and message lines. So when the letterbox goes before the fade, as in the intros, the interface comes back over a still-black screen and the map fades in under it.'''
+
+[[topic.rule]]
+id = "bars-fade-retoggle"
+tags = ["code"]
+text = '''
+Bars and fade each restart from the moment the effect runs, wherever they were:
+- On while already on, fully or still coming in or going out: it starts again from nothing, so the bars vanish and grow again, or the screen jumps clear and darkens again. Run again in the same tick with the same seconds, it changes nothing.
+- Off while on, fully or still coming in, or while still going out: it jumps to full (bars fully in, screen fully black) and goes out from there over the new seconds.
+- Off while already off: the same, so with seconds above 0 the bars appear at full height and shrink away (the interface hidden until they've gone), or the screen goes black and clears.
+- Only the last toggle of each in a tick counts.
+'''
 
 [[topic.rule]]
 id = "bars-fade-game-time"
-tags = ["code", "guess"]
-text = '''Both bars and fade are timed in game time from the moment the effect runs.'''
+tags = ["code"]
+text = '''Both bars and fade count game time, the match's clock as the player's screen shows it, from the moment the effect runs. They stand still while the game is paused and go faster with the game speed: while a cutscene is being skipped at ×16, a 4-second slide is over in a quarter of a second. While skipping, the screen shows only the wait message, so they aren't seen, but they move on underneath.'''
 
 [[topic.rule]]
 id = "play-speech"

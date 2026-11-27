@@ -12,8 +12,8 @@ text = '''A thing's health bar shows while it's selected. It also shows on the m
 
 [[topic.rule]]
 id = "bars-hidden-states"
-tags = ["code", "guess"]
-text = '''Some interface-wide states hide every bar, probably cutscenes and the like.'''
+tags = ["code"]
+text = '''While cutscene mode is on ([triggers](triggers.toml#cutscene-mode)) no bar shows, nor the selection marks shown with them. One other interface-wide state, not yet identified, hides them too. The letterbox alone hides none of them.'''
 
 [[topic.rule]]
 id = "health-bar-vfx"
