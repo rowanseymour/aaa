@@ -101,7 +101,7 @@ pub use strikes::{Affliction, Lookout, Strike};
 pub use strings::{PingLook, Strings};
 pub use supply::{Enchantment, Kind, Operation, Summon, SupplyEffect, SupplyRules};
 pub use terrain::{
-    DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
+    AreaRules, DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
 };
 pub use views::{Animation, AnimationKind, Footing, Portrait, View};
 pub use world_rules::{

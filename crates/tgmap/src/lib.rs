@@ -9,6 +9,7 @@ mod fixtures;
 mod ground;
 mod obstacle;
 mod outline;
+mod path_areas;
 pub mod pathing;
 mod props;
 mod regions;
@@ -22,6 +23,7 @@ pub use cameras::Camera;
 pub use ground::{Ground, Tilt};
 pub use obstacle::Obstacle;
 pub use outline::Outline;
+pub use path_areas::{Chain, MOST_AREAS, PathArea, PathAreas};
 pub use pathing::{Domain, Pathing, Zone};
 pub use props::{Prop, PropTemplate};
 pub use regions::{Region, Regions};
@@ -233,6 +235,7 @@ impl Map {
             }
         }
         let mut pathing = Pathing::new(&terrain, &variations);
+        pathing.set_area_rules(game.area_rules());
         pathing.set_heights(|at| ground.height_at(at));
         let tile_terrains = TileTerrains::new(&terrain, &variations);
         let Placed {

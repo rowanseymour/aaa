@@ -187,6 +187,7 @@ impl Unit {
         self.sources.clear();
         self.returning = false;
         self.onto = None;
+        self.stage_area = None;
     }
 
     /// Sets it off along `route` to stop at `goal`, which is where it's
@@ -195,6 +196,7 @@ impl Unit {
         self.take(route.points, exact);
         self.goal = Some(goal);
         (self.stage, self.straight) = (route.stage, route.straight);
+        self.stage_area = route.area;
     }
 
     /// Passes its next waypoint.
@@ -393,6 +395,8 @@ pub(crate) struct Route {
     stage: bool,
     /// Whether it's a single leg straight for a destination close by.
     straight: bool,
+    /// On a stage of a move over areas, the area the stage heads for.
+    area: Option<u32>,
 }
 
 impl World {
@@ -837,9 +841,12 @@ impl World {
         }
         // One on its own has given up already.
         let alone = self.lone(r);
-        // A long way's next stage is tried afresh.
-        if organization.stage {
+        // A long way's next stage is tried afresh, and every member handed
+        // a route for it.
+        if organization.stage && !alone {
             self.organizations[r].tries = 0;
+            self.take_places(r);
+            return;
         }
         let organization = &self.organizations[r];
         let given = (self.ticks - organization.sent) as f32 * TICK;
@@ -1199,8 +1206,8 @@ impl World {
         let off = [to[0] - unit.position[0], to[1] - unit.position[1]];
         let straight = Route {
             points: vec![to],
-            stage: false,
             straight: true,
+            ..Route::default()
         };
         if fresh && exact && within_strictly(unit.position, to, STRAIGHT_REACH) {
             return Some(straight);
@@ -1215,13 +1222,61 @@ impl World {
             }
             return Some(straight);
         }
-        let to = self.routed(u, to)?;
+        let (to, area) = self.headed_for(u, to)?;
         let way = self.way_found(u, to)?;
         Some(Route {
             points: way.points,
-            stage: way.stage,
+            stage: way.stage || area.is_some(),
             straight: false,
+            area,
         })
+    }
+
+    /// Where the unit at `u` sent to `to` heads now: where it
+    /// [routes](Self::routed) to or, where that's over areas it can't see
+    /// across, the next stage's area and the spot it aims at in it. None
+    /// where there's no route.
+    fn headed_for(&self, u: usize, to: [f32; 2]) -> Option<([f32; 2], Option<u32>)> {
+        let to = self.routed(u, to)?;
+        match self.area_stage(u, to)? {
+            Some((area, at)) => Some((at, Some(area))),
+            None => Some((to, None)),
+        }
+    }
+
+    /// The stage of the unit at `u`'s move to `to` over a chain of areas:
+    /// the first area along it, after its own, whose centre a straight
+    /// line can't reach over its kind of ground, passing over areas with a
+    /// thing on their centre, and the spot it aims at there; none where
+    /// it can head straight for `to`. None at all where there's no route:
+    /// the chain is cut short in its own area, or there's no spot to aim
+    /// at.
+    fn area_stage(&self, u: usize, to: [f32; 2]) -> Option<Option<(u32, [f32; 2])>> {
+        let unit = &self.units[u];
+        let (from, domain) = (unit.position, unit.domain);
+        let over_areas = self.rules.terrain_rules.areas
+            && !unit.ethereal
+            && self.pathing.crossable(Tile::at(from), domain);
+        if !over_areas || path::open(&self.pathing, domain, from, to) {
+            return Some(None);
+        }
+        let Some(chain) = self.pathing.chain(domain, from, to) else {
+            return Some(None);
+        };
+        if chain.cut && chain.areas.len() < 2 {
+            return None;
+        }
+        let areas = &self.pathing.path_areas().areas;
+        let next = chain.areas[1..].iter().copied().find(|&a| {
+            let centre = areas[a as usize].centre;
+            let thing_on = !self.pathing.passable(Tile::at(centre), domain);
+            !thing_on && !path::open(&self.pathing, domain, from, centre)
+        });
+        let Some(area) = next else {
+            return Some(None);
+        };
+        let at = self.aimed_at(u, areas[area as usize].centre)?;
+        Some(Some((area, at)))
     }
 
     /// A unit's way to `to`, last waypoint first, as [`World::way_found`]
@@ -1325,7 +1380,7 @@ impl World {
     /// it has nowhere to [route](Self::routed) to, or its way there is cut
     /// short where it stands.
     pub(crate) fn no_route(&self, u: usize, to: [f32; 2]) -> bool {
-        (self.routed(u, to)).is_none_or(|to| self.way_found(u, to).is_none())
+        (self.headed_for(u, to)).is_none_or(|(to, _)| self.way_found(u, to).is_none())
     }
 
     /// Where the unit at `u` sent to `to` routes to: where it
@@ -1580,6 +1635,7 @@ impl World {
             if unit.drive(top.min(limit), own, reach) {
                 self.think(u);
             }
+            self.end_area_stage(u);
             let unit = &self.units[u];
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {
@@ -1615,6 +1671,32 @@ impl World {
                 t.follow(unit.position, unit.facing);
             }
         }
+    }
+
+    /// Has the unit at `u`, once it's in or beside the area a stage of its
+    /// move was heading for, end the stage: a regiment's leader stops for
+    /// its regiment to plan the next, and any other plans it itself.
+    fn end_area_stage(&mut self, u: usize) {
+        let unit = &self.units[u];
+        let Some(area) = unit.stage_area else {
+            return;
+        };
+        if !self.pathing.path_areas().in_or_beside(area, unit.position) {
+            return;
+        }
+        let r = unit.organization;
+        let leads = !self.lone(r)
+            && self.organizations[r].route_end.is_some()
+            && self.pacer(r).map(|p| self.organizations[r].units[p]) == Some(u);
+        if leads {
+            self.units[u].halt();
+            return;
+        }
+        let unit = &mut self.units[u];
+        // Planned again at once, as when it's run out of route.
+        unit.path.clear();
+        unit.leg = None;
+        unit.stage_area = None;
     }
 
     /// Ticks until the unit at `u` next looks at how its move is going,
@@ -3292,5 +3374,78 @@ mod tests {
         let coupled = tgmap::from_local(towed.position, towed.facing, [0.0, 1.0]);
         assert!(near(coupled, hitch), "{coupled:?} {hitch:?}");
         assert!(near(towed.facing, [1.0, 0.0]), "{:?}", towed.facing);
+    }
+
+    /// 40 tiles of land with water across the middle, but for a gap at the
+    /// right.
+    fn round_a_lake() -> Pathing {
+        let mut pathing = Pathing::uniform(40, Domain::Land);
+        for x in 0..35 {
+            for y in 18..22 {
+                pathing.set(Tile::new(x, y), Domain::Naval);
+            }
+        }
+        pathing
+    }
+
+    #[test]
+    fn a_unit_on_its_own_goes_round_a_lake_an_area_at_a_time() {
+        let mut w = lone_vehicle();
+        w.pathing = round_a_lake();
+        w.units[0].turn_radius = 0.0;
+        let to = [10.0, 70.0];
+        moved(&mut w, to);
+        let first = w.units[0].stage_area;
+        assert!(first.is_some());
+        let mut areas = vec![first];
+        for _ in 0..(90.0 / crate::TICK) as usize {
+            w.tick();
+            let a = w.units[0].stage_area;
+            if a.is_some() && areas.last() != Some(&a) {
+                areas.push(a);
+            }
+        }
+        // A stage at a time, each planned from where the last ended.
+        assert!(areas.len() > 1, "{areas:?}");
+        assert!(
+            within(w.units[0].position, to, ARRIVAL_REACH),
+            "{:?}",
+            w.units[0].position
+        );
+        let lake = |u: &Unit| !w.pathing.passable(Tile::at(u.position), Domain::Land);
+        assert!(!lake(&w.units[0]));
+    }
+
+    #[test]
+    fn a_regiment_goes_round_a_lake_handing_out_each_stage() {
+        let mut w = world(round_a_lake());
+        let to = [10.0, 70.0];
+        moved(&mut w, to);
+        assert!(w.organizations[0].stage);
+        let mut stages = 0;
+        let mut was = w.units[0].stage_area;
+        for _ in 0..(120.0 / crate::TICK) as usize {
+            w.tick();
+            let now = w.units[0].stage_area;
+            stages += usize::from(now.is_some() && now != was);
+            was = now;
+        }
+        assert!(stages >= 1, "{stages}");
+        let r = &w.organizations[0];
+        assert!(r.route_end.is_none() && within(r.position, to, ARRIVAL_REACH));
+        for (u, place) in w.formation_places(0) {
+            let at = w.units[u].position;
+            assert!(within(at, place, ARRIVAL_REACH), "{at:?} {place:?}");
+        }
+    }
+
+    #[test]
+    fn a_unit_that_can_see_its_way_across_heads_straight_there() {
+        let mut w = lone_vehicle();
+        w.pathing = round_a_lake();
+        // Beside the gap, nothing closed lies on the line.
+        w.units[0].stand_at([75.0, 20.0], [0.0, 1.0]);
+        moved(&mut w, [75.0, 60.0]);
+        assert_eq!(w.units[0].stage_area, None);
     }
 }

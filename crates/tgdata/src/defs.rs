@@ -1509,6 +1509,16 @@ pub struct Glyph {
 pub struct SVars {
     #[serde(rename = "TAIUseRegionPathPlanner")]
     pub use_region_path_planner: Option<bool>,
+    /// How the map is cut into areas: see [`AreaRules`](crate::AreaRules).
+    pub static_map_starting_square_size: Option<u32>,
+    pub static_map_fast_square_reduction_mult: Option<u32>,
+    pub static_map_fast_square_reduction_div: Option<u32>,
+    pub static_map_max_rectangle_width: Option<f32>,
+    pub static_map_base_map_width: Option<f32>,
+    pub static_map_max_rectangle_width_exp: Option<f32>,
+    pub static_map_min_region_size: Option<u32>,
+    pub static_map_min_region_width: Option<u32>,
+    pub static_map_max_region_size_for_expansion: Option<u32>,
     /// How near the end of a leg a unit taking it up has to be to pass it.
     #[serde(rename = "TAIReachedDestinationThreshold")]
     pub reached_destination_threshold: Option<f32>,

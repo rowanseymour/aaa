@@ -700,6 +700,9 @@ pub struct Unit {
     /// The thing it's going to, which it has also got to once its outline
     /// is within [`EXACT_REACH`] of a blocking one's.
     onto: Option<Target>,
+    /// On a stage of a move over areas, the area it's heading for: the
+    /// stage is done once it's in it or one beside it.
+    stage_area: Option<u32>,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -1641,7 +1644,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, straight, stage, sources, with, returning, onto, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, straight, stage, sources, with, returning, onto, stage_area, acceleration, turn_radius, trailer, closing, unreached, busy, decided, met, health,
     health_factor,
     fired_ago, target, shelling, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,

@@ -8,11 +8,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tgck::map::Terrain;
-use tgdata::{Id, Shape, Variation};
+use tgdata::{AreaRules, Id, Shape, Variation};
 
 pub use tgck::map::CELL_SIZE;
 
 use crate::obstacle::Obstacle;
+use crate::path_areas::{Chain, PathAreas};
 use crate::tile::Tile;
 
 /// What a mover travels on.
@@ -105,6 +106,9 @@ pub struct Pathing {
     blockers: Vec<u16>,
     /// Which area each tile is in, for land movers and for ships.
     areas: Arc<[Vec<u32>; 2]>,
+    /// The areas moves are planned over, and how they're drawn.
+    path_areas: Arc<PathAreas>,
+    area_rules: AreaRules,
     /// Row-major, the ground's height in the middle of each tile; none for
     /// ground taken as level.
     heights: Option<Arc<Vec<f32>>>,
@@ -131,9 +135,12 @@ impl Pathing {
             })
             .collect();
         let areas = Arc::new(areas(terrain.side, &tiles));
+        let area_rules = AreaRules::default();
         Pathing {
             side: terrain.side,
             blockers: vec![0; tiles.len()],
+            path_areas: Arc::new(PathAreas::draw(terrain.side, &tiles, &area_rules)),
+            area_rules,
             tiles,
             areas,
             heights: None,
@@ -143,9 +150,12 @@ impl Pathing {
     /// A map of one kind of tile, for tests and tools.
     pub fn uniform(side: usize, domain: Domain) -> Self {
         let tiles = vec![bits(domain); side * side];
+        let area_rules = AreaRules::default();
         Pathing {
             side,
             areas: Arc::new(areas(side, &tiles)),
+            path_areas: Arc::new(PathAreas::draw(side, &tiles, &area_rules)),
+            area_rules,
             tiles,
             blockers: vec![0; side * side],
             heights: None,
@@ -185,7 +195,25 @@ impl Pathing {
         if let Some(i) = tile.index(self.side) {
             self.tiles[i] = bits;
             self.areas = Arc::new(areas(self.side, &self.tiles));
+            self.path_areas = Arc::new(PathAreas::draw(self.side, &self.tiles, &self.area_rules));
         }
+    }
+
+    /// Draws the areas moves are planned over by `rules`.
+    pub fn set_area_rules(&mut self, rules: AreaRules) {
+        self.area_rules = rules;
+        self.path_areas = Arc::new(PathAreas::draw(self.side, &self.tiles, &rules));
+    }
+
+    /// The areas moves are planned over.
+    pub fn path_areas(&self) -> &PathAreas {
+        &self.path_areas
+    }
+
+    /// The chain of areas a mover on `domain` takes from `from` to `to`,
+    /// as [`PathAreas::chain`] has it.
+    pub fn chain(&self, domain: Domain, from: [f32; 2], to: [f32; 2]) -> Option<Chain> {
+        self.path_areas.chain(bits(domain), from, to)
     }
 
     /// Whether a mover on `domain` could get from the tile under `from`
