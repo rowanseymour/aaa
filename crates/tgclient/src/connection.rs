@@ -246,10 +246,12 @@ impl Plugin for ConnectionPlugin {
             })
             .add_systems(
                 Update,
+                // Each checks for itself, since a match that fails to load
+                // drops its orders while they run.
                 (watch, draw, fill_in, keys, show_typing)
                     .chain()
                     .run_if(in_state(Screen::Loading).or_else(in_state(Screen::Match)))
-                    .run_if(resource_exists::<Orders>),
+                    .distributive_run_if(resource_exists::<Orders>),
             );
     }
 }
