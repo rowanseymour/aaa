@@ -1022,6 +1022,9 @@ pub mod layer {
     /// The letterbox and screen fade, over the map and all that's drawn on
     /// it, under the interface.
     pub const CURTAINS: i32 = 40;
+    /// The subtitles of speech, over the letterbox, which the letterbox
+    /// doesn't hide.
+    pub const SUBTITLES: i32 = 45;
     /// The interface over the match, in either style: its panels and what's
     /// written over the map, such as messages.
     pub const HUD: i32 = 50;

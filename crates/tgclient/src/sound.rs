@@ -13,8 +13,9 @@ use tgrender::camera::RtsCamera;
 use tgrender::space::map_point;
 use tgsim::Relation;
 
+use crate::music::Music;
 use crate::random::Random;
-use crate::{Data, Loaded, Local, Sim};
+use crate::{Data, Loaded, Local, Orders, Sim};
 
 #[derive(Resource)]
 pub struct Sounds {
@@ -298,6 +299,16 @@ impl Sounds {
         }
     }
 
+    /// Queues a line of speech for every player to hear.
+    pub fn speak(&mut self, time: &Time, audio: &Id) {
+        let request = Request {
+            audio: audio.clone(),
+            at: None,
+            owner: None,
+        };
+        self.queued.push((time.elapsed_secs_f64(), request));
+    }
+
     /// Queues an interface audio, such as a button's click.
     pub fn interface(&mut self, time: &Time, audio: &str) {
         let request = Request {
@@ -398,7 +409,14 @@ pub struct SoundPlugin;
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<tgrender::portrait::Greeted>()
-            .add_systems(Update, (greet.before(play), play, follow_volumes));
+            .add_systems(
+                Update,
+                (
+                    greet.before(play),
+                    play.after(crate::music::Ducked),
+                    (follow_volumes, pause_speech).after(play),
+                ),
+            );
     }
 }
 
@@ -431,10 +449,14 @@ fn play(
     sim: Option<Res<Sim>>,
     local: Option<Res<Local>>,
     volumes: Res<Volumes>,
+    music: Option<Res<Music>>,
+    orders: Option<Res<Orders>>,
     time: Res<Time>,
     cameras: Query<&RtsCamera>,
     playing: Query<(Entity, &Playing)>,
 ) {
+    let duck = music.map_or(1.0, |m| m.duck());
+    let paused = orders.is_some_and(|o| o.paused());
     let now = time.elapsed_secs_f64();
     let due = take_due(&mut sounds.queued, now);
     if due.is_empty() {
@@ -470,7 +492,7 @@ fn play(
             volume *= gain(distance, audio.falloff, audio.range);
         }
         // Nothing heard isn't played, so not read or decoded either.
-        let heard = volume * volumes.set_for(audio.category);
+        let heard = volume * volumes.set_for(audio.category) * ducked(audio.category, duck);
         if heard <= 0.0 {
             continue;
         }
@@ -501,12 +523,25 @@ fn play(
         let Some(source) = sounds.source(game, &mut assets, &file) else {
             continue;
         };
+        // A line of speech that interrupts cuts off any playing, so only
+        // one is heard at a time.
+        if audio.category == AudioCategory::Speech && audio.control.interrupt {
+            for (e, p) in &playing {
+                if p.category == AudioCategory::Speech {
+                    commands.entity(e).try_despawn();
+                }
+            }
+        }
         let e = commands
             .spawn((
                 AudioPlayer::new(source),
-                PlaybackSettings::DESPAWN
-                    .with_volume(Volume::Linear(heard))
-                    .with_speed(speed),
+                PlaybackSettings {
+                    // Speech waits out a pause from its start.
+                    paused: paused && audio.category == AudioCategory::Speech,
+                    ..PlaybackSettings::DESPAWN
+                }
+                .with_volume(Volume::Linear(heard))
+                .with_speed(speed),
                 Playing {
                     audio: request.audio.clone(),
                     started: now,
@@ -522,13 +557,47 @@ fn play(
     }
 }
 
-/// Keeps what's playing as loud as the [`Volumes`] say, as they change.
-fn follow_volumes(volumes: Res<Volumes>, mut playing: Query<(&Playing, &mut AudioSink)>) {
-    if !volumes.is_changed() {
+/// How much of its level a sound of `category` keeps while ducking has
+/// other sounds at `duck`: sounds are ducked, and speech and music, which
+/// [`music`](crate::music) ducks itself, aren't.
+fn ducked(category: AudioCategory, duck: f32) -> f32 {
+    match category {
+        AudioCategory::Sound => duck,
+        AudioCategory::Speech | AudioCategory::Music => 1.0,
+    }
+}
+
+/// Keeps what's playing as loud as the [`Volumes`] and ducking say, as
+/// they change.
+fn follow_volumes(
+    volumes: Res<Volumes>,
+    music: Option<Res<Music>>,
+    mut was: bevy::prelude::Local<Option<f32>>,
+    mut playing: Query<(&Playing, &mut AudioSink)>,
+) {
+    let duck = music.map_or(1.0, |m| m.duck());
+    if !volumes.is_changed() && *was == Some(duck) {
         return;
     }
+    *was = Some(duck);
     for (p, mut sink) in &mut playing {
-        sink.set_volume(Volume::Linear(p.loudness * volumes.of(p.category)));
+        let level = p.loudness * volumes.of(p.category) * ducked(p.category, duck);
+        sink.set_volume(Volume::Linear(level));
+    }
+}
+
+/// Holds speech still while the match is paused, to go on from where it
+/// was.
+fn pause_speech(orders: Option<Res<Orders>>, playing: Query<(&Playing, &AudioSink)>) {
+    let paused = orders.is_some_and(|o| o.paused());
+    for (p, sink) in &playing {
+        if p.category != AudioCategory::Speech || sink.is_paused() == paused {
+            continue;
+        }
+        match paused {
+            true => sink.pause(),
+            false => sink.play(),
+        }
     }
 }
 
@@ -610,6 +679,54 @@ mod tests {
         let plays = world.query::<&AudioPlayer>().iter(world).count();
         let read = !world.resource::<Sounds>().read.contains_key("click.wav");
         (plays, read)
+    }
+
+    #[test]
+    fn a_line_of_speech_cuts_off_the_one_playing() {
+        let line = |file: &str| {
+            let mut audio = click();
+            audio.category = AudioCategory::Speech;
+            audio.control.interrupt = true;
+            audio.files = vec![file.into()];
+            audio
+        };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, SoundPlugin))
+            .init_resource::<Assets<AudioSource>>()
+            .insert_resource(Volumes::from(tgdata::Volumes {
+                main: 1.0,
+                fx: 1.0,
+                speech: 1.0,
+                music: 1.0,
+            }));
+        let audio = HashMap::from([
+            (Id::from("one"), line("one.mp3")),
+            (Id::from("two"), line("two.mp3")),
+            (Id::from("click"), click()),
+        ]);
+        let sounds = Sounds::of(Arc::new(audio), &["one.mp3", "two.mp3", "click.wav"]);
+        app.insert_resource(sounds);
+        let ask = |app: &mut App, id: &str| {
+            let time = *app.world().resource::<Time>();
+            let mut sounds = app.world_mut().resource_mut::<Sounds>();
+            match id {
+                "click" => sounds.interface(&time, id),
+                _ => sounds.speak(&time, &Id::from(id)),
+            }
+            app.update();
+        };
+        let playing = |app: &mut App| {
+            let world = app.world_mut();
+            let mut plays: Vec<_> = (world.query::<&Playing>().iter(world))
+                .map(|p| p.audio.to_string())
+                .collect();
+            plays.sort();
+            plays
+        };
+        ask(&mut app, "one");
+        ask(&mut app, "click");
+        ask(&mut app, "two");
+        assert_eq!(playing(&mut app), ["click", "two"], "other sounds carry on");
     }
 
     #[test]

@@ -43,6 +43,8 @@ pub struct Triggers {
     pub views: Vec<crate::ViewMove>,
     /// Whether a trigger has cutscene mode on.
     pub cutscene: bool,
+    /// The lines of speech triggers have asked for, oldest first.
+    pub speech: Vec<Speech>,
     /// The letterbox and screen fade, once a trigger has switched them.
     pub letterbox: Option<crate::Slide>,
     pub screenfade: Option<crate::Slide>,
@@ -126,6 +128,17 @@ impl Counter {
     }
 }
 
+/// A line of speech a trigger asked to play for every player.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Speech {
+    /// The line's audio, by id, e.g. `allies01_intro`.
+    pub audio: Id,
+    /// The tick it was asked for.
+    pub at: u64,
+}
+
+crate::hash::digest!(Speech { audio, at });
+
 /// A trigger turning the sun's colours to a sun definition's, moving from
 /// whatever they show at `at` over `seconds` of game time.
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +178,7 @@ impl Triggers {
             counter: None,
             views: Vec::new(),
             cutscene: false,
+            speech: Vec::new(),
             letterbox: None,
             screenfade: None,
             objectives: Arc::default(),
@@ -198,6 +212,7 @@ impl crate::hash::Digest for Triggers {
         self.counter.digest(h);
         self.views.digest(h);
         self.cutscene.digest(h);
+        self.speech.digest(h);
         self.letterbox.digest(h);
         self.screenfade.digest(h);
         self.event_kingdom.digest(h);
@@ -283,6 +298,7 @@ const HANDLED: &[&str] = &[
     "camera_returns_to_default_over_time",
     "global_toggle_letterbox",
     "global_toggle_screenfade",
+    "play_speech",
     "actor_moves_to_location",
     "actor_performs_command_on_actor",
     "actor_performs_command_at_location",
@@ -939,6 +955,15 @@ impl World {
                 }
                 true
             }
+            "play_speech" => match name(p.first()) {
+                Some(line) if !line.is_empty() => {
+                    let at = self.ticks;
+                    let audio = Id::from(line);
+                    self.triggers.speech.push(Speech { audio, at });
+                    true
+                }
+                _ => false,
+            },
             "global_toggle_cutscene_mode" => match p.first().map(|p| &p.value) {
                 Some(Value::Int(on)) => {
                     self.triggers.cutscene = *on != 0;
@@ -1874,6 +1899,28 @@ mod tests {
             assert_eq!(slide.shown(slide.at as f32 + 10.0), 0.5);
             assert_eq!(slide.shown(slide.at as f32 + 20.0), 0.0);
         }
+    }
+
+    #[test]
+    fn a_trigger_asks_for_a_line_of_speech() {
+        let line = |id: &str| {
+            let id = parameter("ma_speech", "mi_speech", Value::String(id.into()));
+            element("play_speech", vec![id])
+        };
+        let mut w = with(
+            pool(),
+            vec![trigger(
+                1,
+                true,
+                false,
+                vec![],
+                vec![line(""), line("allies01_intro")],
+            )],
+            &[],
+        );
+        run(&mut w, 0.5);
+        let asked: Vec<_> = w.triggers.speech.iter().map(|s| s.audio.as_str()).collect();
+        assert_eq!(asked, ["allies01_intro"], "a line needs an id");
     }
 
     #[test]

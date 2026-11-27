@@ -17,13 +17,18 @@ const LABEL: &str = "DisplayPause";
 const BLINK: f32 = 1.0;
 
 /// The layouts' screen, fitted to the window as the original interface
-/// fits it, which the label's placed within.
+/// fits it, which labels from the layouts are placed within.
 #[derive(Component)]
-struct Stage;
+pub(crate) struct Stage;
 
-/// The label, and its size in the layouts' pixels.
+/// The label.
 #[derive(Component)]
-pub(crate) struct Banner(f32);
+pub(crate) struct Banner;
+
+/// Text from the layouts, and its size in the layouts' pixels, kept to
+/// the size the [`Stage`] is drawn at.
+#[derive(Component)]
+pub(crate) struct LayoutFont(pub(crate) f32);
 
 /// When the match was last seen to pause, in real seconds.
 #[derive(Resource, Default)]
@@ -116,7 +121,8 @@ fn spawn(
         ))
         .id();
     commands.spawn((
-        Banner(size),
+        Banner,
+        LayoutFont(size),
         Text::new(words),
         font,
         TextColor(Color::srgb(r, g, b)),
@@ -133,7 +139,7 @@ fn fit(
     cameras: Query<&Camera, With<tgrender::camera::RtsCamera>>,
     ui: Res<UiScale>,
     mut stages: Query<&mut Node, With<Stage>>,
-    mut banners: Query<(&Banner, &mut TextFont)>,
+    mut fonts: Query<(&LayoutFont, &mut TextFont)>,
 ) {
     let Some(size) = cameras.iter().find_map(|c| {
         let scale = c.target_scaling_factor()?;
@@ -148,8 +154,8 @@ fn fit(
         crate::ui_scale::place_on_map(&mut placed, (size - fitted) / 2.0, fitted, &ui);
         node.set_if_neq(placed);
     }
-    for (banner, mut font) in &mut banners {
-        let px = FontSize::Px(banner.0 * scale / ui.0);
+    for (layout, mut font) in &mut fonts {
+        let px = FontSize::Px(layout.0 * scale / ui.0);
         if font.font_size != px {
             font.font_size = px;
         }
